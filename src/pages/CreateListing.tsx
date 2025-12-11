@@ -235,13 +235,13 @@ export default function CreateListing() {
       r.highEst || '',
       r.startPrice || '',
       r.condition || '',
-      '', // Consigner
+      r.consigner || 'JSG',
       r.imageUrls?.[0] || r.imageUrl || '',
       r.imageUrls?.[1] || '',
       r.imageUrls?.[2] || '',
       r.imageUrls?.[3] || '',
       '', // Buy Now Price
-      '0', // Exclude From Buy Now
+      '', // Exclude From Buy Now
       '', // Reserve Price
       r.height || '',
       r.width || '',
@@ -257,7 +257,7 @@ export default function CreateListing() {
       r.creator || '',
       r.materials || '',
       '', // Lot Reference Number
-      ''  // Location Nickname
+      r.locationNickname || 'Highlands Ranch'
     ]);
 
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
