@@ -15,6 +15,8 @@ const PLATFORM_PROMPTS = {
   ebay: `You are an expert eBay listing optimizer specializing in the Cassini algorithm. 
 Generate a listing that maximizes search visibility and sales.
 
+CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanation. Even if the image is unclear, provide your best guess.
+
 Requirements:
 - Title: Create a keyword-rich title (max 80 characters) optimized for Cassini search. Include brand, model, key features, condition.
 - Description: Write a detailed, professional description with measurements, condition details, history if applicable.
@@ -23,7 +25,7 @@ Requirements:
 - Condition: Assess condition (New, Like New, Very Good, Good, Acceptable).
 - Item Specifics: List relevant item specifics as key-value pairs.
 
-Return JSON format:
+ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (max 80 chars)",
   "description": "string",
@@ -36,6 +38,8 @@ Return JSON format:
   facebook: `You are an expert Facebook Marketplace listing creator.
 Generate a listing optimized for Facebook's marketplace and groups.
 
+CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanation. Even if the image is unclear, provide your best guess.
+
 Requirements:
 - Title: Create a clear, engaging title (max 100 characters) that catches attention.
 - Description: Write a friendly, conversational description with key details. Include condition, features, and why someone should buy.
@@ -43,7 +47,7 @@ Requirements:
 - Category: Suggest the most appropriate Facebook Marketplace category.
 - Condition: Assess condition (New, Like New, Good, Fair).
 
-Return JSON format:
+ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (max 100 chars)",
   "description": "string",
@@ -56,8 +60,10 @@ Return JSON format:
 
 TASK: Identify the item from photos and generate a LiveAuctioneers-ready listing.
 
+CRITICAL: You MUST ALWAYS respond with valid JSON, even if the image is unclear or shows a logo/graphic instead of a product. If you cannot identify a sellable item, return JSON with your best guess or a placeholder.
+
 FOR EACH LOT:
-1. Identify the item from the photos
+1. Identify the item from the photos (if unclear, describe what you see)
 2. Determine category and best-selling auction keywords
 3. Generate:
    - Title: SEO-rich, concise, auction-grade (MAX 100 characters including spaces)
@@ -71,7 +77,7 @@ DEFAULTS:
 - Consigner: "JSG"
 - Location Nickname: "Highlands Ranch"
 
-Return JSON format with these exact fields:
+ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (max 100 chars)",
   "description": "string (short, appealing, factual)",
@@ -83,19 +89,19 @@ Return JSON format with these exact fields:
   "buyNowPrice": null,
   "excludeFromBuyNow": null,
   "reservePrice": null,
-  "height": number or null,
-  "width": number or null,
-  "depth": number or null,
-  "dimensionUnit": "in" | "ft" | "cm" | null,
-  "weight": number or null,
-  "weightUnit": "oz" | "lb" | "g" | "kg" | null,
+  "height": null,
+  "width": null,
+  "depth": null,
+  "dimensionUnit": null,
+  "weight": null,
+  "weightUnit": null,
   "domesticFlatShippingPrice": null,
   "quantity": 1,
   "category": "string",
-  "origin": "string or null",
-  "stylePeriod": "string or null",
-  "creator": "string or null",
-  "materials": "string or null",
+  "origin": null,
+  "stylePeriod": null,
+  "creator": null,
+  "materials": null,
   "lotReferenceNumber": null,
   "locationNickname": "Highlands Ranch"
 }`,
@@ -103,11 +109,13 @@ Return JSON format with these exact fields:
   denver: `You are an expert auction catalog writer for Denver Online Auctions.
 Generate a professional lot description optimized for copy-paste into their system.
 
+CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanation. Even if the image is unclear, provide your best guess.
+
 Requirements:
 - Title: Create a clear, descriptive title (max 100 characters).
 - Description: Write a detailed description with measurements, condition, and key features. Format for easy reading.
 
-Return JSON format:
+ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (max 100 chars)",
   "description": "string"
