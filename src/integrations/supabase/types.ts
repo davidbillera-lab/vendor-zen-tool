@@ -14,7 +14,93 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      csv_exports: {
+        Row: {
+          created_at: string
+          csv_data: string | null
+          filename: string
+          id: string
+          platform: string
+          row_count: number
+        }
+        Insert: {
+          created_at?: string
+          csv_data?: string | null
+          filename: string
+          id?: string
+          platform: string
+          row_count?: number
+        }
+        Update: {
+          created_at?: string
+          csv_data?: string | null
+          filename?: string
+          id?: string
+          platform?: string
+          row_count?: number
+        }
+        Relationships: []
+      }
+      listings: {
+        Row: {
+          category: string | null
+          condition: string | null
+          created_at: string
+          csv_row_data: Json | null
+          description: string | null
+          facebook_groups: string[] | null
+          id: string
+          image_urls: string[] | null
+          item_specifics: Json | null
+          lot_number: number | null
+          platform: string
+          price: number | null
+          promotion_rate: number | null
+          promotion_type: string | null
+          status: string
+          title: string | null
+          updated_at: string
+        }
+        Insert: {
+          category?: string | null
+          condition?: string | null
+          created_at?: string
+          csv_row_data?: Json | null
+          description?: string | null
+          facebook_groups?: string[] | null
+          id?: string
+          image_urls?: string[] | null
+          item_specifics?: Json | null
+          lot_number?: number | null
+          platform: string
+          price?: number | null
+          promotion_rate?: number | null
+          promotion_type?: string | null
+          status?: string
+          title?: string | null
+          updated_at?: string
+        }
+        Update: {
+          category?: string | null
+          condition?: string | null
+          created_at?: string
+          csv_row_data?: Json | null
+          description?: string | null
+          facebook_groups?: string[] | null
+          id?: string
+          image_urls?: string[] | null
+          item_specifics?: Json | null
+          lot_number?: number | null
+          platform?: string
+          price?: number | null
+          promotion_rate?: number | null
+          promotion_type?: string | null
+          status?: string
+          title?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
