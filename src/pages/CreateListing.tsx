@@ -222,38 +222,41 @@ export default function CreateListing() {
       'Style & Period', 'Creator', 'Materials & Techniques', 'Lot Reference Number', 'Location Nickname'
     ];
 
-    const rows = csvRows.map(r => [
-      r.lotNumber || '',
-      (r.title || '').substring(0, 100),
-      r.description || '',
-      r.lowEst || '',
-      r.highEst || '',
-      r.startPrice || '',
-      r.condition || '',
-      r.consigner || 'JSG',
-      r.imageUrls?.[0] || r.imageUrl || '',
-      r.imageUrls?.[1] || '',
-      r.imageUrls?.[2] || '',
-      r.imageUrls?.[3] || '',
-      '', // Buy Now Price
-      '', // Exclude From Buy Now
-      '', // Reserve Price
-      r.height || '',
-      r.width || '',
-      r.depth || '',
-      r.dimensionUnit || '',
-      r.weight || '',
-      r.weightUnit || '',
-      '', // Domestic Flat Shipping
-      '1', // Quantity
-      r.category || '',
-      r.origin || '',
-      r.stylePeriod || '',
-      r.creator || '',
-      r.materials || '',
-      '', // Lot Reference Number
-      r.locationNickname || 'Highlands Ranch'
-    ]);
+    const rows = csvRows.map(r => {
+      const lotNum = r.lotNumber || '';
+      return [
+        lotNum,
+        (r.title || '').substring(0, 100),
+        r.description || '',
+        r.lowEst || '',
+        r.highEst || '',
+        r.startPrice || '',
+        r.condition || '',
+        r.consigner || 'JSG',
+        r.imageUrls?.[0] ? `${lotNum}_1` : '',
+        r.imageUrls?.[1] ? `${lotNum}_2` : '',
+        r.imageUrls?.[2] ? `${lotNum}_3` : '',
+        r.imageUrls?.[3] ? `${lotNum}_4` : '',
+        '', // Buy Now Price
+        '', // Exclude From Buy Now
+        '', // Reserve Price
+        r.height || '',
+        r.width || '',
+        r.depth || '',
+        r.dimensionUnit || '',
+        r.weight || '',
+        r.weightUnit || '',
+        '', // Domestic Flat Shipping
+        '1', // Quantity
+        r.category || '',
+        r.origin || '',
+        r.stylePeriod || '',
+        r.creator || '',
+        r.materials || '',
+        '', // Lot Reference Number
+        r.locationNickname || 'Highlands Ranch'
+      ];
+    });
 
     return { headers, rows };
   };
