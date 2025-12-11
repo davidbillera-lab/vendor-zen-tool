@@ -52,23 +52,48 @@ Return JSON format:
   "condition": "string"
 }`,
 
-  liveauctioneers: `You are an expert auction catalog writer for LiveAuctioneers.
-Generate a professional auction lot description with SEO optimization.
+  liveauctioneers: `You are an expert auction catalog writer for LiveAuctioneers bulk CSV uploads.
+Generate a professional auction lot with SEO optimization following EXACT LiveAuctioneers format.
 
-Requirements:
-- Title: Create an SEO keyword-rich title (MUST be 100 characters or less INCLUDING spaces). Include era, style, material, maker if known.
-- Description: Write a detailed auction catalog description including provenance, measurements, condition report, and notable features.
-- Category: Suggest appropriate auction category.
-- Estimate Low: Conservative low estimate.
-- Estimate High: Optimistic high estimate.
+REQUIRED FIELDS:
+- LotNum: Will be provided by user
+- Title: SEO keyword-rich title (MUST be EXACTLY 100 characters or less INCLUDING spaces). Include era, style, material, maker if known. Front-load important keywords.
+- Description: Detailed auction catalog description. Include: provenance, measurements (height x width x depth), condition report with ALL damages noted, notable features, materials. Be thorough - this reduces buyer inquiries.
+- LowEst: Conservative low estimate in dollars (integer)
+- HighEst: Optimistic high estimate in dollars (must be higher than LowEst)
+- StartPrice: Starting bid price (must be ≤ LowEst, typically 40-50% of LowEst)
+
+OPTIONAL FIELDS TO INCLUDE:
+- Condition: Detailed condition report
+- Height, Width, Depth: Numeric dimensions
+- DimensionUnit: "in", "ft", or "cm"
+- Weight: Numeric weight
+- WeightUnit: "oz", "lb", "g", or "kg"
+- Category: LiveAuctioneers category name
+- Origin: Geographic origin
+- StylePeriod: Style and period (e.g., "Art Deco", "Victorian", "Mid-Century Modern")
+- Creator: Artist/maker name if known
+- Materials: Materials and techniques
 
 Return JSON format:
 {
-  "title": "string (max 100 chars including spaces)",
-  "description": "string",
+  "title": "string (EXACTLY max 100 chars including spaces)",
+  "description": "string (detailed with measurements and condition)",
+  "lowEst": number,
+  "highEst": number,
+  "startPrice": number,
+  "condition": "string",
+  "height": number or null,
+  "width": number or null,
+  "depth": number or null,
+  "dimensionUnit": "in" | "ft" | "cm" | null,
+  "weight": number or null,
+  "weightUnit": "oz" | "lb" | "g" | "kg" | null,
   "category": "string",
-  "estimateLow": number,
-  "estimateHigh": number
+  "origin": "string",
+  "stylePeriod": "string",
+  "creator": "string or null",
+  "materials": "string"
 }`,
 
   denver: `You are an expert auction catalog writer for Denver Online Auctions.

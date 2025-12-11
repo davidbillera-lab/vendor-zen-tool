@@ -181,8 +181,8 @@ export default function CreateListing() {
       if (platform === 'liveauctioneers') {
         setCsvRows(prev => [...prev, { 
           ...listing, 
-          lotNumber, 
-          imageUrl: imageUrls[0] 
+          lotNumber,
+          imageUrls
         }]);
         setLotNumber(prev => prev + 1);
       }
@@ -217,10 +217,47 @@ export default function CreateListing() {
       return;
     }
 
-    const headers = ['Lot Number', 'Title', 'Description', 'Category', 'Low Estimate', 'High Estimate', 'Image URL'];
+    // Official LiveAuctioneers column headers - EXACT FORMAT REQUIRED
+    const headers = [
+      'LotNum', 'Title', 'Description', 'LowEst', 'HighEst', 'StartPrice',
+      'Condition', 'Consigner', 'ImageFile.1', 'ImageFile.2', 'ImageFile.3', 'ImageFile.4',
+      'Buy Now Price', 'Exclude From Buy Now', 'Reserve Price',
+      'Height', 'Width', 'Depth', 'Dimension Unit', 'Weight', 'Weight Unit',
+      'Domestic Flat Shipping Price', 'Quantity', 'Category', 'Origin',
+      'Style & Period', 'Creator', 'Materials & Techniques', 'Lot Reference Number', 'Location Nickname'
+    ];
+
     const rows = csvRows.map(r => [
-      r.lotNumber, r.title, r.description, r.category || '', 
-      r.estimateLow || '', r.estimateHigh || '', r.imageUrl || ''
+      r.lotNumber || '',
+      (r.title || '').substring(0, 100),
+      r.description || '',
+      r.lowEst || '',
+      r.highEst || '',
+      r.startPrice || '',
+      r.condition || '',
+      '', // Consigner
+      r.imageUrls?.[0] || r.imageUrl || '',
+      r.imageUrls?.[1] || '',
+      r.imageUrls?.[2] || '',
+      r.imageUrls?.[3] || '',
+      '', // Buy Now Price
+      '0', // Exclude From Buy Now
+      '', // Reserve Price
+      r.height || '',
+      r.width || '',
+      r.depth || '',
+      r.dimensionUnit || '',
+      r.weight || '',
+      r.weightUnit || '',
+      '', // Domestic Flat Shipping
+      '1', // Quantity
+      r.category || '',
+      r.origin || '',
+      r.stylePeriod || '',
+      r.creator || '',
+      r.materials || '',
+      '', // Lot Reference Number
+      ''  // Location Nickname
     ]);
 
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -424,7 +461,7 @@ export default function CreateListing() {
                   </p>
                 </div>
 
-                {(generatedListing.price || generatedListing.estimateLow) && (
+                {(generatedListing.price || generatedListing.lowEst) && (
                   <div className="flex gap-4 pt-2 border-t border-border">
                     {generatedListing.price && (
                       <div>
@@ -432,10 +469,16 @@ export default function CreateListing() {
                         <p className="font-semibold text-primary">${generatedListing.price}</p>
                       </div>
                     )}
-                    {generatedListing.estimateLow && (
+                    {generatedListing.lowEst && (
                       <div>
                         <Label className="text-xs text-muted-foreground">ESTIMATE</Label>
-                        <p className="font-semibold">${generatedListing.estimateLow} - ${generatedListing.estimateHigh}</p>
+                        <p className="font-semibold">${generatedListing.lowEst} - ${generatedListing.highEst}</p>
+                      </div>
+                    )}
+                    {generatedListing.startPrice && (
+                      <div>
+                        <Label className="text-xs text-muted-foreground">START</Label>
+                        <p className="font-semibold">${generatedListing.startPrice}</p>
                       </div>
                     )}
                     {generatedListing.category && (
