@@ -211,12 +211,7 @@ export default function CreateListing() {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const downloadCSV = () => {
-    if (csvRows.length === 0) {
-      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
-      return;
-    }
-
+  const generateCSVContent = () => {
     // Official LiveAuctioneers column headers - EXACT FORMAT REQUIRED
     const headers = [
       'LotNum', 'Title', 'Description', 'LowEst', 'HighEst', 'StartPrice',
@@ -260,6 +255,16 @@ export default function CreateListing() {
       r.locationNickname || 'Highlands Ranch'
     ]);
 
+    return { headers, rows };
+  };
+
+  const downloadCSV = () => {
+    if (csvRows.length === 0) {
+      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
+      return;
+    }
+
+    const { headers, rows } = generateCSVContent();
     const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -271,6 +276,23 @@ export default function CreateListing() {
     URL.revokeObjectURL(url);
     
     toast({ title: "CSV Downloaded!", description: `${csvRows.length} lots exported` });
+  };
+
+  const copyCSVToClipboard = () => {
+    if (csvRows.length === 0) {
+      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
+      return;
+    }
+
+    const { headers, rows } = generateCSVContent();
+    // Use tab-separated values for Google Sheets paste
+    const tsv = [headers, ...rows].map(r => r.map(c => String(c).replace(/\t/g, ' ')).join('\t')).join('\n');
+    
+    navigator.clipboard.writeText(tsv);
+    setCopied('csv');
+    setTimeout(() => setCopied(null), 2000);
+    
+    toast({ title: "Copied to Clipboard!", description: "Paste into Google Sheets (Ctrl+V)" });
   };
 
   const toggleGroup = (group: string) => {
@@ -412,6 +434,10 @@ export default function CreateListing() {
                 onChange={(e) => setLotNumber(parseInt(e.target.value) || 1)}
                 className="w-20"
               />
+              <Button variant="outline" onClick={copyCSVToClipboard}>
+                {copied === 'csv' ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
+                {copied === 'csv' ? 'Copied!' : 'Copy for Sheets'}
+              </Button>
               <Button variant="gold" onClick={downloadCSV}>
                 <Download className="h-4 w-4 mr-2" />
                 Download CSV
