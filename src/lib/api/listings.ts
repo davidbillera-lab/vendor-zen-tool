@@ -9,8 +9,20 @@ export interface GeneratedListing {
   category?: string;
   condition?: string;
   itemSpecifics?: Record<string, string>;
-  estimateLow?: number;
-  estimateHigh?: number;
+  // LiveAuctioneers specific
+  lowEst?: number;
+  highEst?: number;
+  startPrice?: number;
+  height?: number;
+  width?: number;
+  depth?: number;
+  dimensionUnit?: 'in' | 'ft' | 'cm';
+  weight?: number;
+  weightUnit?: 'oz' | 'lb' | 'g' | 'kg';
+  origin?: string;
+  stylePeriod?: string;
+  creator?: string;
+  materials?: string;
 }
 
 export async function generateListing(
@@ -167,27 +179,78 @@ export function generateEbayCSV(listings: any[]): string {
   return [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n');
 }
 
-// Generate LiveAuctioneers CSV
+// Generate LiveAuctioneers CSV - EXACT FORMAT REQUIRED
 export function generateLiveAuctioneersCSV(listings: any[]): string {
+  // Official LiveAuctioneers column headers
   const headers = [
-    'Lot Number',
+    'LotNum',
     'Title',
     'Description',
+    'LowEst',
+    'HighEst',
+    'StartPrice',
+    'Condition',
+    'Consigner',
+    'ImageFile.1',
+    'ImageFile.2',
+    'ImageFile.3',
+    'ImageFile.4',
+    'Buy Now Price',
+    'Exclude From Buy Now',
+    'Reserve Price',
+    'Height',
+    'Width',
+    'Depth',
+    'Dimension Unit',
+    'Weight',
+    'Weight Unit',
+    'Domestic Flat Shipping Price',
+    'Quantity',
     'Category',
-    'Low Estimate',
-    'High Estimate',
-    'Image URL'
+    'Origin',
+    'Style & Period',
+    'Creator',
+    'Materials & Techniques',
+    'Lot Reference Number',
+    'Location Nickname'
   ];
 
-  const rows = listings.map((l, index) => [
-    l.lot_number || index + 1,
-    l.title || '',
-    l.description || '',
-    l.category || '',
-    l.csv_row_data?.estimateLow || '',
-    l.csv_row_data?.estimateHigh || '',
-    (l.image_urls || [])[0] || ''
-  ]);
+  const rows = listings.map(l => {
+    const data = l.csv_row_data || {};
+    const images = l.image_urls || [];
+    return [
+      l.lotNumber || l.lot_number || '',
+      (l.title || '').substring(0, 100), // Max 100 chars
+      l.description || '',
+      data.lowEst || '',
+      data.highEst || '',
+      data.startPrice || '',
+      data.condition || '',
+      '', // Consigner - leave empty
+      images[0] || '',
+      images[1] || '',
+      images[2] || '',
+      images[3] || '',
+      '', // Buy Now Price
+      '0', // Exclude From Buy Now (0 = eligible)
+      '', // Reserve Price
+      data.height || '',
+      data.width || '',
+      data.depth || '',
+      data.dimensionUnit || '',
+      data.weight || '',
+      data.weightUnit || '',
+      '', // Domestic Flat Shipping Price
+      '1', // Quantity
+      data.category || '',
+      data.origin || '',
+      data.stylePeriod || '',
+      data.creator || '',
+      data.materials || '',
+      '', // Lot Reference Number
+      ''  // Location Nickname
+    ];
+  });
 
   return [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n');
 }
