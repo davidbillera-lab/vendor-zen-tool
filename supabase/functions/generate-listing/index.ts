@@ -53,47 +53,51 @@ Return JSON format:
 }`,
 
   liveauctioneers: `You are an expert auction catalog writer for LiveAuctioneers bulk CSV uploads.
-Generate a professional auction lot with SEO optimization following EXACT LiveAuctioneers format.
 
-REQUIRED FIELDS:
-- LotNum: Will be provided by user
-- Title: SEO keyword-rich title (MUST be EXACTLY 100 characters or less INCLUDING spaces). Include era, style, material, maker if known. Front-load important keywords.
-- Description: Detailed auction catalog description. Include: provenance, measurements (height x width x depth), condition report with ALL damages noted, notable features, materials. Be thorough - this reduces buyer inquiries.
-- LowEst: Conservative low estimate in dollars (integer)
-- HighEst: Optimistic high estimate in dollars (must be higher than LowEst)
-- StartPrice: Starting bid price (must be ≤ LowEst, typically 40-50% of LowEst)
+TASK: Identify the item from photos and generate a LiveAuctioneers-ready listing.
 
-OPTIONAL FIELDS TO INCLUDE:
-- Condition: Detailed condition report
-- Height, Width, Depth: Numeric dimensions
-- DimensionUnit: "in", "ft", or "cm"
-- Weight: Numeric weight
-- WeightUnit: "oz", "lb", "g", or "kg"
-- Category: LiveAuctioneers category name
-- Origin: Geographic origin
-- StylePeriod: Style and period (e.g., "Art Deco", "Victorian", "Mid-Century Modern")
-- Creator: Artist/maker name if known
-- Materials: Materials and techniques
+FOR EACH LOT:
+1. Identify the item from the photos
+2. Determine category and best-selling auction keywords
+3. Generate:
+   - Title: SEO-rich, concise, auction-grade (MAX 100 characters including spaces)
+   - Description: Short, appealing, factual
+   - Condition: Detailed condition statement
+   - LowEst: Conservative low estimate in dollars
+   - HighEst: Optimistic high estimate (must be > LowEst)
+   - StartPrice: Starting bid (typically 40-50% of LowEst)
 
-Return JSON format:
+DEFAULTS:
+- Consigner: "JSG"
+- Location Nickname: "Highlands Ranch"
+
+Return JSON format with these exact fields:
 {
-  "title": "string (EXACTLY max 100 chars including spaces)",
-  "description": "string (detailed with measurements and condition)",
+  "title": "string (max 100 chars)",
+  "description": "string (short, appealing, factual)",
   "lowEst": number,
   "highEst": number,
   "startPrice": number,
   "condition": "string",
+  "consigner": "JSG",
+  "buyNowPrice": null,
+  "excludeFromBuyNow": null,
+  "reservePrice": null,
   "height": number or null,
   "width": number or null,
   "depth": number or null,
   "dimensionUnit": "in" | "ft" | "cm" | null,
   "weight": number or null,
   "weightUnit": "oz" | "lb" | "g" | "kg" | null,
+  "domesticFlatShippingPrice": null,
+  "quantity": 1,
   "category": "string",
-  "origin": "string",
-  "stylePeriod": "string",
+  "origin": "string or null",
+  "stylePeriod": "string or null",
   "creator": "string or null",
-  "materials": "string"
+  "materials": "string or null",
+  "lotReferenceNumber": null,
+  "locationNickname": "Highlands Ranch"
 }`,
 
   denver: `You are an expert auction catalog writer for Denver Online Auctions.

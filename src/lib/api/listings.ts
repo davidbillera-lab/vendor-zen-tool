@@ -23,6 +23,8 @@ export interface GeneratedListing {
   stylePeriod?: string;
   creator?: string;
   materials?: string;
+  consigner?: string;
+  locationNickname?: string;
 }
 
 export async function generateListing(
@@ -226,13 +228,13 @@ export function generateLiveAuctioneersCSV(listings: any[]): string {
       data.highEst || '',
       data.startPrice || '',
       data.condition || '',
-      '', // Consigner - leave empty
+      data.consigner || 'JSG',
       images[0] || '',
       images[1] || '',
       images[2] || '',
       images[3] || '',
       '', // Buy Now Price
-      '0', // Exclude From Buy Now (0 = eligible)
+      '', // Exclude From Buy Now
       '', // Reserve Price
       data.height || '',
       data.width || '',
@@ -248,7 +250,7 @@ export function generateLiveAuctioneersCSV(listings: any[]): string {
       data.creator || '',
       data.materials || '',
       '', // Lot Reference Number
-      ''  // Location Nickname
+      data.locationNickname || 'Highlands Ranch'
     ];
   });
 
