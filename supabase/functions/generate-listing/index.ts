@@ -112,13 +112,15 @@ Generate a professional lot description optimized for copy-paste into their syst
 CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanation. Even if the image is unclear, provide your best guess.
 
 Requirements:
-- Title: Create a clear, descriptive title (max 100 characters).
+- Title: Create a clear, descriptive title (max 100 characters). Should start with the item type.
 - Description: Write a detailed description with measurements, condition, and key features. Format for easy reading.
+- Starting Bid: Suggest a conservative starting bid in dollars (integer, no decimals). Consider item type, condition, and typical auction values.
 
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (max 100 chars)",
-  "description": "string"
+  "description": "string",
+  "startingBid": number
 }`
 };
 

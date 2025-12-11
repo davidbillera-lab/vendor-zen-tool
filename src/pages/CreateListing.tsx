@@ -74,6 +74,11 @@ export default function CreateListing() {
   // LiveAuctioneers specific
   const [lotNumber, setLotNumber] = useState(1);
   const [csvRows, setCsvRows] = useState<any[]>([]);
+  
+  // Denver Auctions specific
+  const [denverLotNumber, setDenverLotNumber] = useState(1);
+  const [denverLots, setDenverLots] = useState<any[]>([]);
+  const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -187,12 +192,32 @@ export default function CreateListing() {
         setLotNumber(prev => prev + 1);
       }
 
-      toast({
-        title: platform === 'liveauctioneers' ? `Lot ${lotNumber} Added to CSV` : "Draft Ready!",
-        description: platform === 'liveauctioneers' 
-          ? `${csvRows.length + 1} lots in CSV. Ready for export.`
-          : "Review and launch when ready."
-      });
+      // Auto-add to batch for Denver Auctions
+      if (platform === 'denver') {
+        const newLot = {
+          ...listing,
+          lotNumber: denverLotNumber,
+          imageUrls
+        };
+        setDenverLots(prev => [...prev, newLot]);
+        setSelectedDenverLot(denverLotNumber);
+        setDenverLotNumber(prev => prev + 1);
+      }
+
+      const toastMessages: Record<Platform, { title: string; description: string }> = {
+        liveauctioneers: {
+          title: `Lot ${lotNumber} Added to CSV`,
+          description: `${csvRows.length + 1} lots in CSV. Ready for export.`
+        },
+        denver: {
+          title: `Lot ${denverLotNumber} Added to Batch`,
+          description: `${denverLots.length + 1} lots ready. Click to copy fields.`
+        },
+        ebay: { title: "Draft Ready!", description: "Review and launch when ready." },
+        facebook: { title: "Draft Ready!", description: "Review and launch when ready." }
+      };
+
+      toast(toastMessages[platform]);
 
     } catch (error) {
       toast({
@@ -446,6 +471,108 @@ export default function CreateListing() {
                 Download CSV
               </Button>
             </div>
+          </div>
+        )}
+
+        {/* Denver Auctions Batch */}
+        {denverLots.length > 0 && (
+          <div className="rounded-xl border border-amber-500/50 bg-amber-500/5 p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-semibold text-foreground">Denver Auctions Batch</span>
+                <span className="text-muted-foreground ml-2">{denverLots.length} lots ready</span>
+                <span className="text-muted-foreground ml-2">• Next lot: #{denverLotNumber}</span>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  type="number"
+                  value={denverLotNumber}
+                  onChange={(e) => setDenverLotNumber(parseInt(e.target.value) || 1)}
+                  className="w-20"
+                />
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => {
+                    setDenverLots([]);
+                    setSelectedDenverLot(null);
+                  }}
+                >
+                  Clear All
+                </Button>
+              </div>
+            </div>
+            
+            {/* Lot List */}
+            <div className="flex flex-wrap gap-2">
+              {denverLots.map((lot, index) => (
+                <Button
+                  key={index}
+                  variant={selectedDenverLot === lot.lotNumber ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSelectedDenverLot(lot.lotNumber)}
+                >
+                  Lot #{lot.lotNumber}
+                </Button>
+              ))}
+            </div>
+
+            {/* Selected Lot Details */}
+            {selectedDenverLot && (
+              <div className="border border-border rounded-lg p-4 bg-card space-y-3">
+                {denverLots.filter(l => l.lotNumber === selectedDenverLot).map((lot, idx) => (
+                  <div key={idx} className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-semibold">Lot #{lot.lotNumber}</h3>
+                    </div>
+                    
+                    <div className="grid gap-3">
+                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                        <div className="flex-1 min-w-0">
+                          <Label className="text-xs text-muted-foreground">TITLE</Label>
+                          <p className="font-medium truncate">{lot.title}</p>
+                        </div>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => handleCopy(lot.title, `denver-title-${lot.lotNumber}`)}
+                        >
+                          {copied === `denver-title-${lot.lotNumber}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+
+                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                        <div className="flex-1 min-w-0">
+                          <Label className="text-xs text-muted-foreground">STARTING BID</Label>
+                          <p className="font-semibold text-primary">${lot.startingBid || 5}</p>
+                        </div>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => handleCopy(String(lot.startingBid || 5), `denver-bid-${lot.lotNumber}`)}
+                        >
+                          {copied === `denver-bid-${lot.lotNumber}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+
+                      <div className="flex items-start justify-between p-2 bg-secondary/30 rounded">
+                        <div className="flex-1 min-w-0">
+                          <Label className="text-xs text-muted-foreground">DESCRIPTION</Label>
+                          <p className="text-sm text-muted-foreground whitespace-pre-wrap max-h-24 overflow-y-auto">{lot.description}</p>
+                        </div>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => handleCopy(lot.description, `denver-desc-${lot.lotNumber}`)}
+                        >
+                          {copied === `denver-desc-${lot.lotNumber}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
