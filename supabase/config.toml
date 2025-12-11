@@ -1,1 +1,4 @@
 project_id = "mwspcagajlkanpfdbuqc"
+
+[functions.generate-listing]
+verify_jwt = false
