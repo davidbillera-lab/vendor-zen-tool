@@ -25,6 +25,8 @@ export interface GeneratedListing {
   materials?: string;
   consigner?: string;
   locationNickname?: string;
+  // Denver specific
+  startingBid?: number;
 }
 
 export async function generateListing(
