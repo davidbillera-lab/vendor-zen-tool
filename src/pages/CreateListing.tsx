@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
 import { CameraCapture } from "@/components/CameraCapture";
+import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
 
 const platforms = [
   { id: "ebay" as Platform, name: "eBay", icon: Store, color: "bg-platform-ebay", description: "Cassini-optimized draft" },
@@ -81,6 +82,25 @@ export default function CreateListing() {
   const [denverLotNumber, setDenverLotNumber] = useState(1);
   const [denverLots, setDenverLots] = useState<any[]>([]);
   const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
+
+  // LiveAuctioneers Quick Capture mode
+  const [laQuickCaptureOpen, setLaQuickCaptureOpen] = useState(false);
+
+  const handleLaQuickCaptureLot = (lot: {
+    listing: GeneratedListing;
+    imageUrls: string[];
+    lotNumber: number;
+  }) => {
+    setCsvRows(prev => [...prev, {
+      ...lot.listing,
+      lotNumber: lot.lotNumber,
+      imageUrls: lot.imageUrls
+    }]);
+    setLotNumber(prev => prev + 1);
+    setLaQuickCaptureOpen(false);
+    setGeneratedListing(lot.listing);
+    setActivePlatform('liveauctioneers');
+  };
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -468,32 +488,62 @@ export default function CreateListing() {
           ))}
         </div>
 
+        {/* LiveAuctioneers Quick Capture Mode */}
+        {laQuickCaptureOpen && (
+          <LiveAuctioneersCaptureMode
+            lotNumber={lotNumber}
+            onLotComplete={handleLaQuickCaptureLot}
+            onClose={() => setLaQuickCaptureOpen(false)}
+          />
+        )}
+
         {/* LiveAuctioneers CSV Status */}
-        {csvRows.length > 0 && (
-          <div className="rounded-xl border border-primary/50 bg-primary/5 p-4 flex items-center justify-between">
+        <div className={cn(
+          "rounded-xl border p-4",
+          csvRows.length > 0 ? "border-primary/50 bg-primary/5" : "border-border bg-card"
+        )}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <span className="font-semibold text-foreground">LiveAuctioneers CSV</span>
-              <span className="text-muted-foreground ml-2">{csvRows.length} lots ready</span>
-              <span className="text-muted-foreground ml-2">• Next lot: #{lotNumber}</span>
+              <div className="flex items-center gap-2">
+                <Gavel className="h-5 w-5 text-primary" />
+                <span className="font-semibold text-foreground">LiveAuctioneers</span>
+              </div>
+              {csvRows.length > 0 ? (
+                <span className="text-muted-foreground text-sm">{csvRows.length} lots ready • Next: #{lotNumber}</span>
+              ) : (
+                <span className="text-muted-foreground text-sm">Quick capture lots directly to CSV</span>
+              )}
             </div>
-            <div className="flex gap-2">
-              <Input
-                type="number"
-                value={lotNumber}
-                onChange={(e) => setLotNumber(parseInt(e.target.value) || 1)}
-                className="w-20"
-              />
-              <Button variant="outline" onClick={copyCSVToClipboard}>
-                {copied === 'csv' ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
-                {copied === 'csv' ? 'Copied!' : 'Copy for Sheets'}
+            <div className="flex flex-wrap gap-2">
+              <Button 
+                variant="gold" 
+                onClick={() => setLaQuickCaptureOpen(true)}
+                className="gap-2"
+              >
+                <Camera className="h-4 w-4" />
+                Quick Capture Lot #{lotNumber}
               </Button>
-              <Button variant="gold" onClick={downloadCSV}>
-                <Download className="h-4 w-4 mr-2" />
-                Download CSV
-              </Button>
+              {csvRows.length > 0 && (
+                <>
+                  <Input
+                    type="number"
+                    value={lotNumber}
+                    onChange={(e) => setLotNumber(parseInt(e.target.value) || 1)}
+                    className="w-20"
+                  />
+                  <Button variant="outline" onClick={copyCSVToClipboard}>
+                    {copied === 'csv' ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
+                    {copied === 'csv' ? 'Copied!' : 'Copy for Sheets'}
+                  </Button>
+                  <Button variant="outline" onClick={downloadCSV}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Download CSV
+                  </Button>
+                </>
+              )}
             </div>
           </div>
-        )}
+        </div>
 
         {/* Denver Auctions Batch */}
         {denverLots.length > 0 && (
