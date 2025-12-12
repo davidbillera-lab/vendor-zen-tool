@@ -382,7 +382,10 @@ export default function CreateListing() {
           try {
             const response = await fetch(imageUrls[i]);
             const blob = await response.blob();
-            const filename = `${lotNum}_${i + 1}.jpg`;
+            // LA accepts jpg, png, gif - detect from content-type or default to jpg
+            const contentType = response.headers.get('content-type') || 'image/jpeg';
+            const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : 'jpg';
+            const filename = `${lotNum}_${i + 1}.${ext}`;
             zip.file(filename, blob);
           } catch (err) {
             console.error(`Failed to download image ${lotNum}_${i + 1}:`, err);
