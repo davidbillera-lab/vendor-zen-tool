@@ -20,13 +20,16 @@ import {
   Plus,
   ImageIcon,
   Rocket,
-  Camera
+  Camera,
+  FolderArchive
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
 import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
+import JSZip from "jszip";
+import { saveAs } from "file-saver";
 
 const platforms = [
   { id: "ebay" as Platform, name: "eBay", icon: Store, color: "bg-platform-ebay", description: "Cassini-optimized draft" },
@@ -355,6 +358,59 @@ export default function CreateListing() {
     toast({ title: "Copied to Clipboard!", description: "Paste into Google Sheets (Ctrl+V)" });
   };
 
+  const [downloadingImages, setDownloadingImages] = useState(false);
+
+  const downloadImagesZip = async () => {
+    if (csvRows.length === 0) {
+      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
+      return;
+    }
+
+    setDownloadingImages(true);
+    toast({ title: "Preparing Images...", description: "Downloading and packaging images" });
+
+    try {
+      const zip = new JSZip();
+      
+      // Process each lot
+      for (const row of csvRows) {
+        const lotNum = row.lotNumber;
+        const imageUrls = row.imageUrls || [];
+        
+        // Download each image and add to zip with correct filename
+        for (let i = 0; i < imageUrls.length; i++) {
+          try {
+            const response = await fetch(imageUrls[i]);
+            const blob = await response.blob();
+            const filename = `${lotNum}_${i + 1}.jpg`;
+            zip.file(filename, blob);
+          } catch (err) {
+            console.error(`Failed to download image ${lotNum}_${i + 1}:`, err);
+          }
+        }
+      }
+
+      // Generate and download the zip
+      const content = await zip.generateAsync({ type: "blob" });
+      const dateStr = new Date().toISOString().split('T')[0];
+      saveAs(content, `liveauctioneers-images-${dateStr}.zip`);
+
+      toast({ 
+        title: "Images Downloaded!", 
+        description: `ZIP file with ${csvRows.reduce((sum, r) => sum + (r.imageUrls?.length || 0), 0)} images ready for LA upload`
+      });
+    } catch (error) {
+      console.error("Error creating ZIP:", error);
+      toast({ 
+        title: "Download Failed", 
+        description: "Could not create image ZIP file",
+        variant: "destructive"
+      });
+    } finally {
+      setDownloadingImages(false);
+    }
+  };
+
   const toggleGroup = (group: string) => {
     setSelectedGroups(prev => 
       prev.includes(group) 
@@ -547,7 +603,19 @@ export default function CreateListing() {
                   </Button>
                   <Button variant="outline" onClick={downloadCSV}>
                     <Download className="h-4 w-4 mr-2" />
-                    Download CSV
+                    CSV
+                  </Button>
+                  <Button 
+                    variant="gold" 
+                    onClick={downloadImagesZip}
+                    disabled={downloadingImages}
+                  >
+                    {downloadingImages ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <FolderArchive className="h-4 w-4 mr-2" />
+                    )}
+                    {downloadingImages ? 'Packaging...' : 'Images ZIP'}
                   </Button>
                 </>
               )}

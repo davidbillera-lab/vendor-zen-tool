@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Camera, X, SwitchCamera, Check, Plus, Loader2, Gavel } from "lucide-react";
+import { Camera, X, SwitchCamera, Check, Plus, Loader2, Gavel, Send, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { uploadImage, generateListing, type GeneratedListing } from "@/lib/api/listings";
 import { toast } from "@/hooks/use-toast";
@@ -15,6 +16,8 @@ interface LiveAuctioneersCaptureProps {
   onClose: () => void;
 }
 
+type CaptureStep = 'capture' | 'review' | 'processing' | 'confirm';
+
 export function LiveAuctioneersCaptureMode({ 
   lotNumber, 
   onLotComplete, 
@@ -23,10 +26,16 @@ export function LiveAuctioneersCaptureMode({
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
   const [capturedPhotos, setCapturedPhotos] = useState<{ blob: Blob; preview: string }[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [step, setStep] = useState<CaptureStep>('capture');
   const [processingStatus, setProcessingStatus] = useState("");
+  const [specialInstructions, setSpecialInstructions] = useState("");
+  const [generatedListing, setGeneratedListing] = useState<GeneratedListing | null>(null);
+  const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
+  const [editField, setEditField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const instructionsInputRef = useRef<HTMLInputElement>(null);
 
   const startCamera = useCallback(async (facing: "user" | "environment") => {
     try {
@@ -107,7 +116,7 @@ export function LiveAuctioneersCaptureMode({
     });
   }, []);
 
-  const processAndSubmit = useCallback(async () => {
+  const goToReview = useCallback(() => {
     if (capturedPhotos.length === 0) {
       toast({
         title: "No Photos",
@@ -116,14 +125,19 @@ export function LiveAuctioneersCaptureMode({
       });
       return;
     }
-
-    setIsProcessing(true);
     stopCamera();
+    setStep('review');
+    // Focus the instructions input after transition
+    setTimeout(() => instructionsInputRef.current?.focus(), 100);
+  }, [capturedPhotos.length, stopCamera]);
+
+  const processLot = useCallback(async () => {
+    setStep('processing');
 
     try {
       // Step 1: Upload all photos
       setProcessingStatus(`Uploading ${capturedPhotos.length} photo(s)...`);
-      const uploadedUrls = await Promise.all(
+      const urls = await Promise.all(
         capturedPhotos.map(async (photo, index) => {
           const file = new File([photo.blob], `lot-${lotNumber}-${index + 1}.jpg`, {
             type: "image/jpeg"
@@ -131,24 +145,15 @@ export function LiveAuctioneersCaptureMode({
           return uploadImage(file);
         })
       );
+      setUploadedUrls(urls);
 
-      // Step 2: Generate listing with AI
+      // Step 2: Generate listing with AI (including special instructions)
       setProcessingStatus("AI analyzing item...");
-      const listing = await generateListing('liveauctioneers', uploadedUrls);
+      const listing = await generateListing('liveauctioneers', urls, specialInstructions || undefined);
+      setGeneratedListing(listing);
 
-      // Step 3: Complete!
-      setProcessingStatus("Done!");
-      
-      onLotComplete({
-        listing,
-        imageUrls: uploadedUrls,
-        lotNumber
-      });
-
-      toast({
-        title: `Lot ${lotNumber} Added!`,
-        description: listing.title?.substring(0, 50) + "..."
-      });
+      // Step 3: Go to confirm step
+      setStep('confirm');
 
     } catch (error) {
       console.error("Processing error:", error);
@@ -157,12 +162,46 @@ export function LiveAuctioneersCaptureMode({
         description: error instanceof Error ? error.message : "Something went wrong",
         variant: "destructive"
       });
-      setIsProcessing(false);
-      setProcessingStatus("");
-      // Restart camera so they can try again
-      startCamera(facingMode);
+      setStep('review');
     }
-  }, [capturedPhotos, lotNumber, stopCamera, onLotComplete, startCamera, facingMode]);
+  }, [capturedPhotos, lotNumber, specialInstructions]);
+
+  const handleEditField = (field: string, currentValue: string | number | undefined) => {
+    setEditField(field);
+    setEditValue(String(currentValue || ''));
+  };
+
+  const saveEdit = () => {
+    if (!editField || !generatedListing) return;
+    
+    const updated = { ...generatedListing };
+    const numericFields = ['lowEst', 'highEst', 'startPrice', 'height', 'width', 'depth', 'weight'];
+    
+    if (numericFields.includes(editField)) {
+      (updated as any)[editField] = parseFloat(editValue) || undefined;
+    } else {
+      (updated as any)[editField] = editValue;
+    }
+    
+    setGeneratedListing(updated);
+    setEditField(null);
+    setEditValue("");
+  };
+
+  const finalizeLot = useCallback(() => {
+    if (!generatedListing) return;
+
+    onLotComplete({
+      listing: generatedListing,
+      imageUrls: uploadedUrls,
+      lotNumber
+    });
+
+    toast({
+      title: `Lot ${lotNumber} Added!`,
+      description: generatedListing.title?.substring(0, 50) + "..."
+    });
+  }, [generatedListing, uploadedUrls, lotNumber, onLotComplete]);
 
   const handleCancel = useCallback(() => {
     capturedPhotos.forEach(p => URL.revokeObjectURL(p.preview));
@@ -170,8 +209,15 @@ export function LiveAuctioneersCaptureMode({
     onClose();
   }, [capturedPhotos, stopCamera, onClose]);
 
-  useEffect(() => {
+  const backToCapture = useCallback(() => {
+    setStep('capture');
     startCamera(facingMode);
+  }, [startCamera, facingMode]);
+
+  useEffect(() => {
+    if (step === 'capture') {
+      startCamera(facingMode);
+    }
     return () => {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
@@ -179,8 +225,8 @@ export function LiveAuctioneersCaptureMode({
     };
   }, []);
 
-  // Processing screen
-  if (isProcessing) {
+  // STEP: Processing
+  if (step === 'processing') {
     return (
       <div className="fixed inset-0 z-50 bg-background flex flex-col items-center justify-center">
         <div className="text-center space-y-6">
@@ -192,21 +238,302 @@ export function LiveAuctioneersCaptureMode({
             <h2 className="text-xl font-semibold mb-2">Processing Lot #{lotNumber}</h2>
             <p className="text-muted-foreground">{processingStatus}</p>
           </div>
-          <div className="flex gap-2 justify-center">
-            {capturedPhotos.map((photo, i) => (
+          <div className="flex gap-2 justify-center flex-wrap max-w-sm">
+            {capturedPhotos.slice(0, 6).map((photo, i) => (
               <img 
                 key={i}
                 src={photo.preview}
                 alt=""
-                className="w-16 h-16 rounded-lg object-cover border border-border"
+                className="w-12 h-12 rounded-lg object-cover border border-border"
               />
             ))}
+            {capturedPhotos.length > 6 && (
+              <div className="w-12 h-12 rounded-lg bg-secondary flex items-center justify-center text-xs text-muted-foreground">
+                +{capturedPhotos.length - 6}
+              </div>
+            )}
           </div>
         </div>
       </div>
     );
   }
 
+  // STEP: Confirm/Edit
+  if (step === 'confirm' && generatedListing) {
+    return (
+      <div className="fixed inset-0 z-50 bg-background flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <Button variant="ghost" size="sm" onClick={() => setStep('review')}>
+            ← Back
+          </Button>
+          <div className="text-center">
+            <span className="text-primary font-bold">Lot #{lotNumber}</span>
+            <span className="text-muted-foreground text-sm ml-2">Review & Edit</span>
+          </div>
+          <Button variant="ghost" size="icon" onClick={handleCancel}>
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Photos */}
+          <div className="flex gap-2 overflow-x-auto pb-2">
+            {capturedPhotos.map((photo, i) => (
+              <img 
+                key={i}
+                src={photo.preview}
+                alt=""
+                className="w-20 h-20 rounded-lg object-cover border border-border flex-shrink-0"
+              />
+            ))}
+          </div>
+
+          {/* Editable Fields */}
+          <div className="space-y-3">
+            <EditableField 
+              label="Title" 
+              value={generatedListing.title} 
+              maxLength={100}
+              isEditing={editField === 'title'}
+              editValue={editValue}
+              onEdit={() => handleEditField('title', generatedListing.title)}
+              onSave={saveEdit}
+              onCancel={() => setEditField(null)}
+              onChange={setEditValue}
+            />
+            
+            <EditableField 
+              label="Description" 
+              value={generatedListing.description} 
+              multiline
+              isEditing={editField === 'description'}
+              editValue={editValue}
+              onEdit={() => handleEditField('description', generatedListing.description)}
+              onSave={saveEdit}
+              onCancel={() => setEditField(null)}
+              onChange={setEditValue}
+            />
+
+            <div className="grid grid-cols-3 gap-3">
+              <EditableField 
+                label="Low Est" 
+                value={generatedListing.lowEst ? `$${generatedListing.lowEst}` : '-'} 
+                isEditing={editField === 'lowEst'}
+                editValue={editValue}
+                onEdit={() => handleEditField('lowEst', generatedListing.lowEst)}
+                onSave={saveEdit}
+                onCancel={() => setEditField(null)}
+                onChange={setEditValue}
+                type="number"
+              />
+              <EditableField 
+                label="High Est" 
+                value={generatedListing.highEst ? `$${generatedListing.highEst}` : '-'} 
+                isEditing={editField === 'highEst'}
+                editValue={editValue}
+                onEdit={() => handleEditField('highEst', generatedListing.highEst)}
+                onSave={saveEdit}
+                onCancel={() => setEditField(null)}
+                onChange={setEditValue}
+                type="number"
+              />
+              <EditableField 
+                label="Start" 
+                value={generatedListing.startPrice ? `$${generatedListing.startPrice}` : '-'} 
+                isEditing={editField === 'startPrice'}
+                editValue={editValue}
+                onEdit={() => handleEditField('startPrice', generatedListing.startPrice)}
+                onSave={saveEdit}
+                onCancel={() => setEditField(null)}
+                onChange={setEditValue}
+                type="number"
+              />
+            </div>
+
+            <EditableField 
+              label="Condition" 
+              value={generatedListing.condition || '-'} 
+              isEditing={editField === 'condition'}
+              editValue={editValue}
+              onEdit={() => handleEditField('condition', generatedListing.condition)}
+              onSave={saveEdit}
+              onCancel={() => setEditField(null)}
+              onChange={setEditValue}
+            />
+
+            <EditableField 
+              label="Category" 
+              value={generatedListing.category || '-'} 
+              isEditing={editField === 'category'}
+              editValue={editValue}
+              onEdit={() => handleEditField('category', generatedListing.category)}
+              onSave={saveEdit}
+              onCancel={() => setEditField(null)}
+              onChange={setEditValue}
+            />
+
+            {/* Dimensions */}
+            <div className="grid grid-cols-4 gap-2">
+              <EditableField 
+                label="Height" 
+                value={generatedListing.height || '-'} 
+                isEditing={editField === 'height'}
+                editValue={editValue}
+                onEdit={() => handleEditField('height', generatedListing.height)}
+                onSave={saveEdit}
+                onCancel={() => setEditField(null)}
+                onChange={setEditValue}
+                type="number"
+              />
+              <EditableField 
+                label="Width" 
+                value={generatedListing.width || '-'} 
+                isEditing={editField === 'width'}
+                editValue={editValue}
+                onEdit={() => handleEditField('width', generatedListing.width)}
+                onSave={saveEdit}
+                onCancel={() => setEditField(null)}
+                onChange={setEditValue}
+                type="number"
+              />
+              <EditableField 
+                label="Depth" 
+                value={generatedListing.depth || '-'} 
+                isEditing={editField === 'depth'}
+                editValue={editValue}
+                onEdit={() => handleEditField('depth', generatedListing.depth)}
+                onSave={saveEdit}
+                onCancel={() => setEditField(null)}
+                onChange={setEditValue}
+                type="number"
+              />
+              <EditableField 
+                label="Unit" 
+                value={generatedListing.dimensionUnit || 'in'} 
+                isEditing={editField === 'dimensionUnit'}
+                editValue={editValue}
+                onEdit={() => handleEditField('dimensionUnit', generatedListing.dimensionUnit)}
+                onSave={saveEdit}
+                onCancel={() => setEditField(null)}
+                onChange={setEditValue}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-border">
+          <Button 
+            size="lg" 
+            className="w-full bg-primary hover:bg-primary/90"
+            onClick={finalizeLot}
+          >
+            <Check className="h-5 w-5 mr-2" />
+            Add Lot #{lotNumber} to CSV
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // STEP: Review (add instructions before processing)
+  if (step === 'review') {
+    return (
+      <div className="fixed inset-0 z-50 bg-background flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <Button variant="ghost" size="sm" onClick={backToCapture}>
+            ← Back
+          </Button>
+          <div className="text-center">
+            <span className="text-primary font-bold">Lot #{lotNumber}</span>
+            <span className="text-muted-foreground text-sm ml-2">Add Details</span>
+          </div>
+          <Button variant="ghost" size="icon" onClick={handleCancel}>
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+
+        {/* Photos */}
+        <div className="p-4 border-b border-border">
+          <div className="flex gap-2 overflow-x-auto">
+            {capturedPhotos.map((photo, i) => (
+              <div key={i} className="relative flex-shrink-0">
+                <img 
+                  src={photo.preview}
+                  alt=""
+                  className="w-20 h-20 rounded-lg object-cover border border-border"
+                />
+                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[10px] bg-primary text-primary-foreground px-1.5 rounded">
+                  {i + 1}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            {capturedPhotos.length} photos for Lot #{lotNumber}
+          </p>
+        </div>
+
+        {/* Instructions Chat Area */}
+        <div className="flex-1 p-4 flex flex-col">
+          <div className="flex items-center gap-2 mb-3">
+            <MessageSquare className="h-5 w-5 text-primary" />
+            <span className="font-medium">Special Instructions for AI</span>
+          </div>
+          
+          <div className="flex-1 bg-secondary/30 rounded-lg p-4 mb-4">
+            <p className="text-sm text-muted-foreground mb-3">
+              Add any details the AI should know:
+            </p>
+            <ul className="text-sm text-muted-foreground space-y-1 mb-4">
+              <li>• Dimensions: "12 inches tall, 8 inches wide"</li>
+              <li>• Condition: "Small chip on base, crack on handle"</li>
+              <li>• Brand/Maker: "Signed Tiffany & Co."</li>
+              <li>• Period: "Art Deco, circa 1920s"</li>
+              <li>• Material: "Sterling silver, 925"</li>
+            </ul>
+            
+            {specialInstructions && (
+              <div className="bg-primary/10 border border-primary/20 rounded-lg p-3 mt-3">
+                <p className="text-sm font-medium text-primary">Your notes:</p>
+                <p className="text-sm mt-1">{specialInstructions}</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Input Bar */}
+        <div className="p-4 border-t border-border">
+          <div className="flex gap-2 mb-3">
+            <Input
+              ref={instructionsInputRef}
+              placeholder="Type dimensions, condition notes, or special details..."
+              value={specialInstructions}
+              onChange={(e) => setSpecialInstructions(e.target.value)}
+              className="flex-1"
+              onKeyDown={(e) => e.key === 'Enter' && processLot()}
+            />
+          </div>
+          <Button 
+            size="lg" 
+            className="w-full bg-primary hover:bg-primary/90"
+            onClick={processLot}
+          >
+            <Gavel className="h-5 w-5 mr-2" />
+            Process with AI
+          </Button>
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            {specialInstructions ? "Instructions will be included" : "Or skip and let AI analyze photos only"}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // STEP: Capture
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
       {/* Header */}
@@ -283,7 +610,6 @@ export function LiveAuctioneersCaptureMode({
 
       {/* Controls */}
       <div className="p-4 bg-black/50 space-y-4">
-        {/* Capture button row */}
         <div className="flex items-center justify-center gap-6">
           {capturedPhotos.length > 0 && (
             <Button
@@ -307,11 +633,11 @@ export function LiveAuctioneersCaptureMode({
           ) : (
             <Button
               size="lg"
-              onClick={processAndSubmit}
+              onClick={goToReview}
               className="bg-primary hover:bg-primary/90 px-8"
             >
               <Check className="h-5 w-5 mr-2" />
-              Process Lot #{lotNumber}
+              Next: Add Details
             </Button>
           )}
         </div>
@@ -319,12 +645,91 @@ export function LiveAuctioneersCaptureMode({
         <p className="text-center text-white/50 text-xs">
           {capturedPhotos.length === 0 
             ? "Take photos of the item" 
-            : `${capturedPhotos.length} photo${capturedPhotos.length > 1 ? 's' : ''} ready • Tap "Process" when done`
+            : `${capturedPhotos.length} photo${capturedPhotos.length > 1 ? 's' : ''} • Tap "Next" to add details`
           }
         </p>
       </div>
 
       <canvas ref={canvasRef} className="hidden" />
+    </div>
+  );
+}
+
+// Editable field component
+function EditableField({ 
+  label, 
+  value, 
+  maxLength,
+  multiline,
+  type = 'text',
+  isEditing,
+  editValue,
+  onEdit,
+  onSave,
+  onCancel,
+  onChange
+}: {
+  label: string;
+  value: string | number | undefined;
+  maxLength?: number;
+  multiline?: boolean;
+  type?: 'text' | 'number';
+  isEditing: boolean;
+  editValue: string;
+  onEdit: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+  onChange: (value: string) => void;
+}) {
+  if (isEditing) {
+    return (
+      <div className="space-y-1">
+        <label className="text-xs text-muted-foreground uppercase">{label}</label>
+        <div className="flex gap-2">
+          {multiline ? (
+            <textarea
+              value={editValue}
+              onChange={(e) => onChange(e.target.value)}
+              className="flex-1 min-h-[80px] px-3 py-2 bg-secondary border border-border rounded-md text-sm"
+              autoFocus
+            />
+          ) : (
+            <Input
+              type={type}
+              value={editValue}
+              onChange={(e) => onChange(e.target.value)}
+              maxLength={maxLength}
+              autoFocus
+              className="flex-1"
+            />
+          )}
+          <Button size="sm" onClick={onSave}>
+            <Check className="h-4 w-4" />
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onCancel}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        {maxLength && (
+          <p className="text-xs text-muted-foreground">{editValue.length}/{maxLength}</p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div 
+      className="p-3 bg-secondary/30 rounded-lg cursor-pointer hover:bg-secondary/50 transition-colors"
+      onClick={onEdit}
+    >
+      <label className="text-xs text-muted-foreground uppercase block mb-1">{label}</label>
+      <p className={cn(
+        "text-sm",
+        multiline ? "whitespace-pre-wrap" : "truncate",
+        !value || value === '-' ? "text-muted-foreground italic" : ""
+      )}>
+        {value || 'Tap to add'}
+      </p>
     </div>
   );
 }
