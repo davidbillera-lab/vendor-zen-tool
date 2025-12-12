@@ -259,10 +259,17 @@ export default function CreateListing() {
   };
 
   const generateCSVContent = () => {
+    // Find the maximum number of images across all lots
+    const maxImages = Math.max(...csvRows.map(r => r.imageUrls?.length || 0), 4);
+    
+    // Build dynamic ImageFile columns
+    const imageColumns = Array.from({ length: maxImages }, (_, i) => `ImageFile.${i + 1}`);
+    
     // Official LiveAuctioneers column headers - EXACT FORMAT REQUIRED
     const headers = [
       'LotNum', 'Title', 'Description', 'LowEst', 'HighEst', 'StartPrice',
-      'Condition', 'Consigner', 'ImageFile.1', 'ImageFile.2', 'ImageFile.3', 'ImageFile.4',
+      'Condition', 'Consigner', 
+      ...imageColumns,
       'Buy Now Price', 'Exclude From Buy Now', 'Reserve Price',
       'Height', 'Width', 'Depth', 'Dimension Unit', 'Weight', 'Weight Unit',
       'Domestic Flat Shipping Price', 'Quantity', 'Category', 'Origin',
@@ -271,6 +278,12 @@ export default function CreateListing() {
 
     const rows = csvRows.map(r => {
       const lotNum = r.lotNumber || '';
+      
+      // Generate image filename entries for all columns
+      const imageEntries = Array.from({ length: maxImages }, (_, i) => 
+        r.imageUrls?.[i] ? `${lotNum}_${i + 1}` : ''
+      );
+      
       return [
         lotNum,
         (r.title || '').substring(0, 100),
@@ -280,10 +293,7 @@ export default function CreateListing() {
         r.startPrice || '',
         r.condition || '',
         r.consigner || 'JSG',
-        r.imageUrls?.[0] ? `${lotNum}_1` : '',
-        r.imageUrls?.[1] ? `${lotNum}_2` : '',
-        r.imageUrls?.[2] ? `${lotNum}_3` : '',
-        r.imageUrls?.[3] ? `${lotNum}_4` : '',
+        ...imageEntries,
         '', // Buy Now Price
         '', // Exclude From Buy Now
         '', // Reserve Price
