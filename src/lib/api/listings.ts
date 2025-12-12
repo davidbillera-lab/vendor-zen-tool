@@ -183,8 +183,14 @@ export function generateEbayCSV(listings: any[]): string {
   return [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n');
 }
 
-// Generate LiveAuctioneers CSV - EXACT FORMAT REQUIRED
+// Generate LiveAuctioneers CSV - EXACT FORMAT REQUIRED with dynamic image columns
 export function generateLiveAuctioneersCSV(listings: any[]): string {
+  // Find maximum number of images across all listings
+  const maxImages = Math.max(...listings.map(l => (l.image_urls || []).length), 4);
+  
+  // Build dynamic ImageFile columns
+  const imageColumns = Array.from({ length: maxImages }, (_, i) => `ImageFile.${i + 1}`);
+  
   // Official LiveAuctioneers column headers
   const headers = [
     'LotNum',
@@ -195,10 +201,7 @@ export function generateLiveAuctioneersCSV(listings: any[]): string {
     'StartPrice',
     'Condition',
     'Consigner',
-    'ImageFile.1',
-    'ImageFile.2',
-    'ImageFile.3',
-    'ImageFile.4',
+    ...imageColumns,
     'Buy Now Price',
     'Exclude From Buy Now',
     'Reserve Price',
@@ -222,8 +225,15 @@ export function generateLiveAuctioneersCSV(listings: any[]): string {
   const rows = listings.map(l => {
     const data = l.csv_row_data || {};
     const images = l.image_urls || [];
+    const lotNum = l.lotNumber || l.lot_number || '';
+    
+    // Generate image filename entries for all columns
+    const imageEntries = Array.from({ length: maxImages }, (_, i) => 
+      images[i] ? `${lotNum}_${i + 1}` : ''
+    );
+    
     return [
-      l.lotNumber || l.lot_number || '',
+      lotNum,
       (l.title || '').substring(0, 100), // Max 100 chars
       l.description || '',
       data.lowEst || '',
@@ -231,10 +241,7 @@ export function generateLiveAuctioneersCSV(listings: any[]): string {
       data.startPrice || '',
       data.condition || '',
       data.consigner || 'JSG',
-      images[0] || '',
-      images[1] || '',
-      images[2] || '',
-      images[3] || '',
+      ...imageEntries,
       '', // Buy Now Price
       '', // Exclude From Buy Now
       '', // Reserve Price

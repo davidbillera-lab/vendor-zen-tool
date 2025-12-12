@@ -255,7 +255,7 @@ export function LiveAuctioneersCaptureMode({
             </div>
           ))}
           <div className="flex-shrink-0 text-white/50 text-sm px-2">
-            {capturedPhotos.length}/4
+            {capturedPhotos.length} photos
           </div>
         </div>
       )}
@@ -285,7 +285,7 @@ export function LiveAuctioneersCaptureMode({
       <div className="p-4 bg-black/50 space-y-4">
         {/* Capture button row */}
         <div className="flex items-center justify-center gap-6">
-          {capturedPhotos.length > 0 && capturedPhotos.length < 4 && (
+          {capturedPhotos.length > 0 && (
             <Button
               variant="outline"
               size="lg"
@@ -318,7 +318,7 @@ export function LiveAuctioneersCaptureMode({
 
         <p className="text-center text-white/50 text-xs">
           {capturedPhotos.length === 0 
-            ? "Take photos of the item (up to 4)" 
+            ? "Take photos of the item" 
             : `${capturedPhotos.length} photo${capturedPhotos.length > 1 ? 's' : ''} ready • Tap "Process" when done`
           }
         </p>
