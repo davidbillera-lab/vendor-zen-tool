@@ -19,11 +19,13 @@ import {
   DollarSign,
   Plus,
   ImageIcon,
-  Rocket
+  Rocket,
+  Camera
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
+import { CameraCapture } from "@/components/CameraCapture";
 
 const platforms = [
   { id: "ebay" as Platform, name: "eBay", icon: Store, color: "bg-platform-ebay", description: "Cassini-optimized draft" },
@@ -351,14 +353,7 @@ export default function CreateListing() {
           )}
         >
           {images.length === 0 ? (
-            <label className="flex flex-col items-center justify-center cursor-pointer">
-              <input
-                type="file"
-                multiple
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="hidden"
-              />
+            <div className="flex flex-col items-center justify-center">
               <div className={cn(
                 "rounded-full p-6 mb-4 transition-colors",
                 isDragging ? "bg-primary/20" : "bg-secondary"
@@ -369,12 +364,38 @@ export default function CreateListing() {
                 )} />
               </div>
               <h3 className="text-xl font-semibold text-foreground mb-2">
-                {isDragging ? "Drop photos here!" : "Drag & Drop Photos"}
+                {isDragging ? "Drop photos here!" : "Add Photos"}
               </h3>
-              <p className="text-muted-foreground text-sm">
-                or click to browse • Supports multiple images
+              <p className="text-muted-foreground text-sm mb-4">
+                Drop files, browse, or take a photo
               </p>
-            </label>
+              <div className="flex gap-3">
+                <CameraCapture 
+                  onCapture={(files) => {
+                    const newImages = files.map(file => ({
+                      file,
+                      preview: URL.createObjectURL(file)
+                    }));
+                    setImages(prev => [...prev, ...newImages]);
+                  }}
+                />
+                <label className="cursor-pointer">
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    className="hidden"
+                  />
+                  <Button variant="outline" size="lg" asChild>
+                    <span className="flex items-center gap-2">
+                      <Upload className="h-5 w-5" />
+                      Browse Files
+                    </span>
+                  </Button>
+                </label>
+              </div>
+            </div>
           ) : (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
