@@ -43,6 +43,12 @@ export async function generateListing(
   imageUrls: string[],
   additionalContext?: string
 ): Promise<GeneratedListing> {
+  // Ensure user is authenticated before calling
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error('User must be authenticated to generate listings');
+  }
+
   const { data, error } = await supabase.functions.invoke('generate-listing', {
     body: { platform, imageUrls, additionalContext }
   });
