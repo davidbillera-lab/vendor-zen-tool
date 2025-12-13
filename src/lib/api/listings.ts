@@ -1,5 +1,14 @@
 import { supabase } from "@/integrations/supabase/client";
 
+// Helper to get current user ID
+async function getCurrentUserId(): Promise<string> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    throw new Error('User must be authenticated');
+  }
+  return user.id;
+}
+
 export type Platform = 'ebay' | 'facebook' | 'liveauctioneers' | 'denver';
 
 export interface GeneratedListing {
@@ -85,9 +94,11 @@ export async function saveListing(listing: {
   csv_row_data?: Record<string, any>;
   facebook_groups?: string[];
 }) {
+  const userId = await getCurrentUserId();
+  
   const { data, error } = await supabase
     .from('listings')
-    .insert(listing)
+    .insert({ ...listing, user_id: userId })
     .select()
     .single();
 

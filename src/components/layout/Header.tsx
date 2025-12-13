@@ -1,6 +1,8 @@
-import { Bell, Search, User } from "lucide-react";
+import { Bell, Search, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
 
 interface HeaderProps {
   title: string;
@@ -8,6 +10,13 @@ interface HeaderProps {
 }
 
 export function Header({ title, subtitle }: HeaderProps) {
+  const { user, signOut } = useAuth();
+
+  const handleSignOut = async () => {
+    await signOut();
+    toast.success('Signed out successfully');
+  };
+
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/80 px-6 backdrop-blur-md">
       <div>
@@ -33,10 +42,17 @@ export function Header({ title, subtitle }: HeaderProps) {
           </span>
         </Button>
 
-        {/* Profile */}
-        <Button variant="ghost" size="icon">
-          <User className="h-5 w-5" />
-        </Button>
+        {/* User email & Sign out */}
+        {user && (
+          <div className="flex items-center gap-2">
+            <span className="hidden text-sm text-muted-foreground md:block">
+              {user.email}
+            </span>
+            <Button variant="ghost" size="icon" onClick={handleSignOut} title="Sign out">
+              <LogOut className="h-5 w-5" />
+            </Button>
+          </div>
+        )}
       </div>
     </header>
   );
