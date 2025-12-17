@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,13 +21,16 @@ import {
   ImageIcon,
   Rocket,
   Camera,
-  FolderArchive
+  FolderArchive,
+  Sheet,
+  Settings
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
 import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
+import { supabase } from "@/integrations/supabase/client";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 
@@ -80,6 +83,14 @@ export default function CreateListing() {
   // LiveAuctioneers specific
   const [lotNumber, setLotNumber] = useState(1);
   const [csvRows, setCsvRows] = useState<any[]>([]);
+  const [spreadsheetId, setSpreadsheetId] = useState(() => 
+    localStorage.getItem('liveauctioneers_spreadsheet_id') || ''
+  );
+  const [sheetName, setSheetName] = useState(() => 
+    localStorage.getItem('liveauctioneers_sheet_name') || 'Sheet1'
+  );
+  const [sendingToSheets, setSendingToSheets] = useState(false);
+  const [showSheetSettings, setShowSheetSettings] = useState(false);
   
   // Denver Auctions specific
   const [denverLotNumber, setDenverLotNumber] = useState(1);
@@ -88,6 +99,15 @@ export default function CreateListing() {
 
   // LiveAuctioneers Quick Capture mode
   const [laQuickCaptureOpen, setLaQuickCaptureOpen] = useState(false);
+
+  // Persist Google Sheet settings
+  useEffect(() => {
+    if (spreadsheetId) localStorage.setItem('liveauctioneers_spreadsheet_id', spreadsheetId);
+  }, [spreadsheetId]);
+  
+  useEffect(() => {
+    if (sheetName) localStorage.setItem('liveauctioneers_sheet_name', sheetName);
+  }, [sheetName]);
 
   const handleLaQuickCaptureLot = (lot: {
     listing: GeneratedListing;
@@ -414,6 +434,67 @@ export default function CreateListing() {
     }
   };
 
+  const sendToGoogleSheets = async () => {
+    if (csvRows.length === 0) {
+      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
+      return;
+    }
+
+    if (!spreadsheetId.trim()) {
+      setShowSheetSettings(true);
+      toast({ 
+        title: "Sheet ID Required", 
+        description: "Enter your Google Sheet ID in settings",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setSendingToSheets(true);
+
+    try {
+      // Format rows for Google Sheets
+      // Column order: LotNum, Title, Description, LowEst, HighEst, StartPrice, Condition
+      const rows = csvRows.map(r => ({
+        lotNum: r.lotNumber || 0,
+        title: (r.title || '').substring(0, 100),
+        description: r.description || '',
+        lowEst: r.lowEst || 0,
+        highEst: r.highEst || 0,
+        startPrice: r.startPrice || 5,
+        condition: r.condition || ''
+      }));
+
+      const { data, error } = await supabase.functions.invoke('append-to-sheet', {
+        body: { 
+          spreadsheetId: spreadsheetId.trim(),
+          sheetName: sheetName.trim() || 'Sheet1',
+          rows 
+        }
+      });
+
+      if (error) throw error;
+
+      toast({ 
+        title: "Sent to Google Sheets!", 
+        description: `${rows.length} lots added to your spreadsheet`
+      });
+
+      // Clear rows after successful send
+      setCsvRows([]);
+      
+    } catch (error) {
+      console.error("Error sending to Google Sheets:", error);
+      toast({ 
+        title: "Send Failed", 
+        description: error instanceof Error ? error.message : "Could not send to Google Sheets",
+        variant: "destructive"
+      });
+    } finally {
+      setSendingToSheets(false);
+    }
+  };
+
   const toggleGroup = (group: string) => {
     setSelectedGroups(prev => 
       prev.includes(group) 
@@ -568,7 +649,7 @@ export default function CreateListing() {
 
         {/* LiveAuctioneers CSV Status */}
         <div className={cn(
-          "rounded-xl border p-4",
+          "rounded-xl border p-4 space-y-4",
           csvRows.length > 0 ? "border-primary/50 bg-primary/5" : "border-border bg-card"
         )}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -576,11 +657,19 @@ export default function CreateListing() {
               <div className="flex items-center gap-2">
                 <Gavel className="h-5 w-5 text-primary" />
                 <span className="font-semibold text-foreground">LiveAuctioneers</span>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-6 w-6"
+                  onClick={() => setShowSheetSettings(!showSheetSettings)}
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
               </div>
               {csvRows.length > 0 ? (
                 <span className="text-muted-foreground text-sm">{csvRows.length} lots ready • Next: #{lotNumber}</span>
               ) : (
-                <span className="text-muted-foreground text-sm">Quick capture lots directly to CSV</span>
+                <span className="text-muted-foreground text-sm">Quick capture lots → Send to Google Sheets</span>
               )}
             </div>
             <div className="flex flex-wrap gap-2">
@@ -600,19 +689,20 @@ export default function CreateListing() {
                     onChange={(e) => setLotNumber(parseInt(e.target.value) || 1)}
                     className="w-20"
                   />
-                  <Button variant="outline" onClick={copyCSVToClipboard}>
-                    {copied === 'csv' ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
-                    {copied === 'csv' ? 'Copied!' : 'Copy for Sheets'}
-                  </Button>
-                  <Button variant="outline" onClick={downloadCSV}>
-                    <Download className="h-4 w-4 mr-2" />
-                    CSV
-                  </Button>
                   <Button 
                     variant="gold" 
-                    onClick={downloadImagesZip}
-                    disabled={downloadingImages}
+                    onClick={sendToGoogleSheets}
+                    disabled={sendingToSheets || !spreadsheetId.trim()}
+                    className="gap-2"
                   >
+                    {sendingToSheets ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sheet className="h-4 w-4" />
+                    )}
+                    {sendingToSheets ? 'Sending...' : 'Send to Sheets'}
+                  </Button>
+                  <Button variant="outline" onClick={downloadImagesZip} disabled={downloadingImages}>
                     {downloadingImages ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : (
@@ -620,10 +710,52 @@ export default function CreateListing() {
                     )}
                     {downloadingImages ? 'Packaging...' : 'Images ZIP'}
                   </Button>
+                  <Button variant="outline" onClick={downloadCSV}>
+                    <Download className="h-4 w-4 mr-2" />
+                    CSV
+                  </Button>
                 </>
               )}
             </div>
           </div>
+
+          {/* Google Sheets Settings */}
+          {showSheetSettings && (
+            <div className="border-t border-border pt-4 space-y-3">
+              <h4 className="text-sm font-medium flex items-center gap-2">
+                <Sheet className="h-4 w-4" />
+                Google Sheets Settings
+              </h4>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Spreadsheet ID</Label>
+                  <Input
+                    placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+                    value={spreadsheetId}
+                    onChange={(e) => setSpreadsheetId(e.target.value)}
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Find in your Google Sheet URL after /d/
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Sheet Name</Label>
+                  <Input
+                    placeholder="Sheet1"
+                    value={sheetName}
+                    onChange={(e) => setSheetName(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Tab name at bottom of spreadsheet
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Make sure to share your Google Sheet with the service account email.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Denver Auctions Batch */}
