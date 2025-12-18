@@ -72,11 +72,12 @@ FOR EACH LOT:
    - Condition: Detailed condition statement
    - LowEst: Conservative low estimate in dollars
    - HighEst: Optimistic high estimate (must be > LowEst)
-   - StartPrice: Starting bid (typically 40-50% of LowEst)
+   - StartPrice: ALWAYS $5 unless the user specifically requests a different starting price
 
 DEFAULTS:
 - Consigner: "JSG"
 - Location Nickname: "Highlands Ranch"
+- StartPrice: 5 (ALWAYS use 5 unless user specifies otherwise)
 
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
@@ -84,7 +85,7 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
   "description": "string (short, appealing, factual)",
   "lowEst": number,
   "highEst": number,
-  "startPrice": number,
+  "startPrice": 5,
   "condition": "string",
   "consigner": "JSG",
   "buyNowPrice": null,
