@@ -80,12 +80,24 @@ serve(async (req) => {
   }
 
   try {
-    const serviceAccountJson = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON');
-    if (!serviceAccountJson) {
-      throw new Error('Google service account credentials not configured');
+    // Try Base64 encoded version first, fall back to raw JSON
+    let serviceAccountJson = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON_B64');
+    let serviceAccount;
+    
+    if (serviceAccountJson) {
+      // Decode from Base64
+      const decoded = atob(serviceAccountJson);
+      serviceAccount = JSON.parse(decoded);
+      console.log('Using Base64-encoded service account credentials');
+    } else {
+      // Fall back to raw JSON
+      serviceAccountJson = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON');
+      if (!serviceAccountJson) {
+        throw new Error('Google service account credentials not configured. Set GOOGLE_SERVICE_ACCOUNT_JSON_B64 with Base64-encoded JSON.');
+      }
+      serviceAccount = JSON.parse(serviceAccountJson);
+      console.log('Using raw JSON service account credentials');
     }
-
-    const serviceAccount = JSON.parse(serviceAccountJson);
     const { spreadsheetId, sheetName = 'Sheet1', rows } = await req.json() as AppendRequest;
 
     if (!spreadsheetId) {
