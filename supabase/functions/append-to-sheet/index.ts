@@ -32,15 +32,15 @@ interface AppendRequest {
 
 async function getAccessToken(serviceAccount: { client_email: string; private_key: string }) {
   const now = Math.floor(Date.now() / 1000);
-  
+
   // Import the private key
   const pemContent = serviceAccount.private_key
     .replace(/-----BEGIN PRIVATE KEY-----/, '')
     .replace(/-----END PRIVATE KEY-----/, '')
     .replace(/\n/g, '');
-  
+
   const binaryKey = Uint8Array.from(atob(pemContent), c => c.charCodeAt(0));
-  
+
   const cryptoKey = await crypto.subtle.importKey(
     'pkcs8',
     binaryKey,
@@ -81,6 +81,34 @@ async function getAccessToken(serviceAccount: { client_email: string; private_ke
   return tokenData.access_token;
 }
 
+async function resolveSheetTitle(accessToken: string, spreadsheetId: string, requestedSheetName: string) {
+  const trimmed = (requestedSheetName || '').trim();
+  if (!trimmed) return 'Sheet1';
+
+  // Google returns "Unable to parse range" when the sheet title doesn't match exactly.
+  // Resolve the exact tab title via spreadsheet metadata.
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(title))`;
+  const metaRes = await fetch(metaUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!metaRes.ok) {
+    console.warn('Could not fetch spreadsheet metadata; falling back to provided sheetName');
+    return trimmed;
+  }
+
+  const meta = await metaRes.json();
+  const titles: string[] = (meta?.sheets || [])
+    .map((s: any) => s?.properties?.title)
+    .filter(Boolean);
+
+  return (
+    titles.find((t) => t === trimmed) ||
+    titles.find((t) => t?.toLowerCase?.() === trimmed.toLowerCase()) ||
+    trimmed
+  );
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -91,7 +119,7 @@ serve(async (req) => {
     // Try Base64 encoded version first, fall back to raw JSON
     let serviceAccountJson = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON_B64');
     let serviceAccount;
-    
+
     if (serviceAccountJson) {
       // Decode from Base64
       const decoded = atob(serviceAccountJson);
@@ -106,6 +134,7 @@ serve(async (req) => {
       serviceAccount = JSON.parse(serviceAccountJson);
       console.log('Using raw JSON service account credentials');
     }
+
     const { spreadsheetId, sheetName = 'Sheet1', rows } = await req.json() as AppendRequest;
 
     if (!spreadsheetId) {
@@ -119,6 +148,7 @@ serve(async (req) => {
     console.log(`Appending ${rows.length} rows to spreadsheet ${spreadsheetId}`);
 
     const accessToken = await getAccessToken(serviceAccount);
+    const resolvedSheetName = await resolveSheetTitle(accessToken, spreadsheetId, sheetName);
 
     // Format rows for Google Sheets API
     // Column order: A=LotNum, B=Title, C=Description, D=LowEst, E=HighEst, F=StartPrice, G=Condition, H=Consignor, I=Height, J=Width, K=Depth, L=Dimension Unit, M=Weight, N=Weight Unit, O=Category
@@ -141,10 +171,10 @@ serve(async (req) => {
     ]);
 
     // Append rows to the sheet (15 columns: A:O)
-    // For the API path, encode only the sheet name portion, not the quotes or range notation
-    const encodedSheetName = encodeURIComponent(sheetName);
-    const range = `${encodedSheetName}!A:O`;
-    const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+    // Always quote sheet titles in A1 notation (and escape any single quotes) to safely handle spaces/special chars.
+    const safeSheetTitle = `'${resolvedSheetName.replace(/'/g, "''")}'`;
+    const rangeA1 = `${safeSheetTitle}!A:O`;
+    const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(rangeA1)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
 
     const response = await fetch(appendUrl, {
       method: 'POST',
@@ -158,10 +188,12 @@ serve(async (req) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Google Sheets API error:', response.status, errorText);
+      console.error('Resolved sheet name:', resolvedSheetName);
       console.error('Service account email (share your sheet with this):', serviceAccount?.client_email);
+
       throw new Error(
-        `Google Sheets API error: ${response.status} - ${errorText}\n` +
-          `Fix: Share the spreadsheet with this service account email as Editor: ${serviceAccount?.client_email}`
+        `Google Sheets API error: ${response.status} - ${errorText}\n\n` +
+        `Fix: Verify the sheet tab name exists (requested: "${sheetName}") and share the spreadsheet with this service account email as Editor: ${serviceAccount?.client_email}`
       );
     }
 
@@ -169,8 +201,8 @@ serve(async (req) => {
     console.log('Successfully appended rows:', result.updates?.updatedRows);
 
     return new Response(
-      JSON.stringify({ 
-        success: true, 
+      JSON.stringify({
+        success: true,
         updatedRows: result.updates?.updatedRows || rows.length,
         updatedRange: result.updates?.updatedRange
       }),
