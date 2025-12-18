@@ -88,6 +88,89 @@ export type Database = {
           },
         ]
       }
+      ebay_batch_rows: {
+        Row: {
+          batch_id: string | null
+          category: string | null
+          condition: string | null
+          created_at: string
+          created_by: string | null
+          description: string | null
+          handling_time: number | null
+          id: string
+          image_urls: string[] | null
+          item_specifics: Json | null
+          lot_number: number
+          price: number | null
+          promotion_rate: number | null
+          promotion_type: string | null
+          return_period: number | null
+          return_shipping: string | null
+          returns_accepted: boolean | null
+          shipping_cost: number | null
+          shipping_type: string | null
+          status: string | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          batch_id?: string | null
+          category?: string | null
+          condition?: string | null
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          handling_time?: number | null
+          id?: string
+          image_urls?: string[] | null
+          item_specifics?: Json | null
+          lot_number: number
+          price?: number | null
+          promotion_rate?: number | null
+          promotion_type?: string | null
+          return_period?: number | null
+          return_shipping?: string | null
+          returns_accepted?: boolean | null
+          shipping_cost?: number | null
+          shipping_type?: string | null
+          status?: string | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          batch_id?: string | null
+          category?: string | null
+          condition?: string | null
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          handling_time?: number | null
+          id?: string
+          image_urls?: string[] | null
+          item_specifics?: Json | null
+          lot_number?: number
+          price?: number | null
+          promotion_rate?: number | null
+          promotion_type?: string | null
+          return_period?: number | null
+          return_shipping?: string | null
+          returns_accepted?: boolean | null
+          shipping_cost?: number | null
+          shipping_type?: string | null
+          status?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ebay_batch_rows_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "la_batches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       la_batch_rows: {
         Row: {
           batch_id: string | null

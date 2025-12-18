@@ -33,6 +33,9 @@ import { ProjectManager, type Project } from "@/components/BatchManager";
 import { supabase } from "@/integrations/supabase/client";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
+import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
+import { EbayItemSpecificsEditor } from "@/components/ebay/EbayItemSpecificsEditor";
+import { EbayShippingSettings, type ShippingSettings } from "@/components/ebay/EbayShippingSettings";
 
 const platforms = [
   { id: "ebay" as Platform, name: "eBay", icon: Store, color: "bg-platform-ebay", description: "Cassini-optimized draft" },
@@ -93,6 +96,20 @@ export default function CreateListing() {
   const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
   const [loadingDenver, setLoadingDenver] = useState(false);
 
+  // eBay batch mode
+  const [ebayLotNumber, setEbayLotNumber] = useState(1);
+  const [ebayRows, setEbayRows] = useState<any[]>([]);
+  const [loadingEbay, setLoadingEbay] = useState(false);
+  const [ebayShippingSettings, setEbayShippingSettings] = useState<ShippingSettings>({
+    shippingType: "flat",
+    shippingCost: 0,
+    handlingTime: 3,
+    returnsAccepted: true,
+    returnPeriod: 30,
+    returnShipping: "buyer",
+  });
+  const [ebayItemSpecifics, setEbayItemSpecifics] = useState<Record<string, string>>({});
+
   // LiveAuctioneers Quick Capture mode
   const [laQuickCaptureOpen, setLaQuickCaptureOpen] = useState(false);
 
@@ -130,6 +147,42 @@ export default function CreateListing() {
     };
     
     fetchDenverLots();
+  }, [selectedProject?.id]);
+
+  // Fetch eBay batch rows when project changes
+  useEffect(() => {
+    const fetchEbayRows = async () => {
+      if (!selectedProject?.id) {
+        setEbayRows([]);
+        setEbayLotNumber(1);
+        return;
+      }
+      
+      setLoadingEbay(true);
+      try {
+        const { data, error } = await supabase
+          .from('ebay_batch_rows')
+          .select('*')
+          .eq('batch_id', selectedProject.id)
+          .order('lot_number', { ascending: true });
+        
+        if (error) throw error;
+        setEbayRows(data || []);
+        
+        if (data && data.length > 0) {
+          const maxLot = Math.max(...data.map(r => r.lot_number));
+          setEbayLotNumber(maxLot + 1);
+        } else {
+          setEbayLotNumber(1);
+        }
+      } catch (error) {
+        console.error('Error fetching eBay rows:', error);
+      } finally {
+        setLoadingEbay(false);
+      }
+    };
+    
+    fetchEbayRows();
   }, [selectedProject?.id]);
 
   // Fetch batch rows when selected project changes
@@ -344,8 +397,56 @@ export default function CreateListing() {
       const listing = await generateListing(platform, imageUrls, additionalContext);
       setGeneratedListing(listing);
 
-      // Auto-save as draft for eBay/Facebook (with project association)
-      if (platform === 'ebay' || platform === 'facebook') {
+      // Auto-save eBay to batch for bulk export
+      if (platform === 'ebay') {
+        if (!selectedProject?.id) {
+          toast({ 
+            title: "No Project Selected", 
+            description: "Select or create a project first for eBay batch",
+            variant: "destructive"
+          });
+        } else {
+          const { data: { user } } = await supabase.auth.getUser();
+          
+          // Set item specifics from AI
+          if (listing.itemSpecifics) {
+            setEbayItemSpecifics(listing.itemSpecifics as Record<string, string>);
+          }
+          
+          const { data, error } = await supabase
+            .from('ebay_batch_rows')
+            .insert({
+              batch_id: selectedProject.id,
+              lot_number: ebayLotNumber,
+              title: listing.title || '',
+              description: listing.description || '',
+              price: listing.price || 0,
+              category: listing.category || '',
+              condition: listing.condition || '',
+              item_specifics: listing.itemSpecifics || {},
+              image_urls: imageUrls,
+              shipping_type: ebayShippingSettings.shippingType,
+              shipping_cost: ebayShippingSettings.shippingCost,
+              handling_time: ebayShippingSettings.handlingTime,
+              returns_accepted: ebayShippingSettings.returnsAccepted,
+              return_period: ebayShippingSettings.returnPeriod,
+              return_shipping: ebayShippingSettings.returnShipping,
+              promotion_rate: parseFloat(promotionRate),
+              promotion_type: promotionType,
+              created_by: user?.id
+            })
+            .select()
+            .single();
+          
+          if (!error && data) {
+            setEbayRows(prev => [...prev, data]);
+            setEbayLotNumber(prev => prev + 1);
+          }
+        }
+      }
+
+      // Auto-save Facebook draft
+      if (platform === 'facebook') {
         await saveListing({
           platform,
           status: 'draft',
@@ -355,10 +456,8 @@ export default function CreateListing() {
           category: listing.category,
           condition: listing.condition,
           item_specifics: listing.itemSpecifics,
-          promotion_rate: platform === 'ebay' ? parseFloat(promotionRate) : undefined,
-          promotion_type: platform === 'ebay' ? promotionType : undefined,
           image_urls: imageUrls,
-          facebook_groups: platform === 'facebook' ? selectedGroups : undefined,
+          facebook_groups: selectedGroups,
           project_id: selectedProject?.id
         });
       }
@@ -420,7 +519,10 @@ export default function CreateListing() {
           title: `Lot ${denverLotNumber} Added to Batch`,
           description: `${denverLots.length + 1} lots ready. Click to copy fields.`
         },
-        ebay: { title: "Draft Ready!", description: "Review and launch when ready." },
+        ebay: { 
+          title: `Listing #${ebayLotNumber} Saved`, 
+          description: `${ebayRows.length + 1} eBay listings in batch. Export CSV when ready.` 
+        },
         facebook: { title: "Draft Ready!", description: "Review and launch when ready." }
       };
 
@@ -954,6 +1056,15 @@ export default function CreateListing() {
           </div>
         )}
 
+        {/* eBay Batch Panel */}
+        <EbayBatchPanel
+          projectId={selectedProject?.id || null}
+          rows={ebayRows}
+          onRowsChange={setEbayRows}
+          nextLotNumber={ebayLotNumber}
+          onLotNumberChange={setEbayLotNumber}
+        />
+
         {/* Generated Listing Preview */}
         {generatedListing && activePlatform && (
           <div className="grid gap-6 lg:grid-cols-2">
@@ -1063,37 +1174,56 @@ export default function CreateListing() {
               )}
 
               {activePlatform === "ebay" && (
-                <div className="rounded-xl border border-border bg-card p-6">
-                  <h3 className="font-semibold mb-4">eBay Promotion</h3>
-                  <div className="flex gap-4">
-                    <div className="flex-1">
-                      <Label className="text-xs">Rate %</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={promotionRate}
-                        onChange={(e) => setPromotionRate(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <Label className="text-xs">Type</Label>
-                      <div className="flex gap-1 mt-1">
-                        <Button
-                          variant={promotionType === "flat" ? "gold" : "outline"}
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => setPromotionType("flat")}
-                        >
-                          Flat
-                        </Button>
-                        <Button
-                          variant={promotionType === "fluctuating" ? "gold" : "outline"}
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => setPromotionType("fluctuating")}
-                        >
-                          Dynamic
-                        </Button>
+                <div className="space-y-4">
+                  {/* Item Specifics */}
+                  <div className="rounded-xl border border-border bg-card p-6">
+                    <EbayItemSpecificsEditor
+                      itemSpecifics={ebayItemSpecifics}
+                      onChange={setEbayItemSpecifics}
+                    />
+                  </div>
+
+                  {/* Shipping & Returns */}
+                  <div className="rounded-xl border border-border bg-card p-6">
+                    <EbayShippingSettings
+                      settings={ebayShippingSettings}
+                      onChange={setEbayShippingSettings}
+                    />
+                  </div>
+
+                  {/* Promotion */}
+                  <div className="rounded-xl border border-border bg-card p-6">
+                    <h3 className="font-semibold mb-4">Promotion</h3>
+                    <div className="flex gap-4">
+                      <div className="flex-1">
+                        <Label className="text-xs">Rate %</Label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          value={promotionRate}
+                          onChange={(e) => setPromotionRate(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <Label className="text-xs">Type</Label>
+                        <div className="flex gap-1 mt-1">
+                          <Button
+                            variant={promotionType === "flat" ? "gold" : "outline"}
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => setPromotionType("flat")}
+                          >
+                            Flat
+                          </Button>
+                          <Button
+                            variant={promotionType === "fluctuating" ? "gold" : "outline"}
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => setPromotionType("fluctuating")}
+                          >
+                            Dynamic
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </div>
