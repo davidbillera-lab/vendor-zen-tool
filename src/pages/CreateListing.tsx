@@ -454,7 +454,7 @@ export default function CreateListing() {
 
     try {
       // Format rows for Google Sheets
-      // Column order: LotNum, Title, Description, LowEst, HighEst, StartPrice, Condition
+      // Column order: LotNum, Title, Description, LowEst, HighEst, StartPrice, Condition, Consignor, Height, Width, Depth, Dimension Unit, Weight, Weight Unit
       const rows = csvRows.map(r => ({
         lotNum: r.lotNumber || 0,
         title: (r.title || '').substring(0, 100),
@@ -462,7 +462,14 @@ export default function CreateListing() {
         lowEst: r.lowEst || 0,
         highEst: r.highEst || 0,
         startPrice: r.startPrice || 5,
-        condition: r.condition || ''
+        condition: r.condition || '',
+        consignor: r.consigner || 'JSG',
+        height: r.height || '',
+        width: r.width || '',
+        depth: r.depth || '',
+        dimensionUnit: r.dimensionUnit || '',
+        weight: r.weight || '',
+        weightUnit: r.weightUnit || ''
       }));
 
       const { data, error } = await supabase.functions.invoke('append-to-sheet', {

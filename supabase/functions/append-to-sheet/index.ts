@@ -14,6 +14,13 @@ interface SheetRow {
   highEst: number;
   startPrice: number;
   condition: string;
+  consignor: string;
+  height: string;
+  width: string;
+  depth: string;
+  dimensionUnit: string;
+  weight: string;
+  weightUnit: string;
 }
 
 interface AppendRequest {
@@ -113,7 +120,7 @@ serve(async (req) => {
     const accessToken = await getAccessToken(serviceAccount);
 
     // Format rows for Google Sheets API
-    // Column order: LotNum, Title, Description, LowEst, HighEst, StartPrice, Condition
+    // Column order: LotNum, Title, Description, LowEst, HighEst, StartPrice, Condition, Consignor, Height, Width, Depth, Dimension Unit, Weight, Weight Unit
     const values = rows.map(row => [
       row.lotNum,
       row.title,
@@ -121,11 +128,18 @@ serve(async (req) => {
       row.lowEst,
       row.highEst,
       row.startPrice,
-      row.condition
+      row.condition,
+      row.consignor || 'JSG',
+      row.height || '',
+      row.width || '',
+      row.depth || '',
+      row.dimensionUnit || '',
+      row.weight || '',
+      row.weightUnit || ''
     ]);
 
-    // Append rows to the sheet
-    const range = `${sheetName}!A:G`;
+    // Append rows to the sheet (14 columns: A:N)
+    const range = `${sheetName}!A:N`;
     const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
 
     const response = await fetch(appendUrl, {
