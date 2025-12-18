@@ -44,6 +44,50 @@ export type Database = {
         }
         Relationships: []
       }
+      denver_batch_rows: {
+        Row: {
+          batch_id: string | null
+          created_at: string
+          created_by: string | null
+          description: string | null
+          id: string
+          image_urls: string[] | null
+          lot_number: number
+          starting_bid: number | null
+          title: string
+        }
+        Insert: {
+          batch_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          image_urls?: string[] | null
+          lot_number: number
+          starting_bid?: number | null
+          title: string
+        }
+        Update: {
+          batch_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          image_urls?: string[] | null
+          lot_number?: number
+          starting_bid?: number | null
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "denver_batch_rows_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "la_batches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       la_batch_rows: {
         Row: {
           batch_id: string | null
@@ -129,6 +173,7 @@ export type Database = {
           is_active: boolean
           lot_count: number
           name: string
+          platforms: string[] | null
           updated_at: string
         }
         Insert: {
@@ -138,6 +183,7 @@ export type Database = {
           is_active?: boolean
           lot_count?: number
           name: string
+          platforms?: string[] | null
           updated_at?: string
         }
         Update: {
@@ -147,6 +193,7 @@ export type Database = {
           is_active?: boolean
           lot_count?: number
           name?: string
+          platforms?: string[] | null
           updated_at?: string
         }
         Relationships: []
@@ -165,6 +212,7 @@ export type Database = {
           lot_number: number | null
           platform: string
           price: number | null
+          project_id: string | null
           promotion_rate: number | null
           promotion_type: string | null
           status: string
@@ -185,6 +233,7 @@ export type Database = {
           lot_number?: number | null
           platform: string
           price?: number | null
+          project_id?: string | null
           promotion_rate?: number | null
           promotion_type?: string | null
           status?: string
@@ -205,6 +254,7 @@ export type Database = {
           lot_number?: number | null
           platform?: string
           price?: number | null
+          project_id?: string | null
           promotion_rate?: number | null
           promotion_type?: string | null
           status?: string
@@ -212,7 +262,15 @@ export type Database = {
           updated_at?: string
           user_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "listings_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "la_batches"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {

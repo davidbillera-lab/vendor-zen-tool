@@ -29,7 +29,7 @@ import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
 import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
-import { BatchManager } from "@/components/BatchManager";
+import { ProjectManager, type Project } from "@/components/BatchManager";
 import { supabase } from "@/integrations/supabase/client";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
@@ -85,20 +85,57 @@ export default function CreateListing() {
   const [dbBatchRows, setDbBatchRows] = useState<any[]>([]);
   const [loadingBatch, setLoadingBatch] = useState(true);
   const [savingLot, setSavingLot] = useState(false);
-  const [selectedBatch, setSelectedBatch] = useState<{ id: string; name: string; lot_count: number } | null>(null);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   
-  // Denver Auctions specific
+  // Denver Auctions specific - now also cloud-based
   const [denverLotNumber, setDenverLotNumber] = useState(1);
   const [denverLots, setDenverLots] = useState<any[]>([]);
   const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
+  const [loadingDenver, setLoadingDenver] = useState(false);
 
   // LiveAuctioneers Quick Capture mode
   const [laQuickCaptureOpen, setLaQuickCaptureOpen] = useState(false);
 
-  // Fetch batch rows when selected batch changes
+  // Fetch Denver lots when project changes
+  useEffect(() => {
+    const fetchDenverLots = async () => {
+      if (!selectedProject?.id) {
+        setDenverLots([]);
+        setDenverLotNumber(1);
+        return;
+      }
+      
+      setLoadingDenver(true);
+      try {
+        const { data, error } = await supabase
+          .from('denver_batch_rows')
+          .select('*')
+          .eq('batch_id', selectedProject.id)
+          .order('lot_number', { ascending: true });
+        
+        if (error) throw error;
+        setDenverLots(data || []);
+        
+        if (data && data.length > 0) {
+          const maxLot = Math.max(...data.map(r => r.lot_number));
+          setDenverLotNumber(maxLot + 1);
+        } else {
+          setDenverLotNumber(1);
+        }
+      } catch (error) {
+        console.error('Error fetching Denver lots:', error);
+      } finally {
+        setLoadingDenver(false);
+      }
+    };
+    
+    fetchDenverLots();
+  }, [selectedProject?.id]);
+
+  // Fetch batch rows when selected project changes
   useEffect(() => {
     const fetchBatchRows = async () => {
-      if (!selectedBatch?.id) {
+      if (!selectedProject?.id) {
         setDbBatchRows([]);
         setLotNumber(1);
         setLoadingBatch(false);
@@ -110,7 +147,7 @@ export default function CreateListing() {
         const { data, error } = await supabase
           .from('la_batch_rows')
           .select('*')
-          .eq('batch_id', selectedBatch.id)
+          .eq('batch_id', selectedProject.id)
           .order('lot_number', { ascending: true });
         
         if (error) throw error;
@@ -131,14 +168,14 @@ export default function CreateListing() {
     };
     
     fetchBatchRows();
-  }, [selectedBatch?.id]);
+  }, [selectedProject?.id]);
 
   // Real-time save to cloud database
   const saveToCloudBatch = async (listing: GeneratedListing, imageUrls: string[], currentLotNumber: number) => {
-    if (!selectedBatch?.id) {
+    if (!selectedProject?.id) {
       toast({ 
-        title: "No Batch Selected", 
-        description: "Select or create a batch first",
+        title: "No Project Selected", 
+        description: "Select or create a project first",
         variant: "destructive"
       });
       return null;
@@ -149,7 +186,7 @@ export default function CreateListing() {
       const { data: { user } } = await supabase.auth.getUser();
       
       const rowToInsert = {
-        batch_id: selectedBatch.id,
+        batch_id: selectedProject.id,
         lot_number: currentLotNumber,
         title: (listing.title || '').substring(0, 100),
         description: listing.description || '',
@@ -185,7 +222,7 @@ export default function CreateListing() {
         await supabase
           .from('la_batches')
           .update({ lot_count: dbBatchRows.length + 1, updated_at: new Date().toISOString() })
-          .eq('id', selectedBatch.id);
+          .eq('id', selectedProject.id);
       }
       
       return data;
@@ -307,7 +344,7 @@ export default function CreateListing() {
       const listing = await generateListing(platform, imageUrls, additionalContext);
       setGeneratedListing(listing);
 
-      // Auto-save as draft for eBay/Facebook
+      // Auto-save as draft for eBay/Facebook (with project association)
       if (platform === 'ebay' || platform === 'facebook') {
         await saveListing({
           platform,
@@ -321,16 +358,17 @@ export default function CreateListing() {
           promotion_rate: platform === 'ebay' ? parseFloat(promotionRate) : undefined,
           promotion_type: platform === 'ebay' ? promotionType : undefined,
           image_urls: imageUrls,
-          facebook_groups: platform === 'facebook' ? selectedGroups : undefined
+          facebook_groups: platform === 'facebook' ? selectedGroups : undefined,
+          project_id: selectedProject?.id
         });
       }
 
       // Auto-save to cloud batch for LiveAuctioneers
       if (platform === 'liveauctioneers') {
-        if (!selectedBatch?.id) {
+        if (!selectedProject?.id) {
           toast({ 
-            title: "No Batch Selected", 
-            description: "Select or create a batch first for LiveAuctioneers",
+            title: "No Project Selected", 
+            description: "Select or create a project first for LiveAuctioneers",
             variant: "destructive"
           });
         } else {
@@ -341,16 +379,36 @@ export default function CreateListing() {
         }
       }
 
-      // Auto-add to batch for Denver Auctions
+      // Auto-save to cloud for Denver Auctions
       if (platform === 'denver') {
-        const newLot = {
-          ...listing,
-          lotNumber: denverLotNumber,
-          imageUrls
-        };
-        setDenverLots(prev => [...prev, newLot]);
-        setSelectedDenverLot(denverLotNumber);
-        setDenverLotNumber(prev => prev + 1);
+        if (!selectedProject?.id) {
+          toast({ 
+            title: "No Project Selected", 
+            description: "Select or create a project first",
+            variant: "destructive"
+          });
+        } else {
+          const { data: { user } } = await supabase.auth.getUser();
+          const { data, error } = await supabase
+            .from('denver_batch_rows')
+            .insert({
+              batch_id: selectedProject.id,
+              lot_number: denverLotNumber,
+              title: listing.title || '',
+              description: listing.description || '',
+              starting_bid: listing.startingBid || 5,
+              image_urls: imageUrls,
+              created_by: user?.id
+            })
+            .select()
+            .single();
+          
+          if (!error && data) {
+            setDenverLots(prev => [...prev, data]);
+            setSelectedDenverLot(denverLotNumber);
+            setDenverLotNumber(prev => prev + 1);
+          }
+        }
       }
 
       const toastMessages: Record<Platform, { title: string; description: string }> = {
@@ -386,25 +444,25 @@ export default function CreateListing() {
   };
 
   const clearBatch = async () => {
-    if (!selectedBatch?.id) return;
-    if (!confirm('Clear all lots in this batch? This cannot be undone.')) return;
+    if (!selectedProject?.id) return;
+    if (!confirm('Clear all lots in this project? This cannot be undone.')) return;
     
     try {
       const { error } = await supabase
         .from('la_batch_rows')
         .delete()
-        .eq('batch_id', selectedBatch.id);
+        .eq('batch_id', selectedProject.id);
       
       if (error) throw error;
       
       setDbBatchRows([]);
       setLotNumber(1);
       
-      // Update batch lot_count
+      // Update project lot_count
       await supabase
         .from('la_batches')
         .update({ lot_count: 0 })
-        .eq('id', selectedBatch.id);
+        .eq('id', selectedProject.id);
         
       toast({ title: "Batch Cleared" });
     } catch (error) {
@@ -710,14 +768,14 @@ export default function CreateListing() {
         )}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <BatchManager
-                selectedBatchId={selectedBatch?.id || null}
-                onSelectBatch={setSelectedBatch}
+              <ProjectManager
+                selectedProjectId={selectedProject?.id || null}
+                onSelectProject={setSelectedProject}
               />
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-semibold text-foreground">
-                    {selectedBatch ? selectedBatch.name : 'No Batch Selected'}
+                    {selectedProject ? selectedProject.name : 'No Project Selected'}
                   </span>
                   {savingLot && (
                     <span className="flex items-center gap-1 text-xs text-primary">
@@ -727,10 +785,10 @@ export default function CreateListing() {
                   )}
                 </div>
                 <span className="text-muted-foreground text-sm">
-                  {!selectedBatch ? 'Select or create a batch to start' : 
+                  {!selectedProject ? 'Select or create a project to start' : 
                     loadingBatch ? 'Loading...' : (
                       dbBatchRows.length > 0 
-                        ? `${dbBatchRows.length} lots saved • Next: #${lotNumber}`
+                        ? `${dbBatchRows.length} LA lots • Next: #${lotNumber}`
                         : 'Ready • Lots auto-save instantly'
                     )
                   }
@@ -741,7 +799,7 @@ export default function CreateListing() {
               <Button 
                 variant="gold" 
                 onClick={() => setLaQuickCaptureOpen(true)}
-                disabled={!selectedBatch}
+                disabled={!selectedProject}
                 className="gap-2"
               >
                 <Camera className="h-4 w-4" />
@@ -752,7 +810,7 @@ export default function CreateListing() {
                 value={lotNumber}
                 onChange={(e) => setLotNumber(parseInt(e.target.value) || 1)}
                 className="w-20"
-                disabled={!selectedBatch}
+                disabled={!selectedProject}
               />
             </div>
           </div>
@@ -799,13 +857,12 @@ export default function CreateListing() {
         </div>
 
         {/* Denver Auctions Batch */}
-        {denverLots.length > 0 && (
+        {(denverLots.length > 0 || selectedProject) && (
           <div className="rounded-xl border border-amber-500/50 bg-amber-500/5 p-4 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <span className="font-semibold text-foreground">Denver Auctions Batch</span>
-                <span className="text-muted-foreground ml-2">{denverLots.length} lots ready</span>
-                <span className="text-muted-foreground ml-2">• Next lot: #{denverLotNumber}</span>
+                <span className="font-semibold text-foreground">Denver Auctions</span>
+                <span className="text-muted-foreground ml-2">{denverLots.length} lots • Next: #{denverLotNumber}</span>
               </div>
               <div className="flex gap-2">
                 <Input
@@ -813,89 +870,86 @@ export default function CreateListing() {
                   value={denverLotNumber}
                   onChange={(e) => setDenverLotNumber(parseInt(e.target.value) || 1)}
                   className="w-20"
+                  disabled={!selectedProject}
                 />
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={() => {
-                    setDenverLots([]);
-                    setSelectedDenverLot(null);
-                  }}
-                >
-                  Clear All
-                </Button>
+                {denverLots.length > 0 && (
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={async () => {
+                      if (!selectedProject?.id) return;
+                      if (!confirm('Clear all Denver lots?')) return;
+                      await supabase.from('denver_batch_rows').delete().eq('batch_id', selectedProject.id);
+                      setDenverLots([]);
+                      setSelectedDenverLot(null);
+                      setDenverLotNumber(1);
+                    }}
+                  >
+                    Clear All
+                  </Button>
+                )}
               </div>
             </div>
             
             {/* Lot List */}
-            <div className="flex flex-wrap gap-2">
-              {denverLots.map((lot, index) => (
-                <Button
-                  key={index}
-                  variant={selectedDenverLot === lot.lotNumber ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setSelectedDenverLot(lot.lotNumber)}
-                >
-                  Lot #{lot.lotNumber}
-                </Button>
-              ))}
-            </div>
+            {denverLots.length > 0 && (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  {denverLots.map((lot) => (
+                    <Button
+                      key={lot.id}
+                      variant={selectedDenverLot === lot.lot_number ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setSelectedDenverLot(lot.lot_number)}
+                    >
+                      Lot #{lot.lot_number}
+                    </Button>
+                  ))}
+                </div>
 
-            {/* Selected Lot Details */}
-            {selectedDenverLot && (
-              <div className="border border-border rounded-lg p-4 bg-card space-y-3">
-                {denverLots.filter(l => l.lotNumber === selectedDenverLot).map((lot, idx) => (
-                  <div key={idx} className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="font-semibold">Lot #{lot.lotNumber}</h3>
-                    </div>
-                    
-                    <div className="grid gap-3">
-                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
-                        <div className="flex-1 min-w-0">
-                          <Label className="text-xs text-muted-foreground">TITLE</Label>
-                          <p className="font-medium truncate">{lot.title}</p>
-                        </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          onClick={() => handleCopy(lot.title, `denver-title-${lot.lotNumber}`)}
-                        >
-                          {copied === `denver-title-${lot.lotNumber}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                        </Button>
-                      </div>
+                {/* Selected Lot Details */}
+                {selectedDenverLot && (
+                  <div className="border border-border rounded-lg p-4 bg-card space-y-3">
+                    {denverLots.filter(l => l.lot_number === selectedDenverLot).map((lot) => (
+                      <div key={lot.id} className="space-y-3">
+                        <h3 className="font-semibold">Lot #{lot.lot_number}</h3>
+                        
+                        <div className="grid gap-3">
+                          <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                            <div className="flex-1 min-w-0">
+                              <Label className="text-xs text-muted-foreground">TITLE</Label>
+                              <p className="font-medium truncate">{lot.title}</p>
+                            </div>
+                            <Button variant="ghost" size="sm" onClick={() => handleCopy(lot.title, `denver-title-${lot.lot_number}`)}>
+                              {copied === `denver-title-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                          </div>
 
-                      <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
-                        <div className="flex-1 min-w-0">
-                          <Label className="text-xs text-muted-foreground">STARTING BID</Label>
-                          <p className="font-semibold text-primary">${lot.startingBid || 5}</p>
-                        </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          onClick={() => handleCopy(String(lot.startingBid || 5), `denver-bid-${lot.lotNumber}`)}
-                        >
-                          {copied === `denver-bid-${lot.lotNumber}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                        </Button>
-                      </div>
+                          <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                            <div className="flex-1 min-w-0">
+                              <Label className="text-xs text-muted-foreground">STARTING BID</Label>
+                              <p className="font-semibold text-primary">${lot.starting_bid || 5}</p>
+                            </div>
+                            <Button variant="ghost" size="sm" onClick={() => handleCopy(String(lot.starting_bid || 5), `denver-bid-${lot.lot_number}`)}>
+                              {copied === `denver-bid-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                          </div>
 
-                      <div className="flex items-start justify-between p-2 bg-secondary/30 rounded">
-                        <div className="flex-1 min-w-0">
-                          <Label className="text-xs text-muted-foreground">DESCRIPTION</Label>
-                          <p className="text-sm text-muted-foreground whitespace-pre-wrap max-h-24 overflow-y-auto">{lot.description}</p>
+                          <div className="flex items-start justify-between p-2 bg-secondary/30 rounded">
+                            <div className="flex-1 min-w-0">
+                              <Label className="text-xs text-muted-foreground">DESCRIPTION</Label>
+                              <p className="text-sm text-muted-foreground whitespace-pre-wrap max-h-24 overflow-y-auto">{lot.description}</p>
+                            </div>
+                            <Button variant="ghost" size="sm" onClick={() => handleCopy(lot.description || '', `denver-desc-${lot.lot_number}`)}>
+                              {copied === `denver-desc-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                          </div>
                         </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          onClick={() => handleCopy(lot.description, `denver-desc-${lot.lotNumber}`)}
-                        >
-                          {copied === `denver-desc-${lot.lotNumber}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                        </Button>
                       </div>
-                    </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </div>
         )}
