@@ -139,7 +139,9 @@ serve(async (req) => {
     ]);
 
     // Append rows to the sheet (14 columns: A:N)
-    const range = `${sheetName}!A:N`;
+    // Wrap sheet name in quotes if it contains spaces
+    const quotedSheetName = sheetName.includes(' ') ? `'${sheetName}'` : sheetName;
+    const range = `${quotedSheetName}!A:N`;
     const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
 
     const response = await fetch(appendUrl, {
