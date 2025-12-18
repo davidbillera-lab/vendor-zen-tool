@@ -46,6 +46,7 @@ export type Database = {
       }
       la_batch_rows: {
         Row: {
+          batch_id: string | null
           category: string | null
           condition: string | null
           consignor: string | null
@@ -67,6 +68,7 @@ export type Database = {
           width: string | null
         }
         Insert: {
+          batch_id?: string | null
           category?: string | null
           condition?: string | null
           consignor?: string | null
@@ -88,6 +90,7 @@ export type Database = {
           width?: string | null
         }
         Update: {
+          batch_id?: string | null
           category?: string | null
           condition?: string | null
           consignor?: string | null
@@ -107,6 +110,44 @@ export type Database = {
           weight?: string | null
           weight_unit?: string | null
           width?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "la_batch_rows_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "la_batches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      la_batches: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          lot_count: number
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          lot_count?: number
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          lot_count?: number
+          name?: string
+          updated_at?: string
         }
         Relationships: []
       }
