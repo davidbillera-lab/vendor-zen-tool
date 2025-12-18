@@ -21,9 +21,7 @@ import {
   ImageIcon,
   Rocket,
   Camera,
-  FolderArchive,
-  Sheet,
-  Settings
+  FolderArchive
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -83,14 +81,9 @@ export default function CreateListing() {
   // LiveAuctioneers specific
   const [lotNumber, setLotNumber] = useState(1);
   const [csvRows, setCsvRows] = useState<any[]>([]);
-  const [spreadsheetId, setSpreadsheetId] = useState(() => 
-    localStorage.getItem('liveauctioneers_spreadsheet_id') || ''
-  );
-  const [sheetName, setSheetName] = useState(() => 
-    localStorage.getItem('liveauctioneers_sheet_name') || 'Sheet1'
-  );
-  const [sendingToSheets, setSendingToSheets] = useState(false);
-  const [showSheetSettings, setShowSheetSettings] = useState(false);
+  const [dbBatchRows, setDbBatchRows] = useState<any[]>([]);
+  const [loadingBatch, setLoadingBatch] = useState(true);
+  const [savingToBatch, setSavingToBatch] = useState(false);
   
   // Denver Auctions specific
   const [denverLotNumber, setDenverLotNumber] = useState(1);
@@ -100,14 +93,32 @@ export default function CreateListing() {
   // LiveAuctioneers Quick Capture mode
   const [laQuickCaptureOpen, setLaQuickCaptureOpen] = useState(false);
 
-  // Persist Google Sheet settings
+  // Fetch batch rows from database on mount
   useEffect(() => {
-    if (spreadsheetId) localStorage.setItem('liveauctioneers_spreadsheet_id', spreadsheetId);
-  }, [spreadsheetId]);
-  
-  useEffect(() => {
-    if (sheetName) localStorage.setItem('liveauctioneers_sheet_name', sheetName);
-  }, [sheetName]);
+    const fetchBatchRows = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('la_batch_rows')
+          .select('*')
+          .order('lot_number', { ascending: true });
+        
+        if (error) throw error;
+        setDbBatchRows(data || []);
+        
+        // Set next lot number based on existing data
+        if (data && data.length > 0) {
+          const maxLot = Math.max(...data.map(r => r.lot_number));
+          setLotNumber(maxLot + 1);
+        }
+      } catch (error) {
+        console.error('Error fetching batch rows:', error);
+      } finally {
+        setLoadingBatch(false);
+      }
+    };
+    
+    fetchBatchRows();
+  }, []);
 
   const handleLaQuickCaptureLot = (lot: {
     listing: GeneratedListing;
@@ -381,7 +392,10 @@ export default function CreateListing() {
   const [downloadingImages, setDownloadingImages] = useState(false);
 
   const downloadImagesZip = async () => {
-    if (csvRows.length === 0) {
+    // Use database batch rows if available, otherwise use pending csvRows
+    const rowsToDownload = dbBatchRows.length > 0 ? dbBatchRows : csvRows;
+    
+    if (rowsToDownload.length === 0) {
       toast({ title: "No Data", description: "Add items first", variant: "destructive" });
       return;
     }
@@ -393,9 +407,9 @@ export default function CreateListing() {
       const zip = new JSZip();
       
       // Process each lot
-      for (const row of csvRows) {
-        const lotNum = row.lotNumber;
-        const imageUrls = row.imageUrls || [];
+      for (const row of rowsToDownload) {
+        const lotNum = row.lot_number || row.lotNumber;
+        const imageUrls = row.image_urls || row.imageUrls || [];
         
         // Download each image and add to zip with correct filename
         for (let i = 0; i < imageUrls.length; i++) {
@@ -418,9 +432,10 @@ export default function CreateListing() {
       const dateStr = new Date().toISOString().split('T')[0];
       saveAs(content, `liveauctioneers-images-${dateStr}.zip`);
 
+      const imageCount = rowsToDownload.reduce((sum, r) => sum + ((r.image_urls || r.imageUrls)?.length || 0), 0);
       toast({ 
         title: "Images Downloaded!", 
-        description: `ZIP file with ${csvRows.reduce((sum, r) => sum + (r.imageUrls?.length || 0), 0)} images ready for LA upload`
+        description: `ZIP file with ${imageCount} images ready for LA upload`
       });
     } catch (error) {
       console.error("Error creating ZIP:", error);
@@ -434,73 +449,129 @@ export default function CreateListing() {
     }
   };
 
-  const sendToGoogleSheets = async () => {
+  const saveToBatch = async () => {
     if (csvRows.length === 0) {
       toast({ title: "No Data", description: "Add items first", variant: "destructive" });
       return;
     }
 
-    if (!spreadsheetId.trim()) {
-      setShowSheetSettings(true);
-      toast({ 
-        title: "Sheet ID Required", 
-        description: "Enter your Google Sheet ID in settings",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    setSendingToSheets(true);
+    setSavingToBatch(true);
 
     try {
-      // Format rows for Google Sheets
-      // Column order: A=LotNum, B=Title, C=Description, D=LowEst, E=HighEst, F=StartPrice, G=Condition, H=Consignor, I=Height, J=Width, K=Depth, L=Dimension Unit, M=Weight, N=Weight Unit, O=Category
-      const rows = csvRows.map(r => ({
-        lotNum: r.lotNumber || 0,
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const rowsToInsert = csvRows.map(r => ({
+        lot_number: r.lotNumber || 0,
         title: (r.title || '').substring(0, 100),
         description: r.description || '',
-        lowEst: r.lowEst || 0,
-        highEst: r.highEst || 0,
-        startPrice: r.startPrice || 5,
+        low_est: r.lowEst || 0,
+        high_est: r.highEst || 0,
+        start_price: r.startPrice || 5,
         condition: r.condition || '',
         consignor: r.consigner || 'JSG',
         height: r.height || '',
         width: r.width || '',
         depth: r.depth || '',
-        dimensionUnit: r.dimensionUnit || '',
+        dimension_unit: r.dimensionUnit || '',
         weight: r.weight || '',
-        weightUnit: r.weightUnit || '',
-        category: r.category || ''
+        weight_unit: r.weightUnit || '',
+        category: r.category || '',
+        image_urls: r.imageUrls || [],
+        created_by: user?.id
       }));
 
-      const { data, error } = await supabase.functions.invoke('append-to-sheet', {
-        body: { 
-          spreadsheetId: spreadsheetId.trim(),
-          sheetName: sheetName.trim() || 'Sheet1',
-          rows 
-        }
-      });
+      const { data, error } = await supabase
+        .from('la_batch_rows')
+        .insert(rowsToInsert)
+        .select();
 
       if (error) throw error;
 
       toast({ 
-        title: "Sent to Google Sheets!", 
-        description: `${rows.length} lots added to your spreadsheet`
+        title: "Saved to Batch!", 
+        description: `${rowsToInsert.length} lots added`
       });
 
-      // Clear rows after successful send
+      // Add to local state and clear pending rows
+      setDbBatchRows(prev => [...prev, ...(data || [])]);
       setCsvRows([]);
       
     } catch (error) {
-      console.error("Error sending to Google Sheets:", error);
+      console.error("Error saving to batch:", error);
       toast({ 
-        title: "Send Failed", 
-        description: error instanceof Error ? error.message : "Could not send to Google Sheets",
+        title: "Save Failed", 
+        description: error instanceof Error ? error.message : "Could not save to batch",
         variant: "destructive"
       });
     } finally {
-      setSendingToSheets(false);
+      setSavingToBatch(false);
     }
+  };
+
+  const clearBatch = async () => {
+    if (!confirm('Clear all batch data? This cannot be undone.')) return;
+    
+    try {
+      const { error } = await supabase
+        .from('la_batch_rows')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all rows
+      
+      if (error) throw error;
+      
+      setDbBatchRows([]);
+      setLotNumber(1);
+      toast({ title: "Batch Cleared" });
+    } catch (error) {
+      console.error("Error clearing batch:", error);
+      toast({ 
+        title: "Clear Failed", 
+        description: error instanceof Error ? error.message : "Could not clear batch",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const downloadBatchCSV = () => {
+    if (dbBatchRows.length === 0) {
+      toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
+      return;
+    }
+
+    const headers = [
+      'LotNum', 'Title', 'Description', 'LowEst', 'HighEst', 'StartPrice', 
+      'Condition', 'Consignor', 'Height', 'Width', 'Depth', 'Dimension Unit', 
+      'Weight', 'Weight Unit', 'Category'
+    ];
+    
+    const rows = dbBatchRows.map(r => [
+      r.lot_number,
+      `"${(r.title || '').replace(/"/g, '""')}"`,
+      `"${(r.description || '').replace(/"/g, '""')}"`,
+      r.low_est || 0,
+      r.high_est || 0,
+      r.start_price || 5,
+      `"${(r.condition || '').replace(/"/g, '""')}"`,
+      r.consignor || 'JSG',
+      r.height || '',
+      r.width || '',
+      r.depth || '',
+      r.dimension_unit || '',
+      r.weight || '',
+      r.weight_unit || '',
+      r.category || ''
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `liveauctioneers_batch_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    
+    toast({ title: "CSV Downloaded", description: `${dbBatchRows.length} rows exported` });
   };
 
   const toggleGroup = (group: string) => {
@@ -655,30 +726,26 @@ export default function CreateListing() {
           />
         )}
 
-        {/* LiveAuctioneers CSV Status */}
+        {/* LiveAuctioneers Batch */}
         <div className={cn(
-          "rounded-xl border p-4 space-y-4",
-          csvRows.length > 0 ? "border-primary/50 bg-primary/5" : "border-border bg-card"
+          "rounded-xl border p-4 space-y-4 transition-colors",
+          (csvRows.length > 0 || dbBatchRows.length > 0) ? "border-primary/50 bg-primary/5" : "border-border bg-card"
         )}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
                 <Gavel className="h-5 w-5 text-primary" />
-                <span className="font-semibold text-foreground">LiveAuctioneers</span>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="h-6 w-6"
-                  onClick={() => setShowSheetSettings(!showSheetSettings)}
-                >
-                  <Settings className="h-4 w-4" />
-                </Button>
+                <span className="font-semibold text-foreground">LiveAuctioneers Batch</span>
               </div>
-              {csvRows.length > 0 ? (
-                <span className="text-muted-foreground text-sm">{csvRows.length} lots ready • Next: #{lotNumber}</span>
-              ) : (
-                <span className="text-muted-foreground text-sm">Quick capture lots → Send to Google Sheets</span>
-              )}
+              <span className="text-muted-foreground text-sm">
+                {loadingBatch ? 'Loading...' : (
+                  dbBatchRows.length > 0 
+                    ? `${dbBatchRows.length} lots in batch • Next: #${lotNumber}`
+                    : csvRows.length > 0 
+                      ? `${csvRows.length} lots pending • Next: #${lotNumber}`
+                      : 'Quick capture lots → Download CSV'
+                )}
+              </span>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button 
@@ -689,26 +756,51 @@ export default function CreateListing() {
                 <Camera className="h-4 w-4" />
                 Quick Capture Lot #{lotNumber}
               </Button>
-              {csvRows.length > 0 && (
-                <>
-                  <Input
-                    type="number"
-                    value={lotNumber}
-                    onChange={(e) => setLotNumber(parseInt(e.target.value) || 1)}
-                    className="w-20"
-                  />
+              <Input
+                type="number"
+                value={lotNumber}
+                onChange={(e) => setLotNumber(parseInt(e.target.value) || 1)}
+                className="w-20"
+              />
+            </div>
+          </div>
+
+          {/* Pending lots (not yet saved) */}
+          {csvRows.length > 0 && (
+            <div className="border-t border-border pt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-amber-500">{csvRows.length} lots pending save</span>
+                <div className="flex gap-2">
                   <Button 
                     variant="gold" 
-                    onClick={sendToGoogleSheets}
-                    disabled={sendingToSheets || !spreadsheetId.trim()}
+                    onClick={saveToBatch}
+                    disabled={savingToBatch}
                     className="gap-2"
                   >
-                    {sendingToSheets ? (
+                    {savingToBatch ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      <Sheet className="h-4 w-4" />
+                      <Plus className="h-4 w-4" />
                     )}
-                    {sendingToSheets ? 'Sending...' : 'Send to Sheets'}
+                    {savingToBatch ? 'Saving...' : 'Save to Batch'}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setCsvRows([])}>
+                    Discard
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Saved batch rows */}
+          {dbBatchRows.length > 0 && (
+            <div className="border-t border-border pt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">{dbBatchRows.length} lots in batch</span>
+                <div className="flex gap-2">
+                  <Button variant="gold" onClick={downloadBatchCSV} className="gap-2">
+                    <Download className="h-4 w-4" />
+                    Download CSV
                   </Button>
                   <Button variant="outline" onClick={downloadImagesZip} disabled={downloadingImages}>
                     {downloadingImages ? (
@@ -716,52 +808,24 @@ export default function CreateListing() {
                     ) : (
                       <FolderArchive className="h-4 w-4 mr-2" />
                     )}
-                    {downloadingImages ? 'Packaging...' : 'Images ZIP'}
+                    Images ZIP
                   </Button>
-                  <Button variant="outline" onClick={downloadCSV}>
-                    <Download className="h-4 w-4 mr-2" />
-                    CSV
+                  <Button variant="outline" onClick={clearBatch}>
+                    Clear All
                   </Button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Google Sheets Settings */}
-          {showSheetSettings && (
-            <div className="border-t border-border pt-4 space-y-3">
-              <h4 className="text-sm font-medium flex items-center gap-2">
-                <Sheet className="h-4 w-4" />
-                Google Sheets Settings
-              </h4>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Spreadsheet ID</Label>
-                  <Input
-                    placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
-                    value={spreadsheetId}
-                    onChange={(e) => setSpreadsheetId(e.target.value)}
-                    className="font-mono text-xs"
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Find in your Google Sheet URL after /d/
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Sheet Name</Label>
-                  <Input
-                    placeholder="Sheet1"
-                    value={sheetName}
-                    onChange={(e) => setSheetName(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Tab name at bottom of spreadsheet
-                  </p>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Make sure to share your Google Sheet with the service account email.
-              </p>
+              
+              {/* Batch preview */}
+              <div className="max-h-40 overflow-y-auto space-y-1">
+                {dbBatchRows.map((row) => (
+                  <div key={row.id} className="text-xs flex justify-between items-center py-1 px-2 bg-background/50 rounded">
+                    <span className="font-mono">#{row.lot_number}</span>
+                    <span className="truncate flex-1 mx-2">{row.title}</span>
+                    <span className="text-muted-foreground">${row.low_est}-${row.high_est}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
