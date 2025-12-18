@@ -99,6 +99,7 @@ export async function saveListing(listing: {
   lot_number?: number;
   csv_row_data?: Record<string, any>;
   facebook_groups?: string[];
+  project_id?: string;
 }) {
   const userId = await getCurrentUserId();
   
