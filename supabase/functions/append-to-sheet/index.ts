@@ -171,9 +171,11 @@ serve(async (req) => {
     ]);
 
     // Append rows to the sheet (15 columns: A:O)
-    // URL-encode the sheet name (handles spaces), then append the range notation
-    const encodedSheetName = encodeURIComponent(resolvedSheetName);
-    const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodedSheetName}!A:O:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+    // Build a proper A1 range and URL-encode the *entire* range segment.
+    // For sheet names with spaces/special chars, quote in A1 notation: 'LA sheet'!A:O
+    const safeSheetTitle = `'${resolvedSheetName.replace(/'/g, "''")}'`;
+    const rangeA1 = `${safeSheetTitle}!A:O`;
+    const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(rangeA1)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
 
     const response = await fetch(appendUrl, {
       method: 'POST',
