@@ -69,10 +69,20 @@ FOR EACH LOT:
 3. Generate:
    - Title: SEO-rich, concise, auction-grade (MAX 100 characters including spaces)
    - Description: Short, appealing, factual
-   - Condition: Detailed condition statement
+   - Condition: DETAILED condition report - this is CRITICAL for auction items
    - LowEst: Conservative low estimate in dollars
    - HighEst: Optimistic high estimate (must be > LowEst)
    - StartPrice: ALWAYS $5 unless the user specifically requests a different starting price
+
+CONDITION ANALYSIS (VERY IMPORTANT):
+Examine photos carefully and provide a DETAILED condition report including:
+- Overall condition grade (Excellent, Very Good, Good, Fair, Poor)
+- Visible wear, scratches, chips, cracks, stains, fading, discoloration
+- Missing parts or damage
+- Signs of age, patina, or restoration
+- Functionality issues if apparent
+- Any notable flaws or imperfections
+Example: "Good condition with light wear consistent with age. Minor scratches to base, small chip to rim (1/4 inch), original patina intact. No cracks or repairs noted."
 
 DEFAULTS:
 - Consigner: "JSG"
@@ -86,7 +96,7 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
   "lowEst": number,
   "highEst": number,
   "startPrice": 5,
-  "condition": "string",
+  "condition": "string (DETAILED condition report as described above)",
   "consigner": "JSG",
   "buyNowPrice": null,
   "excludeFromBuyNow": null,
