@@ -21,6 +21,7 @@ interface SheetRow {
   dimensionUnit: string;
   weight: string;
   weightUnit: string;
+  category: string;
 }
 
 interface AppendRequest {
@@ -120,7 +121,7 @@ serve(async (req) => {
     const accessToken = await getAccessToken(serviceAccount);
 
     // Format rows for Google Sheets API
-    // Column order: LotNum, Title, Description, LowEst, HighEst, StartPrice, Condition, Consignor, Height, Width, Depth, Dimension Unit, Weight, Weight Unit
+    // Column order: A=LotNum, B=Title, C=Description, D=LowEst, E=HighEst, F=StartPrice, G=Condition, H=Consignor, I=Height, J=Width, K=Depth, L=Dimension Unit, M=Weight, N=Weight Unit, O=Category
     const values = rows.map(row => [
       row.lotNum,
       row.title,
@@ -135,13 +136,14 @@ serve(async (req) => {
       row.depth || '',
       row.dimensionUnit || '',
       row.weight || '',
-      row.weightUnit || ''
+      row.weightUnit || '',
+      row.category || ''
     ]);
 
-    // Append rows to the sheet (14 columns: A:N)
+    // Append rows to the sheet (15 columns: A:O)
     // Wrap sheet name in quotes if it contains spaces
     const quotedSheetName = sheetName.includes(' ') ? `'${sheetName}'` : sheetName;
-    const range = `${quotedSheetName}!A:N`;
+    const range = `${quotedSheetName}!A:O`;
     const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
 
     const response = await fetch(appendUrl, {
