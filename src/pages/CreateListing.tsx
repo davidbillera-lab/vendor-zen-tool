@@ -21,7 +21,8 @@ import {
   ImageIcon,
   Rocket,
   Camera,
-  FolderArchive
+  FolderArchive,
+  Cloud
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -78,12 +79,11 @@ export default function CreateListing() {
   // Facebook specific
   const [selectedGroups, setSelectedGroups] = useState<string[]>(DEFAULT_FB_GROUPS);
   
-  // LiveAuctioneers specific
+  // LiveAuctioneers specific - cloud batch (real-time saving)
   const [lotNumber, setLotNumber] = useState(1);
-  const [csvRows, setCsvRows] = useState<any[]>([]);
   const [dbBatchRows, setDbBatchRows] = useState<any[]>([]);
   const [loadingBatch, setLoadingBatch] = useState(true);
-  const [savingToBatch, setSavingToBatch] = useState(false);
+  const [savingLot, setSavingLot] = useState(false);
   
   // Denver Auctions specific
   const [denverLotNumber, setDenverLotNumber] = useState(1);
@@ -120,17 +120,75 @@ export default function CreateListing() {
     fetchBatchRows();
   }, []);
 
-  const handleLaQuickCaptureLot = (lot: {
+  // Real-time save to cloud database
+  const saveToCloudBatch = async (listing: GeneratedListing, imageUrls: string[], currentLotNumber: number) => {
+    setSavingLot(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const rowToInsert = {
+        lot_number: currentLotNumber,
+        title: (listing.title || '').substring(0, 100),
+        description: listing.description || '',
+        low_est: listing.lowEst || 0,
+        high_est: listing.highEst || 0,
+        start_price: listing.startPrice || 5,
+        condition: listing.condition || '',
+        consignor: listing.consigner || 'JSG',
+        height: String(listing.height || ''),
+        width: String(listing.width || ''),
+        depth: String(listing.depth || ''),
+        dimension_unit: listing.dimensionUnit || '',
+        weight: String(listing.weight || ''),
+        weight_unit: listing.weightUnit || '',
+        category: listing.category || '',
+        image_urls: imageUrls,
+        created_by: user?.id
+      };
+
+      const { data, error } = await supabase
+        .from('la_batch_rows')
+        .insert([rowToInsert])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Add to local state immediately
+      if (data) {
+        setDbBatchRows(prev => [...prev, data]);
+      }
+      
+      return data;
+    } catch (error) {
+      console.error("Error saving to cloud:", error);
+      toast({ 
+        title: "Cloud Save Failed", 
+        description: "Lot generated but cloud save failed. Try again.",
+        variant: "destructive"
+      });
+      return null;
+    } finally {
+      setSavingLot(false);
+    }
+  };
+
+  const handleLaQuickCaptureLot = async (lot: {
     listing: GeneratedListing;
     imageUrls: string[];
     lotNumber: number;
   }) => {
-    setCsvRows(prev => [...prev, {
-      ...lot.listing,
-      lotNumber: lot.lotNumber,
-      imageUrls: lot.imageUrls
-    }]);
-    setLotNumber(prev => prev + 1);
+    // Save directly to cloud
+    const saved = await saveToCloudBatch(lot.listing, lot.imageUrls, lot.lotNumber);
+    
+    if (saved) {
+      setLotNumber(prev => prev + 1);
+      toast({
+        title: `Lot ${lot.lotNumber} Saved to Cloud`,
+        description: `${dbBatchRows.length + 1} lots in batch. Auto-saved.`
+      });
+    }
+    
     setLaQuickCaptureOpen(false);
     setGeneratedListing(lot.listing);
     setActivePlatform('liveauctioneers');
@@ -238,14 +296,12 @@ export default function CreateListing() {
         });
       }
 
-      // Auto-add to CSV for LiveAuctioneers
+      // Auto-save to cloud batch for LiveAuctioneers
       if (platform === 'liveauctioneers') {
-        setCsvRows(prev => [...prev, { 
-          ...listing, 
-          lotNumber,
-          imageUrls
-        }]);
-        setLotNumber(prev => prev + 1);
+        const saved = await saveToCloudBatch(listing, imageUrls, lotNumber);
+        if (saved) {
+          setLotNumber(prev => prev + 1);
+        }
       }
 
       // Auto-add to batch for Denver Auctions
@@ -262,8 +318,8 @@ export default function CreateListing() {
 
       const toastMessages: Record<Platform, { title: string; description: string }> = {
         liveauctioneers: {
-          title: `Lot ${lotNumber} Added to CSV`,
-          description: `${csvRows.length + 1} lots in CSV. Ready for export.`
+          title: `Lot ${lotNumber} Saved to Cloud`,
+          description: `${dbBatchRows.length + 1} lots in batch. Auto-saved.`
         },
         denver: {
           title: `Lot ${denverLotNumber} Added to Batch`,
@@ -290,222 +346,6 @@ export default function CreateListing() {
     navigator.clipboard.writeText(text);
     setCopied(field);
     setTimeout(() => setCopied(null), 2000);
-  };
-
-  const generateCSVContent = () => {
-    // Find the maximum number of images across all lots
-    const maxImages = Math.max(...csvRows.map(r => r.imageUrls?.length || 0), 4);
-    
-    // Build dynamic ImageFile columns
-    const imageColumns = Array.from({ length: maxImages }, (_, i) => `ImageFile.${i + 1}`);
-    
-    // Official LiveAuctioneers column headers - EXACT FORMAT REQUIRED
-    const headers = [
-      'LotNum', 'Title', 'Description', 'LowEst', 'HighEst', 'StartPrice',
-      'Condition', 'Consigner', 
-      ...imageColumns,
-      'Buy Now Price', 'Exclude From Buy Now', 'Reserve Price',
-      'Height', 'Width', 'Depth', 'Dimension Unit', 'Weight', 'Weight Unit',
-      'Domestic Flat Shipping Price', 'Quantity', 'Category', 'Origin',
-      'Style & Period', 'Creator', 'Materials & Techniques', 'Lot Reference Number', 'Location Nickname'
-    ];
-
-    const rows = csvRows.map(r => {
-      const lotNum = r.lotNumber || '';
-      
-      // Generate image filename entries for all columns
-      const imageEntries = Array.from({ length: maxImages }, (_, i) => 
-        r.imageUrls?.[i] ? `${lotNum}_${i + 1}` : ''
-      );
-      
-      return [
-        lotNum,
-        (r.title || '').substring(0, 100),
-        r.description || '',
-        r.lowEst || '',
-        r.highEst || '',
-        r.startPrice || '',
-        r.condition || '',
-        r.consigner || 'JSG',
-        ...imageEntries,
-        '', // Buy Now Price
-        '', // Exclude From Buy Now
-        '', // Reserve Price
-        r.height || '',
-        r.width || '',
-        r.depth || '',
-        r.dimensionUnit || '',
-        r.weight || '',
-        r.weightUnit || '',
-        '', // Domestic Flat Shipping
-        '1', // Quantity
-        r.category || '',
-        r.origin || '',
-        r.stylePeriod || '',
-        r.creator || '',
-        r.materials || '',
-        '', // Lot Reference Number
-        r.locationNickname || 'Highlands Ranch'
-      ];
-    });
-
-    return { headers, rows };
-  };
-
-  const downloadCSV = () => {
-    if (csvRows.length === 0) {
-      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
-      return;
-    }
-
-    const { headers, rows } = generateCSVContent();
-    const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-    
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `liveauctioneers-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    
-    toast({ title: "CSV Downloaded!", description: `${csvRows.length} lots exported` });
-  };
-
-  const copyCSVToClipboard = () => {
-    if (csvRows.length === 0) {
-      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
-      return;
-    }
-
-    const { headers, rows } = generateCSVContent();
-    // Use tab-separated values for Google Sheets paste
-    const tsv = [headers, ...rows].map(r => r.map(c => String(c).replace(/\t/g, ' ')).join('\t')).join('\n');
-    
-    navigator.clipboard.writeText(tsv);
-    setCopied('csv');
-    setTimeout(() => setCopied(null), 2000);
-    
-    toast({ title: "Copied to Clipboard!", description: "Paste into Google Sheets (Ctrl+V)" });
-  };
-
-  const [downloadingImages, setDownloadingImages] = useState(false);
-
-  const downloadImagesZip = async () => {
-    // Use database batch rows if available, otherwise use pending csvRows
-    const rowsToDownload = dbBatchRows.length > 0 ? dbBatchRows : csvRows;
-    
-    if (rowsToDownload.length === 0) {
-      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
-      return;
-    }
-
-    setDownloadingImages(true);
-    toast({ title: "Preparing Images...", description: "Downloading and packaging images" });
-
-    try {
-      const zip = new JSZip();
-      
-      // Process each lot
-      for (const row of rowsToDownload) {
-        const lotNum = row.lot_number || row.lotNumber;
-        const imageUrls = row.image_urls || row.imageUrls || [];
-        
-        // Download each image and add to zip with correct filename
-        for (let i = 0; i < imageUrls.length; i++) {
-          try {
-            const response = await fetch(imageUrls[i]);
-            const blob = await response.blob();
-            // LA accepts jpg, png, gif - detect from content-type or default to jpg
-            const contentType = response.headers.get('content-type') || 'image/jpeg';
-            const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : 'jpg';
-            const filename = `${lotNum}_${i + 1}.${ext}`;
-            zip.file(filename, blob);
-          } catch (err) {
-            console.error(`Failed to download image ${lotNum}_${i + 1}:`, err);
-          }
-        }
-      }
-
-      // Generate and download the zip
-      const content = await zip.generateAsync({ type: "blob" });
-      const dateStr = new Date().toISOString().split('T')[0];
-      saveAs(content, `liveauctioneers-images-${dateStr}.zip`);
-
-      const imageCount = rowsToDownload.reduce((sum, r) => sum + ((r.image_urls || r.imageUrls)?.length || 0), 0);
-      toast({ 
-        title: "Images Downloaded!", 
-        description: `ZIP file with ${imageCount} images ready for LA upload`
-      });
-    } catch (error) {
-      console.error("Error creating ZIP:", error);
-      toast({ 
-        title: "Download Failed", 
-        description: "Could not create image ZIP file",
-        variant: "destructive"
-      });
-    } finally {
-      setDownloadingImages(false);
-    }
-  };
-
-  const saveToBatch = async () => {
-    if (csvRows.length === 0) {
-      toast({ title: "No Data", description: "Add items first", variant: "destructive" });
-      return;
-    }
-
-    setSavingToBatch(true);
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      const rowsToInsert = csvRows.map(r => ({
-        lot_number: r.lotNumber || 0,
-        title: (r.title || '').substring(0, 100),
-        description: r.description || '',
-        low_est: r.lowEst || 0,
-        high_est: r.highEst || 0,
-        start_price: r.startPrice || 5,
-        condition: r.condition || '',
-        consignor: r.consigner || 'JSG',
-        height: r.height || '',
-        width: r.width || '',
-        depth: r.depth || '',
-        dimension_unit: r.dimensionUnit || '',
-        weight: r.weight || '',
-        weight_unit: r.weightUnit || '',
-        category: r.category || '',
-        image_urls: r.imageUrls || [],
-        created_by: user?.id
-      }));
-
-      const { data, error } = await supabase
-        .from('la_batch_rows')
-        .insert(rowsToInsert)
-        .select();
-
-      if (error) throw error;
-
-      toast({ 
-        title: "Saved to Batch!", 
-        description: `${rowsToInsert.length} lots added`
-      });
-
-      // Add to local state and clear pending rows
-      setDbBatchRows(prev => [...prev, ...(data || [])]);
-      setCsvRows([]);
-      
-    } catch (error) {
-      console.error("Error saving to batch:", error);
-      toast({ 
-        title: "Save Failed", 
-        description: error instanceof Error ? error.message : "Could not save to batch",
-        variant: "destructive"
-      });
-    } finally {
-      setSavingToBatch(false);
-    }
   };
 
   const clearBatch = async () => {
@@ -538,31 +378,66 @@ export default function CreateListing() {
       return;
     }
 
-    const headers = [
-      'LotNum', 'Title', 'Description', 'LowEst', 'HighEst', 'StartPrice', 
-      'Condition', 'Consignor', 'Height', 'Width', 'Depth', 'Dimension Unit', 
-      'Weight', 'Weight Unit', 'Category'
-    ];
+    // Find the maximum number of images across all lots
+    const maxImages = Math.max(...dbBatchRows.map(r => (r.image_urls || []).length), 4);
     
-    const rows = dbBatchRows.map(r => [
-      r.lot_number,
-      `"${(r.title || '').replace(/"/g, '""')}"`,
-      `"${(r.description || '').replace(/"/g, '""')}"`,
-      r.low_est || 0,
-      r.high_est || 0,
-      r.start_price || 5,
-      `"${(r.condition || '').replace(/"/g, '""')}"`,
-      r.consignor || 'JSG',
-      r.height || '',
-      r.width || '',
-      r.depth || '',
-      r.dimension_unit || '',
-      r.weight || '',
-      r.weight_unit || '',
-      r.category || ''
-    ]);
+    // Build dynamic ImageFile columns
+    const imageColumns = Array.from({ length: maxImages }, (_, i) => `ImageFile.${i + 1}`);
+    
+    // Official LiveAuctioneers column headers - EXACT FORMAT REQUIRED
+    const headers = [
+      'LotNum', 'Title', 'Description', 'LowEst', 'HighEst', 'StartPrice',
+      'Condition', 'Consigner', 
+      ...imageColumns,
+      'Buy Now Price', 'Exclude From Buy Now', 'Reserve Price',
+      'Height', 'Width', 'Depth', 'Dimension Unit', 'Weight', 'Weight Unit',
+      'Domestic Flat Shipping Price', 'Quantity', 'Category', 'Origin',
+      'Style & Period', 'Creator', 'Materials & Techniques', 'Lot Reference Number', 'Location Nickname'
+    ];
 
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const rows = dbBatchRows.map(r => {
+      const lotNum = r.lot_number || '';
+      
+      // Generate image filename entries for all columns
+      const imageEntries = Array.from({ length: maxImages }, (_, i) => 
+        (r.image_urls || [])[i] ? `${lotNum}_${i + 1}` : ''
+      );
+      
+      return [
+        lotNum,
+        (r.title || '').substring(0, 100),
+        r.description || '',
+        r.low_est || '',
+        r.high_est || '',
+        r.start_price || 5,
+        r.condition || '',
+        r.consignor || 'JSG',
+        ...imageEntries,
+        '', // Buy Now Price
+        '', // Exclude From Buy Now
+        '', // Reserve Price
+        r.height || '',
+        r.width || '',
+        r.depth || '',
+        r.dimension_unit || '',
+        r.weight || '',
+        r.weight_unit || '',
+        '', // Domestic Flat Shipping
+        '1', // Quantity
+        r.category || '',
+        '', // Origin
+        '', // Style & Period
+        '', // Creator
+        '', // Materials & Techniques
+        '', // Lot Reference Number
+        'Highlands Ranch' // Location Nickname
+      ];
+    });
+
+    const csvContent = [headers, ...rows]
+      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -571,7 +446,64 @@ export default function CreateListing() {
     link.click();
     URL.revokeObjectURL(url);
     
-    toast({ title: "CSV Downloaded", description: `${dbBatchRows.length} rows exported` });
+    toast({ title: "CSV Downloaded", description: `${dbBatchRows.length} lots exported with images` });
+  };
+
+  const [downloadingImages, setDownloadingImages] = useState(false);
+
+  const downloadImagesZip = async () => {
+    if (dbBatchRows.length === 0) {
+      toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
+      return;
+    }
+
+    setDownloadingImages(true);
+    toast({ title: "Preparing Images...", description: "Downloading and packaging images" });
+
+    try {
+      const zip = new JSZip();
+      
+      // Process each lot
+      for (const row of dbBatchRows) {
+        const lotNum = row.lot_number;
+        const imageUrls = row.image_urls || [];
+        
+        // Download each image and add to zip with correct filename
+        for (let i = 0; i < imageUrls.length; i++) {
+          try {
+            const response = await fetch(imageUrls[i]);
+            const blob = await response.blob();
+            // LA accepts jpg, png, gif - detect from content-type or default to jpg
+            const contentType = response.headers.get('content-type') || 'image/jpeg';
+            const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : 'jpg';
+            const filename = `${lotNum}_${i + 1}.${ext}`;
+            zip.file(filename, blob);
+          } catch (err) {
+            console.error(`Failed to download image ${lotNum}_${i + 1}:`, err);
+          }
+        }
+      }
+
+      // Generate and download the zip
+      const content = await zip.generateAsync({ type: "blob" });
+      const dateStr = new Date().toISOString().split('T')[0];
+      saveAs(content, `liveauctioneers-images-${dateStr}.zip`);
+
+      const imageCount = dbBatchRows.reduce((sum, r) => sum + ((r.image_urls)?.length || 0), 0);
+      toast({ 
+        title: "Images Downloaded!", 
+        description: `ZIP file with ${imageCount} images ready for LA upload`
+      });
+    } catch (error) {
+      console.error("Error creating ZIP:", error);
+      toast({ 
+        title: "Download Failed", 
+        description: "Could not create image ZIP file",
+        variant: "destructive"
+      });
+    } finally {
+      setDownloadingImages(false);
+    }
   };
 
   const toggleGroup = (group: string) => {
@@ -726,24 +658,28 @@ export default function CreateListing() {
           />
         )}
 
-        {/* LiveAuctioneers Batch */}
+        {/* LiveAuctioneers Cloud Batch */}
         <div className={cn(
           "rounded-xl border p-4 space-y-4 transition-colors",
-          (csvRows.length > 0 || dbBatchRows.length > 0) ? "border-primary/50 bg-primary/5" : "border-border bg-card"
+          dbBatchRows.length > 0 ? "border-primary/50 bg-primary/5" : "border-border bg-card"
         )}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
-                <Gavel className="h-5 w-5 text-primary" />
-                <span className="font-semibold text-foreground">LiveAuctioneers Batch</span>
+                <Cloud className="h-5 w-5 text-primary" />
+                <span className="font-semibold text-foreground">LiveAuctioneers Cloud Batch</span>
+                {savingLot && (
+                  <span className="flex items-center gap-1 text-xs text-primary">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Saving...
+                  </span>
+                )}
               </div>
               <span className="text-muted-foreground text-sm">
                 {loadingBatch ? 'Loading...' : (
                   dbBatchRows.length > 0 
-                    ? `${dbBatchRows.length} lots in batch • Next: #${lotNumber}`
-                    : csvRows.length > 0 
-                      ? `${csvRows.length} lots pending • Next: #${lotNumber}`
-                      : 'Quick capture lots → Download CSV'
+                    ? `${dbBatchRows.length} lots saved • Next: #${lotNumber} • Auto-saves instantly`
+                    : 'Lots auto-save to cloud instantly • Never lose work'
                 )}
               </span>
             </div>
@@ -765,38 +701,14 @@ export default function CreateListing() {
             </div>
           </div>
 
-          {/* Pending lots (not yet saved) */}
-          {csvRows.length > 0 && (
-            <div className="border-t border-border pt-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-amber-500">{csvRows.length} lots pending save</span>
-                <div className="flex gap-2">
-                  <Button 
-                    variant="gold" 
-                    onClick={saveToBatch}
-                    disabled={savingToBatch}
-                    className="gap-2"
-                  >
-                    {savingToBatch ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Plus className="h-4 w-4" />
-                    )}
-                    {savingToBatch ? 'Saving...' : 'Save to Batch'}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setCsvRows([])}>
-                    Discard
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Saved batch rows */}
           {dbBatchRows.length > 0 && (
             <div className="border-t border-border pt-4 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{dbBatchRows.length} lots in batch</span>
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <Check className="h-4 w-4 text-green-500" />
+                  {dbBatchRows.length} lots in cloud batch
+                </span>
                 <div className="flex gap-2">
                   <Button variant="gold" onClick={downloadBatchCSV} className="gap-2">
                     <Download className="h-4 w-4" />
@@ -938,7 +850,7 @@ export default function CreateListing() {
             <div className="rounded-xl border border-border bg-card p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-serif text-lg font-semibold text-foreground">
-                  {activePlatform === 'liveauctioneers' ? `Lot ${lotNumber - 1} Added` : 'Draft Ready'}
+                  {activePlatform === 'liveauctioneers' ? `Lot ${lotNumber - 1} Saved` : 'Draft Ready'}
                 </h2>
                 <span className="text-xs px-2 py-1 rounded bg-primary/10 text-primary uppercase">
                   {activePlatform}
