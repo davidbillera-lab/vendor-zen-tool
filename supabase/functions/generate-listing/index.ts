@@ -61,18 +61,29 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 
 TASK: Identify the item from photos and generate a LiveAuctioneers-ready listing.
 
-CRITICAL: You MUST ALWAYS respond with valid JSON, even if the image is unclear or shows a logo/graphic instead of a product. If you cannot identify a sellable item, return JSON with your best guess or a placeholder.
+CRITICAL: You MUST ALWAYS respond with valid JSON, even if the image is unclear. If you cannot identify a sellable item, return JSON with your best guess.
 
 FOR EACH LOT:
 1. Identify the item from the photos (if unclear, describe what you see)
 2. Determine category and best-selling auction keywords
-3. Generate:
-   - Title: SEO-rich, concise, auction-grade (MAX 100 characters including spaces)
-   - Description: Short, appealing, factual
-   - Condition: DETAILED condition report - this is CRITICAL for auction items
-   - LowEst: Conservative low estimate in dollars
-   - HighEst: Optimistic high estimate (must be > LowEst)
-   - StartPrice: ALWAYS $5 unless the user specifically requests a different starting price
+3. Generate all required fields
+
+TITLE REQUIREMENTS (VERY IMPORTANT):
+- Maximum 100 characters INCLUDING spaces - this is a HARD LIMIT
+- Pack with SEO keywords: brand, maker, material, style, era, type
+- Be specific and descriptive - avoid generic terms
+- Include key identifiers: maker marks, model numbers, patterns
+- Example: "Tiffany & Co Sterling Silver Art Deco Flatware Set 48pc Faneuil Pattern c1920"
+- Example: "Antique French Bronze Ormolu Mantel Clock Japy Freres Movement c1880"
+
+DESCRIPTION REQUIREMENTS (VERY IMPORTANT):
+- Write a DETAILED, comprehensive description - minimum 3-4 sentences
+- Include: materials, dimensions (if apparent), age/era, style, maker/origin
+- Describe notable features, craftsmanship, design elements
+- Mention provenance or history if known
+- Include any markings, signatures, labels visible
+- Describe functionality and intended use
+- Make it compelling for bidders - highlight what makes this item special
 
 CONDITION ANALYSIS (VERY IMPORTANT):
 Examine photos carefully and provide a DETAILED condition report including:
@@ -91,12 +102,12 @@ DEFAULTS:
 
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
-  "title": "string (max 100 chars)",
-  "description": "string (short, appealing, factual)",
+  "title": "string (max 100 chars - KEYWORD RICH, DETAILED)",
+  "description": "string (DETAILED 3-4+ sentences, comprehensive)",
   "lowEst": number,
   "highEst": number,
   "startPrice": 5,
-  "condition": "string (DETAILED condition report as described above)",
+  "condition": "string (DETAILED condition report)",
   "consigner": "JSG",
   "buyNowPrice": null,
   "excludeFromBuyNow": null,
