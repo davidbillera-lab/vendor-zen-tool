@@ -82,10 +82,16 @@ async function getAccessToken(serviceAccount: { client_email: string; private_ke
 }
 
 async function resolveSheetTitle(accessToken: string, spreadsheetId: string, requestedSheetName: string) {
-  const trimmed = (requestedSheetName || '').trim();
-  if (!trimmed) return 'Sheet1';
+  const normalize = (s: string) =>
+    (s || '')
+      .replace(/\u00A0/g, ' ') // non‑breaking spaces
+      .replace(/\s+/g, ' ')
+      .trim();
 
-  // Google returns "Unable to parse range" when the sheet title doesn't match exactly.
+  const requested = normalize(requestedSheetName || '');
+  if (!requested) return 'Sheet1';
+
+  // Google returns "Unable to parse range" when the sheet title doesn't match an existing tab.
   // Resolve the exact tab title via spreadsheet metadata.
   const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(title))`;
   const metaRes = await fetch(metaUrl, {
@@ -94,7 +100,7 @@ async function resolveSheetTitle(accessToken: string, spreadsheetId: string, req
 
   if (!metaRes.ok) {
     console.warn('Could not fetch spreadsheet metadata; falling back to provided sheetName');
-    return trimmed;
+    return requested;
   }
 
   const meta = await metaRes.json();
@@ -102,11 +108,20 @@ async function resolveSheetTitle(accessToken: string, spreadsheetId: string, req
     .map((s: any) => s?.properties?.title)
     .filter(Boolean);
 
-  return (
-    titles.find((t) => t === trimmed) ||
-    titles.find((t) => t?.toLowerCase?.() === trimmed.toLowerCase()) ||
-    trimmed
-  );
+  const exact = titles.find((t) => normalize(t) === requested);
+  if (exact) return exact;
+
+  const ci = titles.find((t) => normalize(t).toLowerCase() === requested.toLowerCase());
+  if (ci) return ci;
+
+  // If the requested tab doesn't exist, default to the first sheet to keep the workflow moving.
+  const fallback = titles[0] || 'Sheet1';
+  console.warn('Requested sheet tab not found. Falling back to first tab.', {
+    requested: requestedSheetName,
+    available: titles,
+    fallback,
+  });
+  return fallback;
 }
 
 serve(async (req) => {
