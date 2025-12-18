@@ -140,7 +140,11 @@ serve(async (req) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Google Sheets API error:', response.status, errorText);
-      throw new Error(`Google Sheets API error: ${response.status} - ${errorText}`);
+      console.error('Service account email (share your sheet with this):', serviceAccount?.client_email);
+      throw new Error(
+        `Google Sheets API error: ${response.status} - ${errorText}\n` +
+          `Fix: Share the spreadsheet with this service account email as Editor: ${serviceAccount?.client_email}`
+      );
     }
 
     const result = await response.json();
