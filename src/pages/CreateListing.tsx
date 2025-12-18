@@ -29,6 +29,7 @@ import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
 import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
+import { BatchManager } from "@/components/BatchManager";
 import { supabase } from "@/integrations/supabase/client";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
@@ -84,6 +85,7 @@ export default function CreateListing() {
   const [dbBatchRows, setDbBatchRows] = useState<any[]>([]);
   const [loadingBatch, setLoadingBatch] = useState(true);
   const [savingLot, setSavingLot] = useState(false);
+  const [selectedBatch, setSelectedBatch] = useState<{ id: string; name: string; lot_count: number } | null>(null);
   
   // Denver Auctions specific
   const [denverLotNumber, setDenverLotNumber] = useState(1);
@@ -93,13 +95,22 @@ export default function CreateListing() {
   // LiveAuctioneers Quick Capture mode
   const [laQuickCaptureOpen, setLaQuickCaptureOpen] = useState(false);
 
-  // Fetch batch rows from database on mount
+  // Fetch batch rows when selected batch changes
   useEffect(() => {
     const fetchBatchRows = async () => {
+      if (!selectedBatch?.id) {
+        setDbBatchRows([]);
+        setLotNumber(1);
+        setLoadingBatch(false);
+        return;
+      }
+      
+      setLoadingBatch(true);
       try {
         const { data, error } = await supabase
           .from('la_batch_rows')
           .select('*')
+          .eq('batch_id', selectedBatch.id)
           .order('lot_number', { ascending: true });
         
         if (error) throw error;
@@ -109,6 +120,8 @@ export default function CreateListing() {
         if (data && data.length > 0) {
           const maxLot = Math.max(...data.map(r => r.lot_number));
           setLotNumber(maxLot + 1);
+        } else {
+          setLotNumber(1);
         }
       } catch (error) {
         console.error('Error fetching batch rows:', error);
@@ -118,15 +131,25 @@ export default function CreateListing() {
     };
     
     fetchBatchRows();
-  }, []);
+  }, [selectedBatch?.id]);
 
   // Real-time save to cloud database
   const saveToCloudBatch = async (listing: GeneratedListing, imageUrls: string[], currentLotNumber: number) => {
+    if (!selectedBatch?.id) {
+      toast({ 
+        title: "No Batch Selected", 
+        description: "Select or create a batch first",
+        variant: "destructive"
+      });
+      return null;
+    }
+    
     setSavingLot(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       
       const rowToInsert = {
+        batch_id: selectedBatch.id,
         lot_number: currentLotNumber,
         title: (listing.title || '').substring(0, 100),
         description: listing.description || '',
@@ -157,6 +180,12 @@ export default function CreateListing() {
       // Add to local state immediately
       if (data) {
         setDbBatchRows(prev => [...prev, data]);
+        
+        // Update batch lot_count
+        await supabase
+          .from('la_batches')
+          .update({ lot_count: dbBatchRows.length + 1, updated_at: new Date().toISOString() })
+          .eq('id', selectedBatch.id);
       }
       
       return data;
@@ -298,9 +327,17 @@ export default function CreateListing() {
 
       // Auto-save to cloud batch for LiveAuctioneers
       if (platform === 'liveauctioneers') {
-        const saved = await saveToCloudBatch(listing, imageUrls, lotNumber);
-        if (saved) {
-          setLotNumber(prev => prev + 1);
+        if (!selectedBatch?.id) {
+          toast({ 
+            title: "No Batch Selected", 
+            description: "Select or create a batch first for LiveAuctioneers",
+            variant: "destructive"
+          });
+        } else {
+          const saved = await saveToCloudBatch(listing, imageUrls, lotNumber);
+          if (saved) {
+            setLotNumber(prev => prev + 1);
+          }
         }
       }
 
@@ -349,18 +386,26 @@ export default function CreateListing() {
   };
 
   const clearBatch = async () => {
-    if (!confirm('Clear all batch data? This cannot be undone.')) return;
+    if (!selectedBatch?.id) return;
+    if (!confirm('Clear all lots in this batch? This cannot be undone.')) return;
     
     try {
       const { error } = await supabase
         .from('la_batch_rows')
         .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all rows
+        .eq('batch_id', selectedBatch.id);
       
       if (error) throw error;
       
       setDbBatchRows([]);
       setLotNumber(1);
+      
+      // Update batch lot_count
+      await supabase
+        .from('la_batches')
+        .update({ lot_count: 0 })
+        .eq('id', selectedBatch.id);
+        
       toast({ title: "Batch Cleared" });
     } catch (error) {
       console.error("Error clearing batch:", error);
@@ -664,29 +709,39 @@ export default function CreateListing() {
           dbBatchRows.length > 0 ? "border-primary/50 bg-primary/5" : "border-border bg-card"
         )}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <Cloud className="h-5 w-5 text-primary" />
-                <span className="font-semibold text-foreground">LiveAuctioneers Cloud Batch</span>
-                {savingLot && (
-                  <span className="flex items-center gap-1 text-xs text-primary">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Saving...
+            <div className="flex items-center gap-3">
+              <BatchManager
+                selectedBatchId={selectedBatch?.id || null}
+                onSelectBatch={setSelectedBatch}
+              />
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-foreground">
+                    {selectedBatch ? selectedBatch.name : 'No Batch Selected'}
                   </span>
-                )}
+                  {savingLot && (
+                    <span className="flex items-center gap-1 text-xs text-primary">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Saving...
+                    </span>
+                  )}
+                </div>
+                <span className="text-muted-foreground text-sm">
+                  {!selectedBatch ? 'Select or create a batch to start' : 
+                    loadingBatch ? 'Loading...' : (
+                      dbBatchRows.length > 0 
+                        ? `${dbBatchRows.length} lots saved • Next: #${lotNumber}`
+                        : 'Ready • Lots auto-save instantly'
+                    )
+                  }
+                </span>
               </div>
-              <span className="text-muted-foreground text-sm">
-                {loadingBatch ? 'Loading...' : (
-                  dbBatchRows.length > 0 
-                    ? `${dbBatchRows.length} lots saved • Next: #${lotNumber} • Auto-saves instantly`
-                    : 'Lots auto-save to cloud instantly • Never lose work'
-                )}
-              </span>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button 
                 variant="gold" 
                 onClick={() => setLaQuickCaptureOpen(true)}
+                disabled={!selectedBatch}
                 className="gap-2"
               >
                 <Camera className="h-4 w-4" />
@@ -697,6 +752,7 @@ export default function CreateListing() {
                 value={lotNumber}
                 onChange={(e) => setLotNumber(parseInt(e.target.value) || 1)}
                 className="w-20"
+                disabled={!selectedBatch}
               />
             </div>
           </div>
