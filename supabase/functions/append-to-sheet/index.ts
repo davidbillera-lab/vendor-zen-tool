@@ -171,20 +171,43 @@ serve(async (req) => {
     ]);
 
     // Append rows to the sheet (15 columns: A:O)
-    // Use the values:append endpoint with `range` as a query param to avoid path parsing issues.
-    // For sheet names with spaces/special chars, quote in A1 notation: 'LA sheet'!A:O
-    const safeSheetTitle = `'${resolvedSheetName.replace(/'/g, "''")}'`;
-    const rangeA1 = `${safeSheetTitle}!A:O`;
-    const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:append?range=${encodeURIComponent(rangeA1)}&valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+    // Google Sheets API expects: /values/{range}:append
+    // Some accounts/sheets can be picky about quoting in the range, so we try a couple of safe variants.
+    const cleanedSheetName = (resolvedSheetName || '').trim();
+    const rangeCandidates = [
+      `${cleanedSheetName}!A:O`,
+      `'${cleanedSheetName.replace(/'/g, "''")}'!A:O`,
+    ];
 
-    const response = await fetch(appendUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ values }),
-    });
+    const tryAppend = async (rangeA1: string) => {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(rangeA1)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+      return await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ values }),
+      });
+    };
+
+    let response: Response | null = null;
+    for (const candidate of rangeCandidates) {
+      console.log('Trying append range:', candidate);
+      response = await tryAppend(candidate);
+      if (response.ok) break;
+
+      const maybeText = await response.text();
+      // Recreate the Response for later error handling if needed
+      response = new Response(maybeText, { status: response.status, headers: response.headers });
+
+      // Only retry on the specific range parsing error; otherwise fail fast.
+      if (response.status !== 400 || !maybeText.includes('Unable to parse range')) {
+        break;
+      }
+    }
+
+    if (!response) throw new Error('Failed to call Google Sheets API');
 
     if (!response.ok) {
       const errorText = await response.text();
