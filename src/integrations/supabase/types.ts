@@ -44,6 +44,72 @@ export type Database = {
         }
         Relationships: []
       }
+      la_batch_rows: {
+        Row: {
+          category: string | null
+          condition: string | null
+          consignor: string | null
+          created_at: string
+          created_by: string | null
+          depth: string | null
+          description: string | null
+          dimension_unit: string | null
+          height: string | null
+          high_est: number | null
+          id: string
+          image_urls: string[] | null
+          lot_number: number
+          low_est: number | null
+          start_price: number | null
+          title: string
+          weight: string | null
+          weight_unit: string | null
+          width: string | null
+        }
+        Insert: {
+          category?: string | null
+          condition?: string | null
+          consignor?: string | null
+          created_at?: string
+          created_by?: string | null
+          depth?: string | null
+          description?: string | null
+          dimension_unit?: string | null
+          height?: string | null
+          high_est?: number | null
+          id?: string
+          image_urls?: string[] | null
+          lot_number: number
+          low_est?: number | null
+          start_price?: number | null
+          title: string
+          weight?: string | null
+          weight_unit?: string | null
+          width?: string | null
+        }
+        Update: {
+          category?: string | null
+          condition?: string | null
+          consignor?: string | null
+          created_at?: string
+          created_by?: string | null
+          depth?: string | null
+          description?: string | null
+          dimension_unit?: string | null
+          height?: string | null
+          high_est?: number | null
+          id?: string
+          image_urls?: string[] | null
+          lot_number?: number
+          low_est?: number | null
+          start_price?: number | null
+          title?: string
+          weight?: string | null
+          weight_unit?: string | null
+          width?: string | null
+        }
+        Relationships: []
+      }
       listings: {
         Row: {
           category: string | null
