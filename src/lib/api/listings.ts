@@ -64,14 +64,63 @@ export async function generateListing(
   return data.listing;
 }
 
+// Compress image before upload for faster processing
+async function compressImage(file: File, maxWidth = 1200, quality = 0.8): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    img.onload = () => {
+      // Calculate new dimensions
+      let { width, height } = img;
+      if (width > maxWidth) {
+        height = (height * maxWidth) / width;
+        width = maxWidth;
+      }
+      
+      canvas.width = width;
+      canvas.height = height;
+      ctx?.drawImage(img, 0, 0, width, height);
+      
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Failed to compress image'));
+          }
+        },
+        'image/jpeg',
+        quality
+      );
+    };
+    
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 export async function uploadImage(file: File): Promise<string> {
-  const fileExt = file.name.split('.').pop();
+  // Compress image for faster upload (only if it's an image)
+  let uploadFile: File | Blob = file;
+  if (file.type.startsWith('image/')) {
+    try {
+      uploadFile = await compressImage(file);
+    } catch (e) {
+      console.warn('Image compression failed, using original:', e);
+    }
+  }
+
+  const fileExt = 'jpg'; // Always use jpg after compression
   const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
   const filePath = `listings/${fileName}`;
 
   const { error: uploadError } = await supabase.storage
     .from('listing-images')
-    .upload(filePath, file);
+    .upload(filePath, uploadFile, {
+      contentType: 'image/jpeg',
+    });
 
   if (uploadError) {
     throw new Error(`Failed to upload image: ${uploadError.message}`);
