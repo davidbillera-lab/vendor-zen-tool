@@ -5,3 +5,6 @@ verify_jwt = true
 
 [functions.append-to-sheet]
 verify_jwt = true
+
+[functions.refine-listing]
+verify_jwt = true
