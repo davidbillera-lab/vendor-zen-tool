@@ -23,7 +23,8 @@ import {
   Rocket,
   Camera,
   FolderArchive,
-  Cloud
+  Cloud,
+  Edit
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -31,6 +32,7 @@ import { generateListing, uploadImage, saveListing, type Platform, type Generate
 import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
 import { ProjectManager, type Project } from "@/components/BatchManager";
+import { LALotEditor } from "@/components/LALotEditor";
 import { supabase } from "@/integrations/supabase/client";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
@@ -148,6 +150,7 @@ export default function CreateListing() {
 
   // LiveAuctioneers Quick Capture mode
   const [laQuickCaptureOpen, setLaQuickCaptureOpen] = useState(false);
+  const [editingLaLot, setEditingLaLot] = useState<any | null>(null);
 
   // Fetch Denver lots when project changes
   useEffect(() => {
@@ -980,16 +983,24 @@ export default function CreateListing() {
                 </div>
               </div>
               
-              {/* Batch preview */}
-              <div className="max-h-40 overflow-y-auto space-y-1">
+              {/* Batch preview - click to edit */}
+              <div className="max-h-60 overflow-y-auto space-y-1">
                 {dbBatchRows.map((row) => (
-                  <div key={row.id} className="text-xs flex justify-between items-center py-1 px-2 bg-background/50 rounded">
-                    <span className="font-mono">#{row.lot_number}</span>
-                    <span className="truncate flex-1 mx-2">{row.title}</span>
+                  <div 
+                    key={row.id} 
+                    onClick={() => setEditingLaLot(row)}
+                    className="text-xs flex justify-between items-center py-2 px-3 bg-background/50 rounded cursor-pointer hover:bg-primary/10 hover:border-primary/30 border border-transparent transition-colors group"
+                  >
+                    <span className="font-mono font-semibold">#{row.lot_number}</span>
+                    <span className="truncate flex-1 mx-3">{row.title}</span>
                     <span className="text-muted-foreground">${row.low_est}-${row.high_est}</span>
+                    <Edit className="h-3 w-3 ml-2 opacity-0 group-hover:opacity-100 text-primary transition-opacity" />
                   </div>
                 ))}
               </div>
+              <p className="text-xs text-muted-foreground text-center mt-2">
+                Click any lot to edit • All fields editable
+              </p>
             </div>
           )}
         </div>
@@ -1279,6 +1290,20 @@ export default function CreateListing() {
           </div>
         )}
       </div>
+
+      {/* LA Lot Editor Modal */}
+      {editingLaLot && (
+        <LALotEditor
+          lot={editingLaLot}
+          onClose={() => setEditingLaLot(null)}
+          onUpdate={(updatedLot) => {
+            setDbBatchRows(prev => prev.map(r => r.id === updatedLot.id ? updatedLot : r));
+          }}
+          onDelete={(lotId) => {
+            setDbBatchRows(prev => prev.filter(r => r.id !== lotId));
+          }}
+        />
+      )}
     </MainLayout>
   );
 }
