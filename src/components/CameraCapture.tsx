@@ -1,7 +1,12 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Camera, X, SwitchCamera, Check } from "lucide-react";
+import { Camera, X, SwitchCamera, Check, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+interface CapturedPhoto {
+  blob: Blob;
+  preview: string;
+}
 
 interface CameraCaptureProps {
   onCapture: (files: File[]) => void;
@@ -12,7 +17,7 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -49,9 +54,11 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
     }
-    setCapturedImage(null);
+    // Clean up preview URLs
+    capturedPhotos.forEach(photo => URL.revokeObjectURL(photo.preview));
+    setCapturedPhotos([]);
     setIsOpen(false);
-  }, [stream]);
+  }, [stream, capturedPhotos]);
 
   const switchCamera = useCallback(() => {
     const newFacing = facingMode === "environment" ? "user" : "environment";
@@ -80,28 +87,44 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
     // Draw the square portion from center of video
     ctx.drawImage(video, offsetX, offsetY, size, size, 0, 0, size, size);
 
-    const imageData = canvas.toDataURL("image/jpeg", 0.9);
-    setCapturedImage(imageData);
+    canvas.toBlob((blob) => {
+      if (blob) {
+        setCapturedPhotos(prev => [...prev, {
+          blob,
+          preview: URL.createObjectURL(blob)
+        }]);
+      }
+    }, "image/jpeg", 0.9);
   }, []);
 
-  const confirmPhoto = useCallback(() => {
-    if (!capturedImage) return;
-
-    // Convert base64 to File
-    fetch(capturedImage)
-      .then(res => res.blob())
-      .then(blob => {
-        const file = new File([blob], `photo-${Date.now()}.jpg`, {
-          type: "image/jpeg"
-        });
-        onCapture([file]);
-        stopCamera();
-      });
-  }, [capturedImage, onCapture, stopCamera]);
-
-  const retakePhoto = useCallback(() => {
-    setCapturedImage(null);
+  const removePhoto = useCallback((index: number) => {
+    setCapturedPhotos(prev => {
+      URL.revokeObjectURL(prev[index].preview);
+      return prev.filter((_, i) => i !== index);
+    });
   }, []);
+
+  const confirmPhotos = useCallback(() => {
+    if (capturedPhotos.length === 0) return;
+
+    // Convert blobs to Files
+    const files = capturedPhotos.map((photo, index) => 
+      new File([photo.blob], `photo-${Date.now()}-${index}.jpg`, {
+        type: "image/jpeg"
+      })
+    );
+    
+    onCapture(files);
+    
+    // Clean up
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+    }
+    capturedPhotos.forEach(photo => URL.revokeObjectURL(photo.preview));
+    setCapturedPhotos([]);
+    setIsOpen(false);
+  }, [capturedPhotos, onCapture, stream]);
 
   useEffect(() => {
     if (isOpen && !stream) {
@@ -115,8 +138,9 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
+      capturedPhotos.forEach(photo => URL.revokeObjectURL(photo.preview));
     };
-  }, [stream]);
+  }, [stream, capturedPhotos]);
 
   if (!isOpen) {
     return (
@@ -128,7 +152,7 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
         className="flex items-center gap-2 border-primary/30 hover:bg-primary/10"
       >
         <Camera className="h-5 w-5" />
-        Take Photo
+        Take Photos
       </Button>
     );
   }
@@ -145,78 +169,82 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
         >
           <X className="h-6 w-6" />
         </Button>
-        <span className="text-white font-medium">1:1</span>
-        {!capturedImage && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={switchCamera}
-            className="text-white hover:bg-white/20"
-          >
-            <SwitchCamera className="h-6 w-6" />
-          </Button>
-        )}
-        {capturedImage && <div className="w-10" />}
+        <span className="text-white font-medium">
+          {capturedPhotos.length > 0 ? `${capturedPhotos.length} photo${capturedPhotos.length > 1 ? 's' : ''}` : '1:1'}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={switchCamera}
+          className="text-white hover:bg-white/20"
+        >
+          <SwitchCamera className="h-6 w-6" />
+        </Button>
       </div>
 
       {/* Viewfinder */}
       <div className="flex-1 flex items-center justify-center overflow-hidden">
-        {capturedImage ? (
-          <img 
-            src={capturedImage} 
-            alt="Captured" 
-            className="w-full max-w-md aspect-square object-cover"
+        <div className="relative w-full max-w-md aspect-square">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 w-full h-full object-cover"
           />
-        ) : (
-          <div className="relative w-full max-w-md aspect-square">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="absolute inset-0 w-full h-full object-cover"
-            />
-            {/* Square frame overlay */}
-            <div className="absolute inset-0 border-2 border-white/50 pointer-events-none" />
-            {/* Grid lines */}
-            <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute top-1/3 left-0 right-0 h-px bg-white/30" />
-              <div className="absolute top-2/3 left-0 right-0 h-px bg-white/30" />
-              <div className="absolute left-1/3 top-0 bottom-0 w-px bg-white/30" />
-              <div className="absolute left-2/3 top-0 bottom-0 w-px bg-white/30" />
-            </div>
+          {/* Square frame overlay */}
+          <div className="absolute inset-0 border-2 border-white/50 pointer-events-none" />
+          {/* Grid lines */}
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="absolute top-1/3 left-0 right-0 h-px bg-white/30" />
+            <div className="absolute top-2/3 left-0 right-0 h-px bg-white/30" />
+            <div className="absolute left-1/3 top-0 bottom-0 w-px bg-white/30" />
+            <div className="absolute left-2/3 top-0 bottom-0 w-px bg-white/30" />
           </div>
-        )}
+        </div>
       </div>
+
+      {/* Photo thumbnails */}
+      {capturedPhotos.length > 0 && (
+        <div className="px-4 py-2 bg-black/70">
+          <div className="flex gap-2 overflow-x-auto pb-2">
+            {capturedPhotos.map((photo, index) => (
+              <div key={index} className="relative flex-shrink-0">
+                <img 
+                  src={photo.preview} 
+                  alt={`Photo ${index + 1}`}
+                  className="w-16 h-16 object-cover rounded-md border border-white/30"
+                />
+                <button
+                  onClick={() => removePhoto(index)}
+                  className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center"
+                >
+                  <X className="h-3 w-3 text-white" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="p-6 bg-black/50 flex items-center justify-center gap-8">
-        {capturedImage ? (
-          <>
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={retakePhoto}
-              className="border-white/30 text-white hover:bg-white/20"
-            >
-              Retake
-            </Button>
-            <Button
-              size="lg"
-              onClick={confirmPhoto}
-              className="bg-primary hover:bg-primary/90"
-            >
-              <Check className="h-5 w-5 mr-2" />
-              Use Photo
-            </Button>
-          </>
-        ) : (
-          <button
-            onClick={capturePhoto}
-            className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/10 transition-colors"
+        <button
+          onClick={capturePhoto}
+          className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/10 transition-colors"
+        >
+          <div className="w-16 h-16 rounded-full bg-white" />
+        </button>
+        
+        {capturedPhotos.length > 0 && (
+          <Button
+            size="lg"
+            onClick={confirmPhotos}
+            className="bg-primary hover:bg-primary/90"
           >
-            <div className="w-16 h-16 rounded-full bg-white" />
-          </button>
+            <Check className="h-5 w-5 mr-2" />
+            Use {capturedPhotos.length} Photo{capturedPhotos.length > 1 ? 's' : ''}
+          </Button>
         )}
       </div>
 
