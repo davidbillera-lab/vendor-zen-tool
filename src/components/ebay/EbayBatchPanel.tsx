@@ -206,14 +206,18 @@ export function EbayBatchPanel({
       ...csvRows.map(row => row.map(cell => 
         `"${String(cell).replace(/"/g, '""')}"`
       ).join(","))
-    ].join("\n");
+    ].join("\r\n"); // Use CRLF for better compatibility
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    // Add UTF-8 BOM for proper Google Sheets/Excel recognition
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
     link.download = `ebay-listings-${new Date().toISOString().split("T")[0]}.csv`;
+    document.body.appendChild(link); // Required for iOS Safari
     link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(url);
     
     toast({ title: "CSV Downloaded", description: `${rows.length} listings exported for eBay File Exchange` });

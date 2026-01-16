@@ -247,7 +247,7 @@ export function generateEbayCSV(listings: any[]): string {
     (l.image_urls || []).join('|')
   ]);
 
-  return [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n');
+  return [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\r\n');
 }
 
 // Generate LiveAuctioneers CSV - EXACT FORMAT REQUIRED with dynamic image columns
@@ -330,5 +330,5 @@ export function generateLiveAuctioneersCSV(listings: any[]): string {
     ];
   });
 
-  return [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n');
+  return [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\r\n');
 }
