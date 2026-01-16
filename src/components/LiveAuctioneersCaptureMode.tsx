@@ -36,6 +36,8 @@ export function LiveAuctioneersCaptureMode({
   const [editValue, setEditValue] = useState("");
   const [correctionPrompt, setCorrectionPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number[]>([]);
+  const [isStartingProcess, setIsStartingProcess] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const instructionsInputRef = useRef<HTMLInputElement>(null);
@@ -136,19 +138,39 @@ export function LiveAuctioneersCaptureMode({
   }, [capturedPhotos.length, stopCamera]);
 
   const processLot = useCallback(async () => {
+    setIsStartingProcess(true);
+    
+    // Small delay to show button feedback before transitioning
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
     setStep('processing');
+    setIsStartingProcess(false);
+    setUploadProgress(new Array(capturedPhotos.length).fill(0));
 
     try {
-      // Step 1: Upload all photos
-      setProcessingStatus(`Uploading ${capturedPhotos.length} photo(s)...`);
-      const urls = await Promise.all(
-        capturedPhotos.map(async (photo, index) => {
-          const file = new File([photo.blob], `lot-${lotNumber}-${index + 1}.jpg`, {
-            type: "image/jpeg"
-          });
-          return uploadImage(file);
-        })
-      );
+      // Step 1: Upload all photos with progress tracking
+      setProcessingStatus(`Uploading photos...`);
+      const urls: string[] = [];
+      
+      for (let index = 0; index < capturedPhotos.length; index++) {
+        const photo = capturedPhotos[index];
+        setProcessingStatus(`Uploading photo ${index + 1} of ${capturedPhotos.length}...`);
+        
+        const file = new File([photo.blob], `lot-${lotNumber}-${index + 1}.jpg`, {
+          type: "image/jpeg"
+        });
+        
+        const url = await uploadImage(file);
+        urls.push(url);
+        
+        // Update progress for this photo
+        setUploadProgress(prev => {
+          const updated = [...prev];
+          updated[index] = 100;
+          return updated;
+        });
+      }
+      
       setUploadedUrls(urls);
 
       // Step 2: Generate listing with AI (including special instructions)
@@ -167,6 +189,7 @@ export function LiveAuctioneersCaptureMode({
         variant: "destructive"
       });
       setStep('review');
+      setIsStartingProcess(false);
     }
   }, [capturedPhotos, lotNumber, specialInstructions]);
 
@@ -276,9 +299,12 @@ export function LiveAuctioneersCaptureMode({
 
   // STEP: Processing
   if (step === 'processing') {
+    const uploadedCount = uploadProgress.filter(p => p === 100).length;
+    const isUploading = processingStatus.includes('Uploading');
+    
     return (
       <div className="fixed inset-0 z-50 bg-background flex flex-col items-center justify-center">
-        <div className="text-center space-y-6">
+        <div className="text-center space-y-6 max-w-md px-4">
           <div className="relative">
             <Loader2 className="h-16 w-16 animate-spin text-primary mx-auto" />
             <Gavel className="h-6 w-6 text-primary absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
@@ -286,22 +312,51 @@ export function LiveAuctioneersCaptureMode({
           <div>
             <h2 className="text-xl font-semibold mb-2">Processing Lot #{lotNumber}</h2>
             <p className="text-muted-foreground">{processingStatus}</p>
-          </div>
-          <div className="flex gap-2 justify-center flex-wrap max-w-sm">
-            {capturedPhotos.slice(0, 6).map((photo, i) => (
-              <img 
-                key={i}
-                src={photo.preview}
-                alt=""
-                className="w-12 h-12 rounded-lg object-cover border border-border"
-              />
-            ))}
-            {capturedPhotos.length > 6 && (
-              <div className="w-12 h-12 rounded-lg bg-secondary flex items-center justify-center text-xs text-muted-foreground">
-                +{capturedPhotos.length - 6}
-              </div>
+            {isUploading && (
+              <p className="text-sm text-primary mt-1">
+                {uploadedCount} of {capturedPhotos.length} uploaded
+              </p>
             )}
           </div>
+          
+          {/* Photo upload progress */}
+          <div className="flex gap-2 justify-center flex-wrap max-w-sm mx-auto">
+            {capturedPhotos.map((photo, i) => (
+              <div key={i} className="relative">
+                <img 
+                  src={photo.preview}
+                  alt=""
+                  className={cn(
+                    "w-14 h-14 rounded-lg object-cover border-2 transition-all",
+                    uploadProgress[i] === 100 
+                      ? "border-green-500 opacity-100" 
+                      : "border-border opacity-50"
+                  )}
+                />
+                {uploadProgress[i] === 100 ? (
+                  <div className="absolute -top-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
+                    <Check className="h-3 w-3 text-white" />
+                  </div>
+                ) : isUploading && uploadProgress[i] === 0 && i === uploadedCount ? (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-lg">
+                    <Loader2 className="h-5 w-5 animate-spin text-white" />
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          
+          {/* Progress bar */}
+          {isUploading && (
+            <div className="w-full max-w-xs mx-auto">
+              <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${(uploadedCount / capturedPhotos.length) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -597,19 +652,35 @@ export function LiveAuctioneersCaptureMode({
               value={specialInstructions}
               onChange={(e) => setSpecialInstructions(e.target.value)}
               className="flex-1"
-              onKeyDown={(e) => e.key === 'Enter' && processLot()}
+              onKeyDown={(e) => e.key === 'Enter' && !isStartingProcess && processLot()}
+              disabled={isStartingProcess}
             />
           </div>
           <Button 
             size="lg" 
             className="w-full bg-primary hover:bg-primary/90"
             onClick={processLot}
+            disabled={isStartingProcess}
           >
-            <Gavel className="h-5 w-5 mr-2" />
-            Process with AI
+            {isStartingProcess ? (
+              <>
+                <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                Starting...
+              </>
+            ) : (
+              <>
+                <Gavel className="h-5 w-5 mr-2" />
+                Process with AI
+              </>
+            )}
           </Button>
           <p className="text-xs text-muted-foreground mt-2 text-center">
-            {specialInstructions ? "Instructions will be included" : "Or skip and let AI analyze photos only"}
+            {isStartingProcess 
+              ? "Preparing to upload photos..." 
+              : specialInstructions 
+                ? "Instructions will be included" 
+                : "Or skip and let AI analyze photos only"
+            }
           </p>
         </div>
       </div>
