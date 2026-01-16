@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -68,6 +69,9 @@ const DEFAULT_FB_GROUPS = [
 ];
 
 export default function CreateListing() {
+  const [searchParams] = useSearchParams();
+  const projectIdFromUrl = searchParams.get('project');
+  
   const [images, setImages] = useState<{ file: File; preview: string; url?: string }[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [processing, setProcessing] = useState<Platform | null>(null);
@@ -89,6 +93,38 @@ export default function CreateListing() {
   const [loadingBatch, setLoadingBatch] = useState(true);
   const [savingLot, setSavingLot] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [initialProjectLoaded, setInitialProjectLoaded] = useState(false);
+  
+  // Load project from URL parameter
+  useEffect(() => {
+    const loadProjectFromUrl = async () => {
+      if (!projectIdFromUrl || initialProjectLoaded) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('la_batches')
+          .select('*')
+          .eq('id', projectIdFromUrl)
+          .single();
+        
+        if (error) throw error;
+        
+        if (data) {
+          setSelectedProject({
+            ...data,
+            lot_count: 0,
+            platforms: data.platforms || []
+          });
+        }
+      } catch (error) {
+        console.error('Error loading project from URL:', error);
+      } finally {
+        setInitialProjectLoaded(true);
+      }
+    };
+    
+    loadProjectFromUrl();
+  }, [projectIdFromUrl, initialProjectLoaded]);
   
   // Denver Auctions specific - now also cloud-based
   const [denverLotNumber, setDenverLotNumber] = useState(1);

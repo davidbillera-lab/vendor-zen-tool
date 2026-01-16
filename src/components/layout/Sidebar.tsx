@@ -9,15 +9,17 @@ import {
   Gavel,
   Store,
   Truck,
-  X
+  X,
+  FolderOpen
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
-  { icon: Package, label: "Inventory", path: "/inventory" },
+  { icon: FolderOpen, label: "Projects", path: "/projects" },
   { icon: ListPlus, label: "Create Listing", path: "/create-listing" },
+  { icon: Package, label: "Inventory", path: "/inventory" },
   { icon: ShoppingCart, label: "Orders", path: "/orders" },
   { icon: Link2, label: "Platforms", path: "/platforms" },
   { icon: Settings, label: "Settings", path: "/settings" },
