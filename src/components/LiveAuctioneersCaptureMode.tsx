@@ -1,10 +1,11 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Camera, X, SwitchCamera, Check, Plus, Loader2, Gavel, Send, MessageSquare } from "lucide-react";
+import { Camera, X, SwitchCamera, Check, Plus, Loader2, Gavel, Send, MessageSquare, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { uploadImage, generateListing, type GeneratedListing } from "@/lib/api/listings";
 import { toast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface LiveAuctioneersCaptureProps {
   lotNumber: number;
@@ -33,9 +34,12 @@ export function LiveAuctioneersCaptureMode({
   const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
   const [editField, setEditField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [correctionPrompt, setCorrectionPrompt] = useState("");
+  const [isRefining, setIsRefining] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const instructionsInputRef = useRef<HTMLInputElement>(null);
+  const correctionInputRef = useRef<HTMLInputElement>(null);
 
   const startCamera = useCallback(async (facing: "user" | "environment") => {
     try {
@@ -187,6 +191,51 @@ export function LiveAuctioneersCaptureMode({
     setEditField(null);
     setEditValue("");
   };
+
+  const refineListing = useCallback(async () => {
+    if (!correctionPrompt.trim() || !generatedListing) return;
+    
+    setIsRefining(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          currentListing: generatedListing,
+          correctionPrompt: correctionPrompt.trim(),
+          imageUrls: uploadedUrls,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to refine listing');
+      }
+
+      const data = await response.json();
+      setGeneratedListing(data.listing);
+      setCorrectionPrompt("");
+      toast({
+        title: "Listing Updated",
+        description: "AI has refined your listing based on your feedback",
+      });
+    } catch (error) {
+      console.error("Refinement error:", error);
+      toast({
+        title: "Refinement Failed",
+        description: error instanceof Error ? error.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRefining(false);
+    }
+  }, [correctionPrompt, generatedListing, uploadedUrls]);
 
   const finalizeLot = useCallback(() => {
     if (!generatedListing) return;
@@ -423,12 +472,46 @@ export function LiveAuctioneersCaptureMode({
           </div>
         </div>
 
+        {/* AI Correction Chat Bar */}
+        <div className="p-4 border-t border-border bg-secondary/30">
+          <div className="flex items-center gap-2 mb-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <span className="text-sm font-medium">Ask AI to make changes</span>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              ref={correctionInputRef}
+              placeholder="e.g., 'Make the title shorter' or 'Add more detail about the condition'"
+              value={correctionPrompt}
+              onChange={(e) => setCorrectionPrompt(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !isRefining && refineListing()}
+              disabled={isRefining}
+              className="flex-1"
+            />
+            <Button 
+              onClick={refineListing}
+              disabled={!correctionPrompt.trim() || isRefining}
+              size="icon"
+            >
+              {isRefining ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Or tap any field above to edit directly
+          </p>
+        </div>
+
         {/* Footer */}
         <div className="p-4 border-t border-border">
           <Button 
             size="lg" 
             className="w-full bg-primary hover:bg-primary/90"
             onClick={finalizeLot}
+            disabled={isRefining}
           >
             <Check className="h-5 w-5 mr-2" />
             Add Lot #{lotNumber} to CSV
