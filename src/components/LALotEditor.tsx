@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { X, Check, Loader2, Sparkles, Send, Trash2 } from "lucide-react";
+import { X, Check, Loader2, Sparkles, Send, Trash2, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -49,10 +49,39 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
     weight: lot.weight || '',
     weight_unit: lot.weight_unit || 'lbs',
   });
+  const [imageUrls, setImageUrls] = useState<string[]>(lot.image_urls || []);
   const [saving, setSaving] = useState(false);
   const [correctionPrompt, setCorrectionPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const correctionInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDragStart = (index: number) => {
+    setDraggedIndex(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIndex !== null && draggedIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDragEnd = () => {
+    if (draggedIndex !== null && dragOverIndex !== null && draggedIndex !== dragOverIndex) {
+      const newUrls = [...imageUrls];
+      const [draggedItem] = newUrls.splice(draggedIndex, 1);
+      newUrls.splice(dragOverIndex, 0, draggedItem);
+      setImageUrls(newUrls);
+    }
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragLeave = () => {
+    setDragOverIndex(null);
+  };
 
   const handleChange = (field: string, value: string | number) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -78,6 +107,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
           dimension_unit: formData.dimension_unit,
           weight: formData.weight,
           weight_unit: formData.weight_unit,
+          image_urls: imageUrls,
         })
         .eq('id', lot.id)
         .select()
@@ -191,17 +221,44 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* Images */}
-          {lot.image_urls && lot.image_urls.length > 0 && (
-            <div className="flex gap-2 overflow-x-auto pb-2">
-              {lot.image_urls.map((url, i) => (
-                <img
-                  key={i}
-                  src={url}
-                  alt={`Lot ${lot.lot_number} image ${i + 1}`}
-                  className="w-20 h-20 object-cover rounded-lg border border-border flex-shrink-0"
-                />
-              ))}
+          {/* Images - Draggable */}
+          {imageUrls.length > 0 && (
+            <div>
+              <Label className="text-xs text-muted-foreground uppercase mb-2 block">
+                Images (drag to reorder)
+              </Label>
+              <div className="flex gap-2 overflow-x-auto pb-2">
+                {imageUrls.map((url, i) => (
+                  <div
+                    key={`${url}-${i}`}
+                    draggable
+                    onDragStart={() => handleDragStart(i)}
+                    onDragOver={(e) => handleDragOver(e, i)}
+                    onDragEnd={handleDragEnd}
+                    onDragLeave={handleDragLeave}
+                    className={cn(
+                      "relative flex-shrink-0 cursor-grab active:cursor-grabbing transition-all",
+                      draggedIndex === i && "opacity-50 scale-95",
+                      dragOverIndex === i && "ring-2 ring-primary ring-offset-2"
+                    )}
+                  >
+                    <img
+                      src={url}
+                      alt={`Lot ${lot.lot_number} image ${i + 1}`}
+                      className="w-20 h-20 object-cover rounded-lg border border-border"
+                      draggable={false}
+                    />
+                    <div className="absolute top-0 left-0 right-0 flex justify-center">
+                      <div className="bg-black/60 rounded-b px-1 py-0.5">
+                        <GripVertical className="h-3 w-3 text-white" />
+                      </div>
+                    </div>
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[10px] bg-primary text-primary-foreground px-1.5 rounded">
+                      {i + 1}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
