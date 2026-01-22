@@ -69,40 +69,38 @@ export function ProjectManager({ selectedProjectId, onSelectProject }: ProjectMa
 
       if (error) throw error;
       
-      // Fetch counts for each project
+      // Fetch counts for each project - include ebay_batch_rows
       const projectsWithCounts = await Promise.all((data || []).map(async (project) => {
-        const [laRows, denverRows, listings] = await Promise.all([
+        const [laRows, denverRows, ebayRows, listings] = await Promise.all([
           supabase.from('la_batch_rows').select('id', { count: 'exact' }).eq('batch_id', project.id),
           supabase.from('denver_batch_rows').select('id', { count: 'exact' }).eq('batch_id', project.id),
+          supabase.from('ebay_batch_rows').select('id', { count: 'exact' }).eq('batch_id', project.id),
           supabase.from('listings').select('id, platform', { count: 'exact' }).eq('project_id', project.id)
         ]);
         
         const laCount = laRows.count || 0;
         const denverCount = denverRows.count || 0;
-        const ebayCount = (listings.data || []).filter(l => l.platform === 'ebay').length;
+        const ebayBatchCount = ebayRows.count || 0;
         const fbCount = (listings.data || []).filter(l => l.platform === 'facebook').length;
         
         const platforms: string[] = [];
         if (laCount > 0) platforms.push('liveauctioneers');
         if (denverCount > 0) platforms.push('denver');
-        if (ebayCount > 0) platforms.push('ebay');
+        if (ebayBatchCount > 0) platforms.push('ebay');
         if (fbCount > 0) platforms.push('facebook');
         
         return {
           ...project,
-          lot_count: laCount + denverCount + ebayCount + fbCount,
+          lot_count: laCount + denverCount + ebayBatchCount + fbCount,
           platforms
         };
       }));
       
       setProjects(projectsWithCounts);
       
-      // Auto-select the most recent active project if none selected
-      if (!selectedProjectId && projectsWithCounts.length > 0) {
-        const activeProject = projectsWithCounts.find(p => p.is_active) || projectsWithCounts[0];
-        onSelectProject(activeProject);
-      } else if (selectedProjectId) {
-        // Update selected project with latest data
+      // DON'T auto-select - require explicit project selection to prevent data mixing
+      // Only update the currently selected project with latest data
+      if (selectedProjectId) {
         const updated = projectsWithCounts.find(p => p.id === selectedProjectId);
         if (updated) onSelectProject(updated);
       }
@@ -208,17 +206,30 @@ export function ProjectManager({ selectedProjectId, onSelectProject }: ProjectMa
         </DialogHeader>
         
         <div className="space-y-4">
-          {/* Create New Project */}
-          <div className="flex gap-2">
-            <Input
-              placeholder="New project name (e.g., Estate Sale Dec 18)..."
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && createProject()}
-            />
-            <Button onClick={createProject} disabled={creating}>
-              {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            </Button>
+          {/* Important Notice */}
+          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+            <p className="text-sm text-amber-200">
+              <strong>Important:</strong> Select the correct project before adding items. 
+              Each project keeps data separate to prevent mixing between sales.
+            </p>
+          </div>
+          
+          {/* Create New Project - More prominent */}
+          <div className="p-4 border-2 border-dashed border-primary/50 rounded-lg bg-primary/5">
+            <h4 className="font-medium mb-2 text-sm">Start a New Project</h4>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Project name (e.g., Marina Estate Sale)..."
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && createProject()}
+                className="flex-1"
+              />
+              <Button onClick={createProject} disabled={creating} className="gap-2">
+                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                Create
+              </Button>
+            </div>
           </div>
 
           {/* Project List */}

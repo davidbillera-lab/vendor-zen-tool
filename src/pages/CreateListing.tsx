@@ -407,6 +407,15 @@ export default function CreateListing() {
   };
 
   const handlePlatformClick = async (platform: Platform) => {
+    if (!selectedProject?.id) {
+      toast({
+        title: "No Project Selected",
+        description: "Please select or create a project first to keep your listings organized",
+        variant: "destructive"
+      });
+      return;
+    }
+    
     if (images.length === 0) {
       toast({
         title: "No Photos",
@@ -870,12 +879,29 @@ export default function CreateListing() {
         )}
 
         {/* Platform Buttons */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {!selectedProject && (
+          <div className="rounded-xl border-2 border-dashed border-amber-500/50 bg-amber-500/10 p-6 text-center">
+            <Cloud className="h-10 w-10 mx-auto mb-3 text-amber-500" />
+            <h3 className="font-semibold text-lg mb-1">Select or Create a Project First</h3>
+            <p className="text-muted-foreground text-sm mb-4">
+              Projects keep your listings organized and prevent mixing data between different sales
+            </p>
+            <ProjectManager
+              selectedProjectId={null}
+              onSelectProject={setSelectedProject}
+            />
+          </div>
+        )}
+        
+        <div className={cn(
+          "grid gap-4 sm:grid-cols-2 lg:grid-cols-4",
+          !selectedProject && "opacity-50 pointer-events-none"
+        )}>
           {platforms.map((platform) => (
             <Button
               key={platform.id}
               onClick={() => handlePlatformClick(platform.id)}
-              disabled={processing !== null || images.length === 0}
+              disabled={processing !== null || images.length === 0 || !selectedProject}
               variant="outline"
               className={cn(
                 "h-auto py-6 flex flex-col gap-2 relative overflow-hidden group",
