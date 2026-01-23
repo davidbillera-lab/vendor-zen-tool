@@ -720,24 +720,36 @@ export default function CreateListing() {
     try {
       const zip = new JSZip();
       
-      // Process each lot
+      // Collect all image download tasks
+      const downloadTasks: Promise<{ filename: string; blob: Blob } | null>[] = [];
+      
       for (const row of dbBatchRows) {
         const lotNum = row.lot_number;
         const imageUrls = row.image_urls || [];
         
-        // Download each image and add to zip with correct filename
         for (let i = 0; i < imageUrls.length; i++) {
-          try {
-            const response = await fetch(imageUrls[i]);
-            const blob = await response.blob();
-            // LA accepts jpg, png, gif - detect from content-type or default to jpg
-            const contentType = response.headers.get('content-type') || 'image/jpeg';
-            const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : 'jpg';
-            const filename = `${lotNum}_${i + 1}.${ext}`;
-            zip.file(filename, blob);
-          } catch (err) {
-            console.error(`Failed to download image ${lotNum}_${i + 1}:`, err);
-          }
+          const task = fetch(imageUrls[i])
+            .then(async (response) => {
+              const blob = await response.blob();
+              const contentType = response.headers.get('content-type') || 'image/jpeg';
+              const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : 'jpg';
+              return { filename: `${lotNum}_${i + 1}.${ext}`, blob };
+            })
+            .catch((err) => {
+              console.error(`Failed to download image ${lotNum}_${i + 1}:`, err);
+              return null;
+            });
+          downloadTasks.push(task);
+        }
+      }
+      
+      // Download all images in parallel
+      const results = await Promise.all(downloadTasks);
+      
+      // Add successful downloads to zip
+      for (const result of results) {
+        if (result) {
+          zip.file(result.filename, result.blob);
         }
       }
 
