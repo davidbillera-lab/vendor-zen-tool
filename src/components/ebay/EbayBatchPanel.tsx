@@ -139,14 +139,24 @@ export function EbayBatchPanel({
     toast({ title: "Listing updated" });
   };
 
+  // Sanitize text for CSV - remove newlines that break parsing
+  const sanitizeForCSV = (text: string): string => {
+    return text
+      .replace(/\r\n/g, ' ')  // Windows newlines
+      .replace(/\n/g, ' ')     // Unix newlines
+      .replace(/\r/g, ' ')     // Old Mac newlines
+      .replace(/\s+/g, ' ')    // Collapse multiple spaces
+      .trim();
+  };
+
   // Generate CSV content (reusable helper)
   const generateCSVContent = () => {
-    // eBay File Exchange format headers
+    // eBay File Exchange format headers - asterisk prefix indicates required fields
     const headers = [
-      "Action", "ItemID", "Title", "Description", "Category", "ConditionID",
-      "PicURL", "Quantity", "StartPrice", "Format", "Duration",
+      "*Action", "ItemID", "*Title", "Description", "*Category", "*ConditionID",
+      "PicURL", "*Quantity", "*StartPrice", "*Format", "*Duration",
       "ShippingType", "ShippingService-1:Option", "ShippingService-1:Cost",
-      "DispatchTimeMax", "ReturnsAcceptedOption", "ReturnsWithinOption",
+      "*DispatchTimeMax", "ReturnsAcceptedOption", "ReturnsWithinOption",
       "RefundOption", "ShippingCostPaidByOption",
       "PromotedListingsFeatureType", "PromotedListingsAdRate"
     ];
@@ -169,18 +179,21 @@ export function EbayBatchPanel({
         "For parts": "7000",
       };
 
+      // Get numeric category ID - extract from category string if it contains one
+      const categoryId = row.category?.match(/\d+/)?.[0] || "20091"; // Default to collectibles
+
       const base = [
         "Draft", // Action - creates drafts for review instead of going live
         "", // ItemID (empty for new)
-        row.title || "",
-        row.description || "",
-        row.category || "",
+        sanitizeForCSV(row.title || ""),
+        sanitizeForCSV(row.description || ""),
+        categoryId, // Must be numeric category ID
         conditionMap[row.condition || ""] || "3000",
         (row.image_urls || []).join("|"),
         "1", // Quantity
         row.price?.toString() || "0",
         "FixedPrice",
-        "GTC",
+        "GTC", // Good 'Til Cancelled - required listing duration
         row.shipping_type === "free" ? "Free" : (row.shipping_type === "calculated" ? "Calculated" : "Flat"),
         "USPSPriority",
         row.shipping_cost?.toString() || "0",
@@ -193,9 +206,9 @@ export function EbayBatchPanel({
         row.promotion_rate?.toString() || "0"
       ];
 
-      // Add item specifics values
+      // Add item specifics values - also sanitize these
       const specificValues = Array.from(allSpecifics).map(s => 
-        row.item_specifics?.[s] || ""
+        sanitizeForCSV(row.item_specifics?.[s] || "")
       );
 
       return [...base, ...specificValues];
