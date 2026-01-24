@@ -395,7 +395,7 @@ serve(async (req) => {
     console.log('AI Response received');
 
     // Parse the JSON from the response
-    let parsedListing;
+    let parsedListing: any;
     try {
       // Extract JSON from potential markdown code blocks
       const jsonMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, aiResponse];
@@ -404,6 +404,29 @@ serve(async (req) => {
     } catch (parseError) {
       console.error('Failed to parse AI response:', aiResponse);
       throw new Error('Failed to parse AI response as JSON');
+    }
+
+    // Normalize common key variants so the frontend reliably receives camelCase fields.
+    // Some models occasionally emit "CategoryId" or "category_id" even when instructed otherwise.
+    if (platform === 'ebay' && parsedListing && typeof parsedListing === 'object') {
+      const anyListing = parsedListing as Record<string, unknown>;
+
+      const categoryIdCandidate =
+        (anyListing['categoryId'] as unknown) ??
+        (anyListing['CategoryId'] as unknown) ??
+        (anyListing['category_id'] as unknown) ??
+        (anyListing['CategoryID'] as unknown);
+
+      if (anyListing['categoryId'] == null && categoryIdCandidate != null) {
+        const asNum = Number(categoryIdCandidate);
+        if (!Number.isNaN(asNum)) {
+          anyListing['categoryId'] = asNum;
+        }
+      }
+
+      if (anyListing['itemSpecifics'] == null && anyListing['ItemSpecifics'] != null) {
+        anyListing['itemSpecifics'] = anyListing['ItemSpecifics'];
+      }
     }
 
     return new Response(
