@@ -170,7 +170,7 @@ export function EbayBatchPanel({
       };
 
       const base = [
-        "Add", // Action
+        "Draft", // Action - creates drafts for review instead of going live
         "", // ItemID (empty for new)
         row.title || "",
         row.description || "",
