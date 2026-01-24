@@ -182,17 +182,18 @@ export function EbayBatchPanel({
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
     const fullHeaders = [...baseHeaders, ...specificHeaders];
 
-    // eBay condition mapping - use text values
-    const conditionMap: Record<string, string> = {
+    // eBay draft template Condition ID: only NEW or USED are accepted in practice
+    // (more granular condition values can be set while completing the draft in Seller Hub)
+    const conditionMap: Record<string, "NEW" | "USED"> = {
       "New": "NEW",
-      "Open box": "OPEN_BOX",
-      "Used": "USED_EXCELLENT", // Default used to excellent
-      "For parts": "FOR_PARTS_OR_NOT_WORKING",
+      "Open box": "USED",
+      "Used": "USED",
+      "For parts": "USED",
     };
 
     const csvRows = rows.map((row, index) => {
-      // Extract numeric category ID from category string
-      const categoryId = row.category?.match(/\d+/)?.[0] || "";
+      // Extract numeric category ID from category string (e.g. "Shoes (47140)" -> "47140")
+      const categoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       
       const base = [
         "Draft",
@@ -203,7 +204,7 @@ export function EbayBatchPanel({
         row.price?.toString() || "0",
         "1", // Quantity
         (row.image_urls || []).join("|"),
-        conditionMap[row.condition || ""] || "USED_EXCELLENT",
+        conditionMap[row.condition || ""] || "USED",
         toHtmlDescription(row.description || ""),
         "FixedPrice"
       ];
@@ -235,9 +236,31 @@ export function EbayBatchPanel({
     return csvContent;
   };
 
+  const getMissingCategoryLots = (): number[] => {
+    const missing: number[] = [];
+    rows.forEach((row, idx) => {
+      const categoryId = row.category?.match(/\d{3,}/)?.[0] || "";
+      if (!categoryId) {
+        missing.push(row.lot_number ?? (idx + 1));
+      }
+    });
+    return missing;
+  };
+
   const downloadCSV = () => {
     if (rows.length === 0) {
       toast({ title: "No data", description: "Add some listings first", variant: "destructive" });
+      return;
+    }
+
+    const missingLots = getMissingCategoryLots();
+    if (missingLots.length > 0) {
+      const preview = missingLots.slice(0, 10).join(", ");
+      toast({
+        title: "Missing Category ID",
+        description: `Add a numeric eBay Category ID for these lot(s): ${preview}${missingLots.length > 10 ? "…" : ""}`,
+        variant: "destructive",
+      });
       return;
     }
 
