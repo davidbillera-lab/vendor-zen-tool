@@ -257,13 +257,12 @@ export function EbayBatchPanel({
 
     const missingLots = getMissingCategoryLots();
     if (missingLots.length > 0) {
-      const preview = missingLots.slice(0, 10).join(", ");
+      const preview = missingLots.slice(0, 5).join(", ");
       toast({
-        title: "Missing Category ID",
-        description: `Add a numeric eBay Category ID for these lot(s): ${preview}${missingLots.length > 10 ? "…" : ""}`,
-        variant: "destructive",
+        title: "Note: Some listings missing Category ID",
+        description: `Lots ${preview}${missingLots.length > 5 ? "…" : ""} need category IDs. You can add them in eBay Seller Hub when completing drafts.`,
       });
-      return;
+      // Continue with download - don't block
     }
 
     const csvContent = generateCSVContent();
