@@ -149,19 +149,30 @@ export function EbayBatchPanel({
       .trim();
   };
 
-  // Generate CSV content (reusable helper)
+  // Convert description to basic HTML for eBay
+  const toHtmlDescription = (text: string): string => {
+    const sanitized = sanitizeForCSV(text);
+    return `<p>${sanitized}</p>`;
+  };
+
+  // Generate CSV content matching eBay's official draft template
   const generateCSVContent = () => {
-    // eBay File Exchange format headers - asterisk prefix indicates required fields
-    const headers = [
-      "*Action", "ItemID", "*Title", "Description", "*Category", "*ConditionID",
-      "PicURL", "*Quantity", "*StartPrice", "*Format", "*Duration",
-      "ShippingType", "ShippingService-1:Option", "ShippingService-1:Cost",
-      "*DispatchTimeMax", "ReturnsAcceptedOption", "ReturnsWithinOption",
-      "RefundOption", "ShippingCostPaidByOption",
-      "PromotedListingsFeatureType", "PromotedListingsAdRate"
+    // eBay's official draft template headers
+    const baseHeaders = [
+      "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
+      "Custom label (SKU)",
+      "Category ID",
+      "Title",
+      "UPC",
+      "Price",
+      "Quantity",
+      "Item photo URL",
+      "Condition ID",
+      "Description",
+      "Format"
     ];
 
-    // Add item specifics columns
+    // Collect all item specifics across all rows for C: columns
     const allSpecifics = new Set<string>();
     rows.forEach(r => {
       if (r.item_specifics) {
@@ -169,44 +180,35 @@ export function EbayBatchPanel({
       }
     });
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
-    const fullHeaders = [...headers, ...specificHeaders];
+    const fullHeaders = [...baseHeaders, ...specificHeaders];
 
-    const csvRows = rows.map(row => {
-      const conditionMap: Record<string, string> = {
-        "New": "1000",
-        "Open box": "1500",
-        "Used": "3000",
-        "For parts": "7000",
-      };
+    // eBay condition mapping - use text values
+    const conditionMap: Record<string, string> = {
+      "New": "NEW",
+      "Open box": "OPEN_BOX",
+      "Used": "USED_EXCELLENT", // Default used to excellent
+      "For parts": "FOR_PARTS_OR_NOT_WORKING",
+    };
 
-      // Get numeric category ID - extract from category string if it contains one
-      const categoryId = row.category?.match(/\d+/)?.[0] || "20091"; // Default to collectibles
-
+    const csvRows = rows.map((row, index) => {
+      // Extract numeric category ID from category string
+      const categoryId = row.category?.match(/\d+/)?.[0] || "";
+      
       const base = [
-        "Draft", // Action - creates drafts for review instead of going live
-        "", // ItemID (empty for new)
+        "Draft",
+        row.lot_number?.toString() || (index + 1).toString(), // SKU = lot number
+        categoryId,
         sanitizeForCSV(row.title || ""),
-        sanitizeForCSV(row.description || ""),
-        categoryId, // Must be numeric category ID
-        conditionMap[row.condition || ""] || "3000",
-        (row.image_urls || []).join("|"),
-        "1", // Quantity
+        "", // UPC - leave empty
         row.price?.toString() || "0",
-        "FixedPrice",
-        "GTC", // Good 'Til Cancelled - required listing duration
-        row.shipping_type === "free" ? "Free" : (row.shipping_type === "calculated" ? "Calculated" : "Flat"),
-        "USPSPriority",
-        row.shipping_cost?.toString() || "0",
-        row.handling_time?.toString() || "3",
-        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted",
-        `Days_${row.return_period || 30}`,
-        "MoneyBack",
-        row.return_shipping === "seller" ? "Seller" : "Buyer",
-        row.promotion_type === "fluctuating" ? "VARIABLE" : "STANDARD",
-        row.promotion_rate?.toString() || "0"
+        "1", // Quantity
+        (row.image_urls || []).join("|"),
+        conditionMap[row.condition || ""] || "USED_EXCELLENT",
+        toHtmlDescription(row.description || ""),
+        "FixedPrice"
       ];
 
-      // Add item specifics values - also sanitize these
+      // Add item specifics values in order
       const specificValues = Array.from(allSpecifics).map(s => 
         sanitizeForCSV(row.item_specifics?.[s] || "")
       );
@@ -214,12 +216,21 @@ export function EbayBatchPanel({
       return [...base, ...specificValues];
     });
 
+    // Build CSV with info headers matching eBay template
+    const infoLines = [
+      '#INFO,Version=0.0.2,Template= eBay-draft-listings-template_US',
+      '#INFO Action and Category ID are required fields. 1) Set Action to Draft 2) Please find the category ID for your listings here: https://pages.ebay.com/sellerinformation/news/categorychanges.html',
+      '"#INFO After you\'ve successfully uploaded your draft from the Seller Hub Reports tab, complete your drafts to active listings here: https://www.ebay.com/sh/lst/drafts"',
+      '#INFO'
+    ];
+
     const csvContent = [
+      ...infoLines,
       fullHeaders.join(","),
       ...csvRows.map(row => row.map(cell => 
         `"${String(cell).replace(/"/g, '""')}"`
       ).join(","))
-    ].join("\r\n"); // Use CRLF for better compatibility
+    ].join("\r\n");
 
     return csvContent;
   };
