@@ -22,18 +22,58 @@ Requirements:
 - Title: Create a keyword-rich title (max 80 characters) optimized for Cassini search. Include brand, model, key features, condition.
 - Description: Write a detailed, professional description with measurements, condition details, history if applicable.
 - Price: Suggest a competitive price based on typical sold prices for similar items.
-- Category: Suggest the most appropriate eBay category.
-- Condition: Assess condition (New, Like New, Very Good, Good, Acceptable).
-- Item Specifics: List relevant item specifics as key-value pairs.
+- Category: Suggest the most appropriate eBay category WITH the numeric category ID (e.g., "Collectibles > Decorative Collectibles > Figurines (36019)").
+- Condition: Assess condition (New, Open box, Used, For parts).
+
+ITEM SPECIFICS (CRITICAL FOR SEARCH VISIBILITY):
+Generate as many relevant item specifics as possible. eBay's Cassini algorithm heavily weights filled item specifics.
+
+ALWAYS INCLUDE THESE CORE SPECIFICS (when applicable):
+- Brand: The manufacturer or brand name (use "Unbranded" if unknown)
+- Type: The specific type/subcategory of item
+- Material: Primary material(s) - be specific (e.g., "Sterling Silver", "14K Gold", "Porcelain")
+- Color: Primary color(s)
+- Style: Design style (e.g., "Art Deco", "Mid-Century Modern", "Victorian")
+- Era/Year: Time period or year of manufacture
+- Country/Region of Manufacture: Origin country
+- Condition Description: Brief condition summary
+
+CATEGORY-SPECIFIC SPECIFICS TO INCLUDE:
+
+For Jewelry/Watches:
+- Metal Purity, Gemstone, Ring Size, Pendant/Charm Type, Watch Brand, Movement Type, Band Material
+
+For Clothing/Accessories:
+- Size, Size Type, Gender, Pattern, Sleeve Length, Neckline, Occasion
+
+For Collectibles/Antiques:
+- Maker/Artist, Pattern Name, Age, Provenance, Signature/Markings, Original/Reproduction
+- Theme, Character, Franchise
+
+For Electronics:
+- Model Number, MPN, UPC, Connectivity, Storage Capacity, Screen Size
+
+For Home & Garden:
+- Room, Mounting, Features, Dimensions (Height, Width, Depth), Weight, Set Includes
+
+For Art:
+- Subject, Medium, Artist, Signed, Frame Included, Size Classification
 
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (max 80 chars)",
   "description": "string",
   "price": number,
-  "category": "string",
+  "category": "string (include numeric ID)",
   "condition": "string",
-  "itemSpecifics": { "key": "value" }
+  "itemSpecifics": {
+    "Brand": "value",
+    "Type": "value",
+    "Material": "value",
+    "Color": "value",
+    "Style": "value",
+    "additional_specific": "value"
+  }
 }`,
 
   facebook: `You are an expert Facebook Marketplace listing creator.
