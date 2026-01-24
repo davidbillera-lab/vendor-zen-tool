@@ -9,7 +9,9 @@ import {
   Store, 
   Trash2,
   Edit2,
-  Eye
+  Eye,
+  Zap,
+  Settings2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -20,6 +22,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { EbayItemSpecificsEditor } from "./EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "./EbayShippingSettings";
 
@@ -62,6 +69,11 @@ export function EbayBatchPanel({
   const [editingRow, setEditingRow] = useState<EbayRow | null>(null);
   const [viewingRow, setViewingRow] = useState<EbayRow | null>(null);
   const [saving, setSaving] = useState(false);
+  const [zapierWebhookUrl, setZapierWebhookUrl] = useState(() => 
+    localStorage.getItem('ebay_zapier_webhook_url') || ''
+  );
+  const [sendingToZapier, setSendingToZapier] = useState(false);
+  const [showZapierSettings, setShowZapierSettings] = useState(false);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this listing?")) return;
@@ -135,12 +147,8 @@ export function EbayBatchPanel({
     toast({ title: "Listing updated" });
   };
 
-  const downloadCSV = () => {
-    if (rows.length === 0) {
-      toast({ title: "No data", description: "Add some listings first", variant: "destructive" });
-      return;
-    }
-
+  // Generate CSV content (reusable helper)
+  const generateCSVContent = () => {
     // eBay File Exchange format headers
     const headers = [
       "Action", "ItemID", "Title", "Description", "Category", "ConditionID",
@@ -208,6 +216,17 @@ export function EbayBatchPanel({
       ).join(","))
     ].join("\r\n"); // Use CRLF for better compatibility
 
+    return csvContent;
+  };
+
+  const downloadCSV = () => {
+    if (rows.length === 0) {
+      toast({ title: "No data", description: "Add some listings first", variant: "destructive" });
+      return;
+    }
+
+    const csvContent = generateCSVContent();
+
     // Add UTF-8 BOM for proper Google Sheets/Excel recognition
     const BOM = '\uFEFF';
     const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" });
@@ -221,6 +240,88 @@ export function EbayBatchPanel({
     URL.revokeObjectURL(url);
     
     toast({ title: "CSV Downloaded", description: `${rows.length} listings exported for eBay File Exchange` });
+  };
+
+  const saveZapierWebhookUrl = (url: string) => {
+    setZapierWebhookUrl(url);
+    localStorage.setItem('ebay_zapier_webhook_url', url);
+  };
+
+  const sendToZapier = async (retryCount = 0) => {
+    if (rows.length === 0) {
+      toast({ title: "No data", description: "Add some listings first", variant: "destructive" });
+      return;
+    }
+
+    if (!zapierWebhookUrl) {
+      toast({ 
+        title: "Webhook URL required", 
+        description: "Please configure your Zapier webhook URL first", 
+        variant: "destructive" 
+      });
+      setShowZapierSettings(true);
+      return;
+    }
+
+    setSendingToZapier(true);
+
+    try {
+      const csvContent = generateCSVContent();
+      const timestamp = new Date().toISOString();
+
+      const payload = {
+        csv_data: csvContent,
+        timestamp: timestamp,
+        app_name: "ResaleHub",
+        listing_count: rows.length,
+        filename: `ebay-listings-${timestamp.split("T")[0]}.csv`
+      };
+
+      console.log("Sending eBay CSV to Zapier:", { 
+        url: zapierWebhookUrl, 
+        listingCount: rows.length,
+        timestamp 
+      });
+
+      const response = await fetch(zapierWebhookUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        mode: "no-cors", // Required for Zapier webhooks
+        body: JSON.stringify(payload),
+      });
+
+      // Since we're using no-cors, we won't get a proper response status
+      // Zapier webhooks typically succeed if no error is thrown
+      toast({ 
+        title: "Sent to Zapier!", 
+        description: `${rows.length} eBay listings sent successfully. Check your Zap history to confirm.` 
+      });
+      
+      console.log("Zapier webhook sent successfully");
+    } catch (error) {
+      console.error("Error sending to Zapier:", error);
+      
+      // Retry once if first attempt fails
+      if (retryCount < 1) {
+        console.log("Retrying Zapier webhook...");
+        toast({ 
+          title: "Retrying...", 
+          description: "First attempt failed, retrying..." 
+        });
+        await sendToZapier(retryCount + 1);
+        return;
+      }
+      
+      toast({ 
+        title: "Zapier upload failed", 
+        description: "Failed to send CSV to Zapier. Please check your webhook URL and try again.", 
+        variant: "destructive" 
+      });
+    } finally {
+      setSendingToZapier(false);
+    }
   };
 
   if (!projectId) {
@@ -263,6 +364,27 @@ export function EbayBatchPanel({
                   <Download className="h-4 w-4" />
                   Export CSV
                 </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => sendToZapier()} 
+                  disabled={sendingToZapier}
+                  className="gap-2"
+                >
+                  {sendingToZapier ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Zap className="h-4 w-4" />
+                  )}
+                  {sendingToZapier ? "Sending..." : "Send to Zapier"}
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="icon"
+                  onClick={() => setShowZapierSettings(!showZapierSettings)}
+                  className="h-9 w-9"
+                >
+                  <Settings2 className="h-4 w-4" />
+                </Button>
                 <Button variant="outline" onClick={handleClearAll}>
                   Clear All
                 </Button>
@@ -270,6 +392,33 @@ export function EbayBatchPanel({
             )}
           </div>
         </div>
+
+        {/* Zapier Settings Collapsible */}
+        <Collapsible open={showZapierSettings} onOpenChange={setShowZapierSettings}>
+          <CollapsibleContent className="border-t border-border pt-4 space-y-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Zap className="h-4 w-4 text-orange-500" />
+              <span className="text-sm font-medium">Zapier Integration</span>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="zapier-webhook" className="text-xs text-muted-foreground">
+                Webhook URL (from your Zapier trigger)
+              </Label>
+              <Input
+                id="zapier-webhook"
+                type="url"
+                placeholder="https://hooks.zapier.com/hooks/catch/..."
+                value={zapierWebhookUrl}
+                onChange={(e) => saveZapierWebhookUrl(e.target.value)}
+                className="text-sm"
+              />
+              <p className="text-xs text-muted-foreground">
+                Create a Zap with "Webhooks by Zapier" trigger (Catch Hook) and paste the URL here.
+                The CSV data will be sent as JSON with fields: csv_data, timestamp, app_name.
+              </p>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
 
         {rows.length > 0 && (
           <div className="border-t border-border pt-4 space-y-2">
