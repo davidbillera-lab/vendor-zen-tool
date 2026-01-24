@@ -68,7 +68,8 @@ export function EbayBatchPanel({
   const [saving, setSaving] = useState(false);
   const [showUploadInstructions, setShowUploadInstructions] = useState(false);
   const [defaultCategoryId, setDefaultCategoryId] = useState<string>("");
-  const [itemLocation, setItemLocation] = useState<string>("United States");
+  // eBay draft CSV requires a non-empty location (typically a ZIP/postal code or City, ST)
+  const [itemLocation, setItemLocation] = useState<string>("");
   const [backfillingCategories, setBackfillingCategories] = useState(false);
 
   // Persist default category and location per project
@@ -102,7 +103,12 @@ export function EbayBatchPanel({
   useEffect(() => {
     if (!projectId) return;
     try {
-      localStorage.setItem(`ebay_location_${projectId}`, itemLocation.trim() || "United States");
+      const normalized = itemLocation.trim();
+      if (normalized) {
+        localStorage.setItem(`ebay_location_${projectId}`, normalized);
+      } else {
+        localStorage.removeItem(`ebay_location_${projectId}`);
+      }
     } catch {
       // ignore
     }
@@ -200,8 +206,8 @@ export function EbayBatchPanel({
 
   // Generate CSV content matching eBay's official draft template
   const generateCSVContent = () => {
-    // Get saved location from localStorage or use default
-    const savedLocation = localStorage.getItem(`ebay_location_${projectId}`) || "United States";
+    // Get saved location from state/localStorage (eBay expects a ZIP/postal code or City, ST)
+    const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
     // eBay's official draft template headers - Item location is REQUIRED
     const baseHeaders = [
@@ -402,6 +408,16 @@ export function EbayBatchPanel({
       return;
     }
 
+    const normalizedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
+    if (!normalizedLocation) {
+      toast({
+        title: "Missing Location",
+        description: "eBay requires an Item location (usually a ZIP/postal code or City, ST). Add it once, then re-download.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const csvContent = generateCSVContent();
 
     // Add UTF-8 BOM for proper Google Sheets/Excel recognition
@@ -457,7 +473,7 @@ export function EbayBatchPanel({
             <div className="flex items-center gap-2">
               <Label className="text-xs text-muted-foreground whitespace-nowrap">Location</Label>
               <Input
-                placeholder="City, State or Country"
+                placeholder="ZIP or City, ST"
                 value={itemLocation}
                 onChange={(e) => setItemLocation(e.target.value)}
                 className="w-40"
