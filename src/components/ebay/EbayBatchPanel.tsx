@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { generateListing } from "@/lib/api/listings";
 import {
   Dialog,
   DialogContent,
@@ -67,6 +68,7 @@ export function EbayBatchPanel({
   const [saving, setSaving] = useState(false);
   const [showUploadInstructions, setShowUploadInstructions] = useState(false);
   const [defaultCategoryId, setDefaultCategoryId] = useState<string>("");
+  const [backfillingCategories, setBackfillingCategories] = useState(false);
 
   // Persist default category per project so it doesn't reset (prevents repeated "missing category" blocks)
   useEffect(() => {
@@ -283,6 +285,88 @@ export function EbayBatchPanel({
     return missing;
   };
 
+  const backfillMissingCategoryIds = async () => {
+    if (!projectId) return;
+    const missingRowIds = rows
+      .filter((row) => {
+        const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
+        return !extractedCategoryId;
+      })
+      .map((r) => r.id);
+
+    if (missingRowIds.length === 0) {
+      toast({ title: "All set", description: "All listings already have category IDs." });
+      return;
+    }
+
+    setBackfillingCategories(true);
+    try {
+      const missingRows = rows.filter((r) => missingRowIds.includes(r.id));
+
+      const results = await Promise.all(
+        missingRows.map(async (row) => {
+          if (!row.image_urls || row.image_urls.length === 0) {
+            return { id: row.id, categoryId: null as number | null, error: "No images on this row" };
+          }
+
+          try {
+            const listing = await generateListing(
+              'ebay',
+              row.image_urls,
+              'Only identify the most accurate numeric eBay categoryId for the item shown. If unsure, choose the closest specific categoryId.'
+            );
+
+            const categoryId = (listing as any)?.categoryId;
+            const asNum = Number(categoryId);
+            if (!categoryId || Number.isNaN(asNum)) {
+              return { id: row.id, categoryId: null as number | null, error: "No categoryId returned" };
+            }
+
+            const { error: updateError } = await supabase
+              .from('ebay_batch_rows')
+              .update({ category: String(asNum) })
+              .eq('id', row.id);
+
+            if (updateError) {
+              return { id: row.id, categoryId: null as number | null, error: updateError.message };
+            }
+
+            return { id: row.id, categoryId: asNum, error: null as string | null };
+          } catch (e) {
+            return { id: row.id, categoryId: null as number | null, error: e instanceof Error ? e.message : 'Unknown error' };
+          }
+        })
+      );
+
+      const succeeded = results.filter((r) => r.error == null && r.categoryId != null);
+      const failed = results.filter((r) => r.error != null);
+
+      if (succeeded.length > 0) {
+        onRowsChange(
+          rows.map((r) => {
+            const hit = succeeded.find((s) => s.id === r.id);
+            return hit ? { ...r, category: String(hit.categoryId) } : r;
+          })
+        );
+      }
+
+      if (failed.length === 0) {
+        toast({
+          title: "Category IDs filled",
+          description: `Updated ${succeeded.length} listing(s). You can download the CSV now.`,
+        });
+      } else {
+        toast({
+          title: "Some category IDs could not be filled",
+          description: `Updated ${succeeded.length}. Failed ${failed.length}. Open the row(s) and try again or set a default ID as a fallback.`,
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setBackfillingCategories(false);
+    }
+  };
+
   const downloadCSV = () => {
     if (rows.length === 0) {
       toast({ title: "No data", description: "Add some listings first", variant: "destructive" });
@@ -366,6 +450,18 @@ export function EbayBatchPanel({
                 className="w-32"
               />
             </div>
+
+            {rows.length > 0 && getMissingCategoryLots().length > 0 && (
+              <Button
+                variant="outline"
+                onClick={backfillMissingCategoryIds}
+                disabled={backfillingCategories}
+                className="gap-2"
+              >
+                {backfillingCategories ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                Auto-fill Category IDs
+              </Button>
+            )}
 
             {rows.length > 0 && (
               <Button variant="gold" onClick={downloadCSV} className="gap-2">
