@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { 
   Download, 
   Loader2, 
@@ -11,7 +12,8 @@ import {
   Edit2,
   Eye,
   Upload,
-  ExternalLink
+  ExternalLink,
+  ImageOff
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -71,6 +73,8 @@ export function EbayBatchPanel({
   // eBay draft CSV requires a non-empty location (typically a ZIP/postal code or City, ST)
   const [itemLocation, setItemLocation] = useState<string>("");
   const [backfillingCategories, setBackfillingCategories] = useState(false);
+  // Option to export without images to avoid EPS/self-hosted conflicts
+  const [excludeImages, setExcludeImages] = useState(false);
 
   // Persist default category and location per project
   useEffect(() => {
@@ -205,7 +209,8 @@ export function EbayBatchPanel({
   };
 
   // Generate CSV content matching eBay's official draft template
-  const generateCSVContent = () => {
+  // If excludeImages is true, we skip the image URLs to avoid EPS/self-hosted conflicts
+  const generateCSVContent = (skipImages: boolean = false) => {
     // Get saved location from state/localStorage (eBay expects a ZIP/postal code or City, ST)
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
@@ -263,7 +268,7 @@ export function EbayBatchPanel({
         row.price?.toString() || "0",
         "1", // Quantity
         savedLocation, // Item location - REQUIRED by eBay
-        (row.image_urls || []).join("|"),
+        skipImages ? "" : (row.image_urls || []).join("|"), // Skip images if requested
         conditionMap[row.condition || ""] || "3000",
         toHtmlDescription(row.description || ""),
         "FixedPrice"
@@ -418,7 +423,7 @@ export function EbayBatchPanel({
       return;
     }
 
-    const csvContent = generateCSVContent();
+    const csvContent = generateCSVContent(excludeImages);
 
     // Add UTF-8 BOM for proper Google Sheets/Excel recognition
     const BOM = '\uFEFF';
@@ -432,7 +437,8 @@ export function EbayBatchPanel({
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     
-    toast({ title: "CSV Downloaded", description: `${rows.length} listings ready for eBay bulk upload` });
+    const imageNote = excludeImages ? " (without images - add them in Seller Hub)" : "";
+    toast({ title: "CSV Downloaded", description: `${rows.length} listings ready for eBay bulk upload${imageNote}` });
     setShowUploadInstructions(true);
   };
   if (!projectId) {
@@ -508,6 +514,20 @@ export function EbayBatchPanel({
             )}
 
             {rows.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="exclude-images"
+                  checked={excludeImages}
+                  onCheckedChange={(checked) => setExcludeImages(checked === true)}
+                />
+                <Label htmlFor="exclude-images" className="text-xs text-muted-foreground cursor-pointer flex items-center gap-1">
+                  <ImageOff className="h-3 w-3" />
+                  Export without images
+                </Label>
+              </div>
+            )}
+
+            {rows.length > 0 && (
               <Button variant="gold" onClick={downloadCSV} className="gap-2">
                 <Download className="h-4 w-4" />
                 Download CSV for eBay
@@ -532,8 +552,17 @@ export function EbayBatchPanel({
                 <li>Click <strong>"File upload"</strong></li>
                 <li>Select <strong>"Create new drafts"</strong></li>
                 <li>Upload the CSV file you just downloaded</li>
+                {excludeImages && (
+                  <li className="text-amber-600 font-medium">Add images to each draft directly in Seller Hub</li>
+                )}
                 <li>Review and publish your drafts</li>
               </ol>
+              {excludeImages && (
+                <p className="text-xs text-amber-600 mt-2">
+                  <ImageOff className="h-3 w-3 inline mr-1" />
+                  Images were excluded to avoid EPS conflicts. Add them through eBay's interface.
+                </p>
+              )}
               <Button 
                 variant="link" 
                 className="h-auto p-0 mt-2 gap-1"
