@@ -73,7 +73,7 @@ export function EbayBatchPanel({
     localStorage.getItem('ebay_zapier_webhook_url') || ''
   );
   const [sendingToZapier, setSendingToZapier] = useState(false);
-  const [showZapierSettings, setShowZapierSettings] = useState(false);
+  const [showZapierSettings, setShowZapierSettings] = useState(true);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this listing?")) return;
