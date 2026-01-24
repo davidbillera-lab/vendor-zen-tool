@@ -149,10 +149,12 @@ export function EbayBatchPanel({
       .trim();
   };
 
-  // Convert description to basic HTML for eBay
+  // Convert description to basic HTML for eBay - MUST sanitize first to prevent CSV row breaks
   const toHtmlDescription = (text: string): string => {
+    // First sanitize to remove ALL line breaks, then wrap in HTML
     const sanitized = sanitizeForCSV(text);
-    return `<p>${sanitized}</p>`;
+    // Double-escape quotes for CSV field embedding
+    return `<p>${sanitized.replace(/"/g, '""')}</p>`;
   };
 
   // Generate CSV content matching eBay's official draft template
