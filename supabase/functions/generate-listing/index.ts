@@ -21,8 +21,62 @@ CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanat
 Requirements:
 - Title: Create a keyword-rich title (max 80 characters) optimized for Cassini search. Include brand, model, key features, condition.
 - Description: Write a detailed, professional description with measurements, condition details, history if applicable.
-- Category: Suggest the most appropriate eBay category WITH the numeric category ID (e.g., "Collectibles > Decorative Collectibles > Figurines (36019)").
+- Category: Suggest the most appropriate eBay category name.
+- CategoryId: You MUST provide the NUMERIC eBay category ID (just the number, e.g., 36019). This is REQUIRED for bulk upload.
 - Condition: Assess condition (New, Open box, Used, For parts).
+
+CATEGORY ID LOOKUP (USE THESE COMMON IDs):
+When identifying items, use these common eBay numeric category IDs:
+
+COLLECTIBLES:
+- Decorative Collectibles > Figurines: 36019
+- Vintage & Antique Jewelry: 48579
+- Coins & Paper Money > Coins > US: 253
+- Sports Memorabilia: 64482
+- Vintage Clothing: 175759
+
+ART & ANTIQUES:
+- Art > Paintings: 551
+- Art > Prints: 360
+- Antiques > Decorative Arts: 20082
+- Antiques > Furniture: 20091
+- Pottery & Glass > Pottery: 870
+
+JEWELRY & WATCHES:
+- Fine Jewelry > Rings: 67681
+- Fine Jewelry > Necklaces: 67652
+- Costume Jewelry: 10968
+- Watches > Wristwatches: 31387
+
+HOME & GARDEN:
+- Home Décor: 10033
+- Kitchen, Dining & Bar: 20625
+- Lamps, Lighting & Ceiling Fans: 20697
+- Rugs & Carpets: 20571
+
+ELECTRONICS:
+- Consumer Electronics: 293
+- Cameras & Photo: 625
+- Video Games & Consoles: 1249
+
+CLOTHING & ACCESSORIES:
+- Men's Clothing: 1059
+- Women's Clothing: 15724
+- Shoes: 93427
+- Handbags: 169291
+
+BOOKS & MEDIA:
+- Books: 267
+- Music CDs: 176984
+- DVDs & Movies: 617
+
+TOYS & HOBBIES:
+- Action Figures: 246
+- Dolls: 237
+- Games: 233
+- Models & Kits: 1188
+
+If the item doesn't match these categories, provide your best estimate of the correct numeric category ID based on your knowledge of eBay's category structure.
 
 PRICING (CRITICAL - BASE ON SOLD COMPS):
 You MUST price competitively based on your knowledge of eBay SOLD listings (completed sales), not active listings.
@@ -79,7 +133,8 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
   "title": "string (max 80 chars)",
   "description": "string",
   "price": number (based on eBay sold comps),
-  "category": "string (include numeric ID)",
+  "category": "string (human readable category name)",
+  "categoryId": number (REQUIRED - numeric eBay category ID like 36019),
   "condition": "string",
   "itemSpecifics": {
     "Brand": "value",

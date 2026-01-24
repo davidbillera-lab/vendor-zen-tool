@@ -461,6 +461,11 @@ export default function CreateListing() {
             setEbayItemSpecifics(listing.itemSpecifics as Record<string, string>);
           }
           
+          // Use numeric categoryId from AI if available, otherwise fall back to category string
+          const categoryValue = listing.categoryId 
+            ? String(listing.categoryId) 
+            : (listing.category || '');
+          
           const { data, error } = await supabase
             .from('ebay_batch_rows')
             .insert({
@@ -469,7 +474,7 @@ export default function CreateListing() {
               title: listing.title || '',
               description: listing.description || '',
               price: listing.price || 0,
-              category: listing.category || '',
+              category: categoryValue,
               condition: listing.condition || '',
               item_specifics: listing.itemSpecifics || {},
               image_urls: imageUrls,
