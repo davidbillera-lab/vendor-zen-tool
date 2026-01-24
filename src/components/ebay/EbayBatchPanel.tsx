@@ -404,14 +404,59 @@ export function EbayBatchPanel({
               <Label htmlFor="zapier-webhook" className="text-xs text-muted-foreground">
                 Webhook URL (from your Zapier trigger)
               </Label>
-              <Input
-                id="zapier-webhook"
-                type="url"
-                placeholder="https://hooks.zapier.com/hooks/catch/..."
-                value={zapierWebhookUrl}
-                onChange={(e) => saveZapierWebhookUrl(e.target.value)}
-                className="text-sm"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="zapier-webhook"
+                  type="url"
+                  placeholder="https://hooks.zapier.com/hooks/catch/..."
+                  value={zapierWebhookUrl}
+                  onChange={(e) => saveZapierWebhookUrl(e.target.value)}
+                  className="text-sm flex-1"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    if (!zapierWebhookUrl) {
+                      toast({ 
+                        title: "No webhook URL", 
+                        description: "Enter a webhook URL first", 
+                        variant: "destructive" 
+                      });
+                      return;
+                    }
+                    try {
+                      await fetch(zapierWebhookUrl, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        mode: "no-cors",
+                        body: JSON.stringify({
+                          csv_data: "Action,Title,Price\nTest,Sample Listing,9.99",
+                          timestamp: new Date().toISOString(),
+                          app_name: "ResaleHub",
+                          listing_count: 1,
+                          filename: "test-webhook.csv",
+                          is_test: true
+                        }),
+                      });
+                      toast({ 
+                        title: "Test sent!", 
+                        description: "Check your Zap history to confirm it was received." 
+                      });
+                    } catch {
+                      toast({ 
+                        title: "Test failed", 
+                        description: "Could not reach the webhook URL", 
+                        variant: "destructive" 
+                      });
+                    }
+                  }}
+                  className="gap-1"
+                >
+                  <Zap className="h-3 w-3" />
+                  Test
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Create a Zap with "Webhooks by Zapier" trigger (Catch Hook) and paste the URL here.
                 The CSV data will be sent as JSON with fields: csv_data, timestamp, app_name.
