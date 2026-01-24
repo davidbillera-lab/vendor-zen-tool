@@ -16,6 +16,7 @@ export interface GeneratedListing {
   description: string;
   price?: number;
   category?: string;
+  categoryId?: number; // eBay numeric category ID
   condition?: string;
   itemSpecifics?: Record<string, string>;
   // LiveAuctioneers specific
