@@ -359,36 +359,36 @@ export function EbayBatchPanel({
               className="w-20"
             />
             {rows.length > 0 && (
-              <>
-                <Button variant="gold" onClick={downloadCSV} className="gap-2">
-                  <Download className="h-4 w-4" />
-                  Export CSV
-                </Button>
-                <Button 
-                  variant="outline" 
-                  onClick={() => sendToZapier()} 
-                  disabled={sendingToZapier}
-                  className="gap-2"
-                >
-                  {sendingToZapier ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Zap className="h-4 w-4" />
-                  )}
-                  {sendingToZapier ? "Sending..." : "Send to Zapier"}
-                </Button>
-                <Button 
-                  variant="ghost" 
-                  size="icon"
-                  onClick={() => setShowZapierSettings(!showZapierSettings)}
-                  className="h-9 w-9"
-                >
-                  <Settings2 className="h-4 w-4" />
-                </Button>
-                <Button variant="outline" onClick={handleClearAll}>
-                  Clear All
-                </Button>
-              </>
+              <Button variant="gold" onClick={downloadCSV} className="gap-2">
+                <Download className="h-4 w-4" />
+                Export CSV
+              </Button>
+            )}
+            <Button 
+              variant="outline" 
+              onClick={() => sendToZapier()} 
+              disabled={sendingToZapier || rows.length === 0}
+              className="gap-2"
+            >
+              {sendingToZapier ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Zap className="h-4 w-4" />
+              )}
+              {sendingToZapier ? "Sending..." : "Send to Zapier"}
+            </Button>
+            <Button 
+              variant="ghost" 
+              size="icon"
+              onClick={() => setShowZapierSettings(!showZapierSettings)}
+              className="h-9 w-9"
+            >
+              <Settings2 className="h-4 w-4" />
+            </Button>
+            {rows.length > 0 && (
+              <Button variant="outline" onClick={handleClearAll}>
+                Clear All
+              </Button>
             )}
           </div>
         </div>
