@@ -379,11 +379,12 @@ export function EbayBatchPanel({
             </Button>
             <Button 
               variant="ghost" 
-              size="icon"
+              size="sm"
               onClick={() => setShowZapierSettings(!showZapierSettings)}
-              className="h-9 w-9"
+              className="gap-1"
             >
               <Settings2 className="h-4 w-4" />
+              Zapier Settings
             </Button>
             {rows.length > 0 && (
               <Button variant="outline" onClick={handleClearAll}>
