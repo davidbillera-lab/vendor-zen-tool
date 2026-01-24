@@ -21,12 +21,17 @@ CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanat
 Requirements:
 - Title: Create a keyword-rich title (max 80 characters) optimized for Cassini search. Include brand, model, key features, condition.
 - Description: Write a detailed, professional description with measurements, condition details, history if applicable.
-- Category: Suggest the most appropriate eBay category name.
-- CategoryId: You MUST provide the NUMERIC eBay category ID (just the number, e.g., 36019). This is REQUIRED for bulk upload.
+- Category: Suggest the most appropriate eBay category name based on your image analysis.
+- CategoryId: You MUST provide the accurate NUMERIC eBay category ID based on what you see in the image. Analyze the item type, material, era, and use case to determine the most specific appropriate category. Use your extensive knowledge of eBay's full category tree (thousands of categories) - not just common ones. The ID must match the actual item shown.
 - Condition: Assess condition (New, Open box, Used, For parts).
 
-CATEGORY ID LOOKUP (USE THESE COMMON IDs):
-When identifying items, use these common eBay numeric category IDs:
+CATEGORY IDENTIFICATION PROCESS:
+1. First, carefully analyze the image to identify WHAT the item actually is
+2. Determine the item's primary category (e.g., is it jewelry, furniture, electronics, clothing, art, etc.)
+3. Narrow down to the most SPECIFIC subcategory that matches (e.g., not just "Jewelry" but "Fine Jewelry > Rings > Diamond")
+4. Provide the numeric category ID for that specific subcategory
+
+REFERENCE CATEGORY IDs (examples, but use your full knowledge for accuracy):
 
 COLLECTIBLES:
 - Decorative Collectibles > Figurines: 36019
