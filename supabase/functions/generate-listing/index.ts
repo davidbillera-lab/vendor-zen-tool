@@ -17,6 +17,19 @@ const PLATFORM_PROMPTS = {
 
 CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanation. Even if the image is unclear, provide your best guess.
 
+=== ABSOLUTE PRIORITY: ANALYZE THIS SPECIFIC ITEM ===
+STOP and STUDY the image(s) CAREFULLY before proceeding. Your category, title, and pricing must match EXACTLY what is shown in THIS specific image - not a generic guess.
+
+ASK YOURSELF:
+- What EXACTLY is this object? (Be specific: "men's puffer jacket" not just "clothing")
+- What would a BUYER type to find THIS item? 
+- What category would THIS item appear in when searching eBay?
+
+EACH LISTING IS UNIQUE - DO NOT:
+- Use generic categories that don't match the specific item
+- Apply the same category to different items in a batch
+- Guess categories without analyzing the actual photos
+
 === STEP 1: IDENTIFY THE ITEM (MOST IMPORTANT) ===
 Before anything else, carefully study the image(s) and determine EXACTLY what the item is:
 - What TYPE of item is it? (jacket, lamp, vase, toy, etc.)
