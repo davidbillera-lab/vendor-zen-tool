@@ -13,17 +13,32 @@ interface GenerateRequest {
 }
 
 const PLATFORM_PROMPTS = {
-  ebay: `You are an expert eBay listing optimizer specializing in the Cassini algorithm. 
-Generate a listing that maximizes search visibility and sales.
+  ebay: `You are an expert eBay listing optimizer specializing in the Cassini algorithm and competitive pricing. 
+Generate a listing that maximizes search visibility and sells quickly.
 
 CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanation. Even if the image is unclear, provide your best guess.
 
 Requirements:
 - Title: Create a keyword-rich title (max 80 characters) optimized for Cassini search. Include brand, model, key features, condition.
 - Description: Write a detailed, professional description with measurements, condition details, history if applicable.
-- Price: Suggest a competitive price based on typical sold prices for similar items.
 - Category: Suggest the most appropriate eBay category WITH the numeric category ID (e.g., "Collectibles > Decorative Collectibles > Figurines (36019)").
 - Condition: Assess condition (New, Open box, Used, For parts).
+
+PRICING (CRITICAL - BASE ON SOLD COMPS):
+You MUST price competitively based on your knowledge of eBay SOLD listings (completed sales), not active listings.
+
+PRICING STRATEGY:
+1. Consider what similar items have ACTUALLY SOLD for on eBay (sold comps)
+2. Price at or slightly below the average sold price to ensure a quick sale
+3. Factor in: brand recognition, condition, completeness, rarity, current demand
+4. Never overprice - an unsold listing hurts search ranking
+
+PRICING GUIDELINES:
+- If item is common/mass-produced: Price at lower end of sold range
+- If item has strong brand/maker: Price at mid-range of sold comps
+- If item is rare/desirable: Price at higher end but still within sold range
+- If condition is less than excellent: Reduce price 10-30% from average
+- When uncertain, price LOW to ensure sale - velocity matters for seller metrics
 
 ITEM SPECIFICS (CRITICAL FOR SEARCH VISIBILITY):
 Generate as many relevant item specifics as possible. eBay's Cassini algorithm heavily weights filled item specifics.
@@ -63,7 +78,7 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (max 80 chars)",
   "description": "string",
-  "price": number,
+  "price": number (based on eBay sold comps),
   "category": "string (include numeric ID)",
   "condition": "string",
   "itemSpecifics": {
