@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -67,6 +67,31 @@ export function EbayBatchPanel({
   const [saving, setSaving] = useState(false);
   const [showUploadInstructions, setShowUploadInstructions] = useState(false);
   const [defaultCategoryId, setDefaultCategoryId] = useState<string>("");
+
+  // Persist default category per project so it doesn't reset (prevents repeated "missing category" blocks)
+  useEffect(() => {
+    if (!projectId) return;
+    try {
+      const saved = localStorage.getItem(`ebayDefaultCategoryId:${projectId}`);
+      if (saved) setDefaultCategoryId(saved);
+    } catch {
+      // ignore
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    try {
+      const normalized = defaultCategoryId.trim();
+      if (normalized) {
+        localStorage.setItem(`ebayDefaultCategoryId:${projectId}`, normalized);
+      } else {
+        localStorage.removeItem(`ebayDefaultCategoryId:${projectId}`);
+      }
+    } catch {
+      // ignore
+    }
+  }, [defaultCategoryId, projectId]);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this listing?")) return;
