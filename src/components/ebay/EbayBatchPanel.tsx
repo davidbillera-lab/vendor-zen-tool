@@ -68,14 +68,17 @@ export function EbayBatchPanel({
   const [saving, setSaving] = useState(false);
   const [showUploadInstructions, setShowUploadInstructions] = useState(false);
   const [defaultCategoryId, setDefaultCategoryId] = useState<string>("");
+  const [itemLocation, setItemLocation] = useState<string>("United States");
   const [backfillingCategories, setBackfillingCategories] = useState(false);
 
-  // Persist default category per project so it doesn't reset (prevents repeated "missing category" blocks)
+  // Persist default category and location per project
   useEffect(() => {
     if (!projectId) return;
     try {
-      const saved = localStorage.getItem(`ebayDefaultCategoryId:${projectId}`);
-      if (saved) setDefaultCategoryId(saved);
+      const savedCategory = localStorage.getItem(`ebayDefaultCategoryId:${projectId}`);
+      if (savedCategory) setDefaultCategoryId(savedCategory);
+      const savedLocation = localStorage.getItem(`ebay_location_${projectId}`);
+      if (savedLocation) setItemLocation(savedLocation);
     } catch {
       // ignore
     }
@@ -94,6 +97,16 @@ export function EbayBatchPanel({
       // ignore
     }
   }, [defaultCategoryId, projectId]);
+
+  // Persist item location
+  useEffect(() => {
+    if (!projectId) return;
+    try {
+      localStorage.setItem(`ebay_location_${projectId}`, itemLocation.trim() || "United States");
+    } catch {
+      // ignore
+    }
+  }, [itemLocation, projectId]);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this listing?")) return;
@@ -187,7 +200,10 @@ export function EbayBatchPanel({
 
   // Generate CSV content matching eBay's official draft template
   const generateCSVContent = () => {
-    // eBay's official draft template headers
+    // Get saved location from localStorage or use default
+    const savedLocation = localStorage.getItem(`ebay_location_${projectId}`) || "United States";
+    
+    // eBay's official draft template headers - Item location is REQUIRED
     const baseHeaders = [
       "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
       "Custom label (SKU)",
@@ -196,6 +212,7 @@ export function EbayBatchPanel({
       "UPC",
       "Price",
       "Quantity",
+      "Item location",
       "Item photo URL",
       "Condition ID",
       "Description",
@@ -239,6 +256,7 @@ export function EbayBatchPanel({
         "", // UPC - leave empty
         row.price?.toString() || "0",
         "1", // Quantity
+        savedLocation, // Item location - REQUIRED by eBay
         (row.image_urls || []).join("|"),
         conditionMap[row.condition || ""] || "3000",
         toHtmlDescription(row.description || ""),
@@ -435,6 +453,16 @@ export function EbayBatchPanel({
               onChange={(e) => onLotNumberChange(parseInt(e.target.value) || 1)}
               className="w-20"
             />
+
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Location</Label>
+              <Input
+                placeholder="City, State or Country"
+                value={itemLocation}
+                onChange={(e) => setItemLocation(e.target.value)}
+                className="w-40"
+              />
+            </div>
 
             <div className="flex items-center gap-2">
               <Label className="text-xs text-muted-foreground whitespace-nowrap">Default Category ID</Label>
