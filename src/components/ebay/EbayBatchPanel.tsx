@@ -66,6 +66,7 @@ export function EbayBatchPanel({
   const [viewingRow, setViewingRow] = useState<EbayRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [showUploadInstructions, setShowUploadInstructions] = useState(false);
+  const [defaultCategoryId, setDefaultCategoryId] = useState<string>("");
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this listing?")) return;
@@ -184,18 +185,24 @@ export function EbayBatchPanel({
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
     const fullHeaders = [...baseHeaders, ...specificHeaders];
 
-    // eBay draft template Condition ID: only NEW or USED are accepted in practice
-    // (more granular condition values can be set while completing the draft in Seller Hub)
-    const conditionMap: Record<string, "NEW" | "USED"> = {
-      "New": "NEW",
-      "Open box": "USED",
-      "Used": "USED",
-      "For parts": "USED",
+    // eBay ConditionID must be numeric codes in the file-upload draft flow.
+    // Common values:
+    // - 1000 = New
+    // - 3000 = Used
+    // - 7000 = For parts or not working
+    // Ref: eBay File Exchange / bulk upload conventions.
+    const conditionMap: Record<string, string> = {
+      "New": "1000",
+      "Open box": "3000",
+      "Used": "3000",
+      "For parts": "7000",
     };
 
     const csvRows = rows.map((row, index) => {
       // Extract numeric category ID from category string (e.g. "Shoes (47140)" -> "47140")
-      const categoryId = row.category?.match(/\d{3,}/)?.[0] || "";
+      const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
+      const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
+      const categoryId = extractedCategoryId || fallbackCategoryId;
       
       const base = [
         "Draft",
@@ -206,7 +213,7 @@ export function EbayBatchPanel({
         row.price?.toString() || "0",
         "1", // Quantity
         (row.image_urls || []).join("|"),
-        conditionMap[row.condition || ""] || "USED",
+        conditionMap[row.condition || ""] || "3000",
         toHtmlDescription(row.description || ""),
         "FixedPrice"
       ];
@@ -241,7 +248,9 @@ export function EbayBatchPanel({
   const getMissingCategoryLots = (): number[] => {
     const missing: number[] = [];
     rows.forEach((row, idx) => {
-      const categoryId = row.category?.match(/\d{3,}/)?.[0] || "";
+      const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
+      const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
+      const categoryId = extractedCategoryId || fallbackCategoryId;
       if (!categoryId) {
         missing.push(row.lot_number ?? (idx + 1));
       }
@@ -259,10 +268,11 @@ export function EbayBatchPanel({
     if (missingLots.length > 0) {
       const preview = missingLots.slice(0, 5).join(", ");
       toast({
-        title: "Note: Some listings missing Category ID",
-        description: `Lots ${preview}${missingLots.length > 5 ? "…" : ""} need category IDs. You can add them in eBay Seller Hub when completing drafts.`,
+        title: "Missing Category ID",
+        description: `Add a numeric Category ID (or set a Default Category ID) for lot(s): ${preview}${missingLots.length > 5 ? "…" : ""}. eBay drafts won’t import without it.`,
+        variant: "destructive",
       });
-      // Continue with download - don't block
+      return;
     }
 
     const csvContent = generateCSVContent();
@@ -316,6 +326,22 @@ export function EbayBatchPanel({
               onChange={(e) => onLotNumberChange(parseInt(e.target.value) || 1)}
               className="w-20"
             />
+
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Default Category ID</Label>
+              <Input
+                inputMode="numeric"
+                placeholder="e.g. 12345"
+                value={defaultCategoryId}
+                onChange={(e) => {
+                  // keep digits only; eBay category IDs are numeric
+                  const digitsOnly = e.target.value.replace(/\D/g, "");
+                  setDefaultCategoryId(digitsOnly);
+                }}
+                className="w-32"
+              />
+            </div>
+
             {rows.length > 0 && (
               <Button variant="gold" onClick={downloadCSV} className="gap-2">
                 <Download className="h-4 w-4" />
