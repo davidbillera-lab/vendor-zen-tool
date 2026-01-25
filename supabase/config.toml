@@ -1,10 +1,10 @@
 project_id = "mwspcagajlkanpfdbuqc"
 
 [functions.generate-listing]
-verify_jwt = true
+verify_jwt = false
 
 [functions.append-to-sheet]
-verify_jwt = true
+verify_jwt = false
 
 [functions.refine-listing]
-verify_jwt = true
+verify_jwt = false
