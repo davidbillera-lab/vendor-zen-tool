@@ -47,7 +47,7 @@ export async function generateListing(
   // Ensure user is authenticated before calling
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) {
-    throw new Error('User must be authenticated to generate listings');
+    throw new Error('Your session has expired. Please log out and log back in.');
   }
 
   const { data, error } = await supabase.functions.invoke('generate-listing', {
@@ -55,6 +55,10 @@ export async function generateListing(
   });
 
   if (error) {
+    // Check for authentication errors
+    if (error.message?.includes('Invalid or expired token') || error.message?.includes('401')) {
+      throw new Error('Your session has expired. Please log out and log back in.');
+    }
     throw new Error(error.message);
   }
 
@@ -103,6 +107,12 @@ async function compressImage(file: File, maxWidth = 1200, quality = 0.8): Promis
 }
 
 export async function uploadImage(file: File): Promise<string> {
+  // Check session before upload
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    throw new Error('Your session has expired. Please log out and log back in.');
+  }
+
   // Compress image for faster upload (only if it's an image)
   let uploadFile: File | Blob = file;
   if (file.type.startsWith('image/')) {
@@ -124,6 +134,10 @@ export async function uploadImage(file: File): Promise<string> {
     });
 
   if (uploadError) {
+    // Check for authentication errors
+    if (uploadError.message?.includes('JWT') || uploadError.message?.includes('expired')) {
+      throw new Error('Your session has expired. Please log out and log back in.');
+    }
     throw new Error(`Failed to upload image: ${uploadError.message}`);
   }
 
