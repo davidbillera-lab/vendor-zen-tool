@@ -45,7 +45,29 @@ export default defineConfig(({ mode }) => ({
         ],
       },
       workbox: {
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
+        // Only cache static assets, not HTML (for proper auth handling)
+        globPatterns: ["**/*.{js,css,ico,png,svg,woff2}"],
+        // Use NetworkFirst for navigation to ensure auth state is always fresh
+        navigateFallback: null,
+        runtimeCaching: [
+          {
+            // Don't cache Supabase API calls
+            urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+            handler: "NetworkOnly",
+          },
+          {
+            // Cache static assets with StaleWhileRevalidate
+            urlPattern: /\.(?:js|css|woff2|png|jpg|jpeg|svg|gif|ico)$/i,
+            handler: "StaleWhileRevalidate",
+            options: {
+              cacheName: "static-assets",
+              expiration: {
+                maxEntries: 100,
+                maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
+              },
+            },
+          },
+        ],
       },
     }),
   ].filter(Boolean),
