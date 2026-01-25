@@ -91,6 +91,9 @@ export type Database = {
       ebay_batch_rows: {
         Row: {
           batch_id: string | null
+          best_offer_auto_accept: number | null
+          best_offer_enabled: boolean | null
+          brand: string | null
           category: string | null
           condition: string | null
           created_at: string
@@ -101,6 +104,13 @@ export type Database = {
           image_urls: string[] | null
           item_specifics: Json | null
           lot_number: number
+          minimum_best_offer: number | null
+          mpn: string | null
+          package_height: number | null
+          package_length: number | null
+          package_weight_lbs: number | null
+          package_weight_oz: number | null
+          package_width: number | null
           price: number | null
           promotion_rate: number | null
           promotion_type: string | null
@@ -110,11 +120,17 @@ export type Database = {
           shipping_cost: number | null
           shipping_type: string | null
           status: string | null
+          store_category: string | null
+          subtitle: string | null
           title: string
+          upc: string | null
           updated_at: string
         }
         Insert: {
           batch_id?: string | null
+          best_offer_auto_accept?: number | null
+          best_offer_enabled?: boolean | null
+          brand?: string | null
           category?: string | null
           condition?: string | null
           created_at?: string
@@ -125,6 +141,13 @@ export type Database = {
           image_urls?: string[] | null
           item_specifics?: Json | null
           lot_number: number
+          minimum_best_offer?: number | null
+          mpn?: string | null
+          package_height?: number | null
+          package_length?: number | null
+          package_weight_lbs?: number | null
+          package_weight_oz?: number | null
+          package_width?: number | null
           price?: number | null
           promotion_rate?: number | null
           promotion_type?: string | null
@@ -134,11 +157,17 @@ export type Database = {
           shipping_cost?: number | null
           shipping_type?: string | null
           status?: string | null
+          store_category?: string | null
+          subtitle?: string | null
           title: string
+          upc?: string | null
           updated_at?: string
         }
         Update: {
           batch_id?: string | null
+          best_offer_auto_accept?: number | null
+          best_offer_enabled?: boolean | null
+          brand?: string | null
           category?: string | null
           condition?: string | null
           created_at?: string
@@ -149,6 +178,13 @@ export type Database = {
           image_urls?: string[] | null
           item_specifics?: Json | null
           lot_number?: number
+          minimum_best_offer?: number | null
+          mpn?: string | null
+          package_height?: number | null
+          package_length?: number | null
+          package_weight_lbs?: number | null
+          package_weight_oz?: number | null
+          package_width?: number | null
           price?: number | null
           promotion_rate?: number | null
           promotion_type?: string | null
@@ -158,7 +194,10 @@ export type Database = {
           shipping_cost?: number | null
           shipping_type?: string | null
           status?: string | null
+          store_category?: string | null
+          subtitle?: string | null
           title?: string
+          upc?: string | null
           updated_at?: string
         }
         Relationships: [

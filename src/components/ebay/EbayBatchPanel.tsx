@@ -48,6 +48,20 @@ interface EbayRow {
   promotion_rate: number | null;
   promotion_type: string | null;
   status: string | null;
+  // New fields for full desktop format
+  subtitle: string | null;
+  store_category: string | null;
+  package_weight_lbs: number | null;
+  package_weight_oz: number | null;
+  package_length: number | null;
+  package_width: number | null;
+  package_height: number | null;
+  best_offer_enabled: boolean | null;
+  best_offer_auto_accept: number | null;
+  minimum_best_offer: number | null;
+  upc: string | null;
+  brand: string | null;
+  mpn: string | null;
 }
 
 interface EbayBatchPanelProps {
@@ -175,6 +189,20 @@ export function EbayBatchPanel({
         return_shipping: editingRow.return_shipping,
         promotion_rate: editingRow.promotion_rate,
         promotion_type: editingRow.promotion_type,
+        // New desktop format fields
+        subtitle: editingRow.subtitle,
+        store_category: editingRow.store_category,
+        package_weight_lbs: editingRow.package_weight_lbs,
+        package_weight_oz: editingRow.package_weight_oz,
+        package_length: editingRow.package_length,
+        package_width: editingRow.package_width,
+        package_height: editingRow.package_height,
+        best_offer_enabled: editingRow.best_offer_enabled,
+        best_offer_auto_accept: editingRow.best_offer_auto_accept,
+        minimum_best_offer: editingRow.minimum_best_offer,
+        upc: editingRow.upc,
+        brand: editingRow.brand,
+        mpn: editingRow.mpn,
       })
       .eq('id', editingRow.id);
     
@@ -209,26 +237,31 @@ export function EbayBatchPanel({
   };
 
   // Generate CSV content using eBay's FULL desktop File Exchange format
-  // This includes shipping, returns, and all required fields for complete listings
+  // This includes shipping, returns, package dimensions, and all required fields for complete listings
   // If excludeImages is true, we skip the image URLs to avoid EPS/self-hosted conflicts
   const generateCSVContent = (skipImages: boolean = false) => {
     // Get saved location from state/localStorage (eBay expects a ZIP/postal code or City, ST)
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
-    // eBay's FULL desktop File Exchange headers - includes shipping, returns, and all required fields
-    // This is the complete format that properly populates all sections in Seller Hub
+    // eBay's FULL desktop File Exchange headers - matches the desktop Seller Hub form exactly
+    // This format populates all sections: basic info, item specifics, condition, pricing, shipping, returns
     const baseHeaders = [
       "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
       "Custom label (SKU)",
       "Category ID",
+      "Store category",
       "Title",
+      "Subtitle",
       "Relationship",
       "Relationship details",
       "P:UPC",
       "P:ISBN",
       "P:EAN",
       "P:EPID",
+      "P:Brand",
+      "P:MPN",
       "Start price",
+      "Buy It Now price",
       "Quantity",
       "Item photo URL",
       "Condition ID",
@@ -236,24 +269,43 @@ export function EbayBatchPanel({
       "Description",
       "Format",
       "Duration",
-      "Buy It Now price",
       "Best Offer enabled",
       "Best Offer auto-accept price",
       "Minimum best offer price",
       "Location",
       "Postcode",
+      // Package dimensions for calculated shipping
+      "WeightMajor",
+      "WeightMinor",
+      "WeightUnit",
+      "PackageLength",
+      "PackageWidth",
+      "PackageDepth",
+      "MeasurementUnit",
+      // Shipping settings
       "*Shipping profile name",
       "*Return profile name",
       "*Payment profile name",
       "Shipping service 1 option",
       "Shipping service 1 cost",
+      "Shipping service 1 additional cost",
       "Shipping service 2 option",
       "Shipping service 2 cost",
       "Max dispatch time",
+      "Domestic handling costs",
+      // International shipping
+      "IntlShippingService-1:Option",
+      "IntlShippingService-1:Cost",
+      "IntlShippingService-1:Locations",
+      // Returns
       "Returns accepted option",
       "Returns within option",
       "Refund option",
       "Return shipping cost paid by",
+      // Promoted listings
+      "eBay Promoted Listings",
+      "Ad rate",
+      // Payment
       "Immediate pay required"
     ];
 
@@ -263,24 +315,32 @@ export function EbayBatchPanel({
       if (r.item_specifics) {
         Object.keys(r.item_specifics).forEach(k => allSpecifics.add(k));
       }
+      // Also add brand if specified separately
+      if (r.brand) allSpecifics.add("Brand");
     });
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
     const fullHeaders = [...baseHeaders, ...specificHeaders];
 
     // eBay ConditionID must be numeric codes
-    // Common values:
-    // - 1000 = New
-    // - 1500 = New other
-    // - 2500 = Seller refurbished  
-    // - 3000 = Used
-    // - 7000 = For parts or not working
+    // Full mapping from eBay desktop form
     const conditionMap: Record<string, string> = {
       "New": "1000",
+      "New with tags": "1000",
       "New other": "1500",
+      "New without tags": "1500",
       "Open box": "1500",
+      "Certified refurbished": "2000",
+      "Excellent - Refurbished": "2010",
+      "Very Good - Refurbished": "2020",
+      "Good - Refurbished": "2030",
       "Seller refurbished": "2500",
       "Used": "3000",
+      "Pre-owned": "3000",
+      "Pre-owned - Excellent": "3000",
+      "Pre-owned - Good": "4000",
+      "Pre-owned - Fair": "5000",
       "For parts": "7000",
+      "For parts or not working": "7000",
     };
 
     // Shipping service codes for eBay
@@ -302,18 +362,27 @@ export function EbayBatchPanel({
       // Determine shipping cost (0 for free shipping)
       const shippingCost = row.shipping_type === "free" ? "0" : (row.shipping_cost?.toString() || "0");
       
+      // Extract postcode from location
+      const postcodeMatch = savedLocation.match(/\d{5}/);
+      const postcode = postcodeMatch ? postcodeMatch[0] : "";
+      
       const base = [
         "Add", // Use "Add" for full desktop format (creates as active or scheduled)
         row.lot_number?.toString() || (index + 1).toString(), // SKU = lot number
         categoryId,
+        row.store_category || "", // Store category
         sanitizeForCSV(row.title || ""),
+        sanitizeForCSV(row.subtitle || ""), // Subtitle ($2 fee)
         "", // Relationship - empty for single items
         "", // Relationship details
-        "", // P:UPC
+        row.upc || "", // P:UPC
         "", // P:ISBN
         "", // P:EAN
         "", // P:EPID
+        row.brand || "", // P:Brand
+        row.mpn || "", // P:MPN
         row.price?.toString() || "0", // Start price
+        "", // Buy It Now price (for auctions)
         "1", // Quantity
         skipImages ? "" : (row.image_urls || []).join("|"), // Skip images if requested
         conditionMap[row.condition || ""] || "3000",
@@ -321,36 +390,57 @@ export function EbayBatchPanel({
         toHtmlDescription(row.description || ""),
         "FixedPrice",
         "GTC", // Good 'Til Cancelled
-        "", // Buy It Now price (for auctions)
-        "1", // Best Offer enabled
-        "", // Best Offer auto-accept price
-        "", // Minimum best offer price
+        row.best_offer_enabled !== false ? "1" : "0", // Best Offer enabled
+        row.best_offer_auto_accept?.toString() || "", // Best Offer auto-accept price
+        row.minimum_best_offer?.toString() || "", // Minimum best offer price
         savedLocation, // Location - REQUIRED by eBay
-        savedLocation.match(/\d{5}/) ? savedLocation.match(/\d{5}/)?.[0] || "" : "", // Postcode
-        "", // Shipping profile name (leave empty to use manual settings)
+        postcode, // Postcode
+        // Package dimensions
+        row.package_weight_lbs?.toString() || "", // WeightMajor
+        row.package_weight_oz?.toString() || "", // WeightMinor
+        row.package_weight_lbs || row.package_weight_oz ? "lb" : "", // WeightUnit
+        row.package_length?.toString() || "", // PackageLength
+        row.package_width?.toString() || "", // PackageWidth  
+        row.package_height?.toString() || "", // PackageDepth
+        row.package_length || row.package_width || row.package_height ? "in" : "", // MeasurementUnit
+        // Shipping profiles (leave empty to use manual settings)
+        "", // Shipping profile name
         "", // Return profile name
         "", // Payment profile name
         getShippingService(row.shipping_type), // Shipping service 1 option
         shippingCost, // Shipping service 1 cost
+        "", // Shipping service 1 additional cost
         "", // Shipping service 2 option
         "", // Shipping service 2 cost
         row.handling_time?.toString() || "3", // Max dispatch time (days)
-        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted", // Returns accepted option
-        row.return_period ? `Days_${row.return_period}` : "Days_30", // Returns within option
+        "", // Domestic handling costs
+        // International shipping
+        "USPSFirstClassMailInternational", // IntlShippingService-1:Option
+        "", // IntlShippingService-1:Cost (leave empty if not offering)
+        "", // IntlShippingService-1:Locations
+        // Returns
+        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted",
+        row.return_period ? `Days_${row.return_period}` : "Days_30",
         "MoneyBack", // Refund option
-        row.return_shipping === "buyer" ? "Buyer" : "Seller", // Return shipping cost paid by
+        row.return_shipping === "buyer" ? "Buyer" : "Seller",
+        // Promoted listings
+        row.promotion_rate && row.promotion_rate > 0 ? "1" : "0",
+        row.promotion_rate?.toString() || "",
+        // Payment
         "0" // Immediate pay required
       ];
 
       // Add item specifics values in order
-      const specificValues = Array.from(allSpecifics).map(s => 
-        sanitizeForCSV(row.item_specifics?.[s] || "")
-      );
+      const specificValues = Array.from(allSpecifics).map(s => {
+        // Check if it's brand and we have a separate brand field
+        if (s === "Brand" && row.brand) return sanitizeForCSV(row.brand);
+        return sanitizeForCSV(row.item_specifics?.[s] || "");
+      });
 
       return [...base, ...specificValues];
     });
 
-    // Build CSV with standard eBay File Exchange format (no #INFO lines for Add action)
+    // Build CSV with standard eBay File Exchange format
     const csvContent = [
       fullHeaders.join(","),
       ...csvRows.map(row => row.map(cell => 
@@ -757,13 +847,29 @@ export function EbayBatchPanel({
           </DialogHeader>
           {editingRow && (
             <div className="space-y-4">
-              <div>
-                <Label>Title</Label>
-                <Input 
-                  value={editingRow.title}
-                  onChange={(e) => setEditingRow({ ...editingRow, title: e.target.value })}
-                />
+              {/* Title & Subtitle */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Title (80 chars max)</Label>
+                  <Input 
+                    value={editingRow.title}
+                    onChange={(e) => setEditingRow({ ...editingRow, title: e.target.value })}
+                    maxLength={80}
+                  />
+                  <span className="text-xs text-muted-foreground">{editingRow.title?.length || 0}/80</span>
+                </div>
+                <div>
+                  <Label>Subtitle (55 chars, +$2)</Label>
+                  <Input 
+                    value={editingRow.subtitle || ""}
+                    onChange={(e) => setEditingRow({ ...editingRow, subtitle: e.target.value })}
+                    maxLength={55}
+                    placeholder="Optional - adds $2 fee"
+                  />
+                  <span className="text-xs text-muted-foreground">{editingRow.subtitle?.length || 0}/55</span>
+                </div>
               </div>
+
               <div>
                 <Label>Description</Label>
                 <textarea 
@@ -772,7 +878,9 @@ export function EbayBatchPanel({
                   className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm"
                 />
               </div>
-              <div className="grid grid-cols-3 gap-4">
+
+              {/* Pricing & Condition */}
+              <div className="grid grid-cols-4 gap-4">
                 <div>
                   <Label>Price ($)</Label>
                   <Input 
@@ -784,13 +892,13 @@ export function EbayBatchPanel({
                 </div>
                 <div>
                   <Label>Condition</Label>
-                  <div className="flex gap-1 mt-1">
-                    {["New", "Open box", "Used", "For parts"].map(cond => (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {["New", "New other", "Used", "For parts"].map(cond => (
                       <Button
                         key={cond}
                         variant={editingRow.condition === cond ? "gold" : "outline"}
                         size="sm"
-                        className="flex-1 text-xs"
+                        className="text-xs"
                         onClick={() => setEditingRow({ ...editingRow, condition: cond })}
                       >
                         {cond}
@@ -799,10 +907,47 @@ export function EbayBatchPanel({
                   </div>
                 </div>
                 <div>
-                  <Label>Category</Label>
+                  <Label>Category ID</Label>
                   <Input 
                     value={editingRow.category || ""}
                     onChange={(e) => setEditingRow({ ...editingRow, category: e.target.value })}
+                    placeholder="e.g. 53159"
+                  />
+                </div>
+                <div>
+                  <Label>Store Category</Label>
+                  <Input 
+                    value={editingRow.store_category || ""}
+                    onChange={(e) => setEditingRow({ ...editingRow, store_category: e.target.value })}
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+
+              {/* Product Identifiers */}
+              <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
+                <div>
+                  <Label>Brand</Label>
+                  <Input 
+                    value={editingRow.brand || ""}
+                    onChange={(e) => setEditingRow({ ...editingRow, brand: e.target.value })}
+                    placeholder="e.g. Nike, Handmade"
+                  />
+                </div>
+                <div>
+                  <Label>UPC</Label>
+                  <Input 
+                    value={editingRow.upc || ""}
+                    onChange={(e) => setEditingRow({ ...editingRow, upc: e.target.value })}
+                    placeholder="12-digit barcode"
+                  />
+                </div>
+                <div>
+                  <Label>MPN</Label>
+                  <Input 
+                    value={editingRow.mpn || ""}
+                    onChange={(e) => setEditingRow({ ...editingRow, mpn: e.target.value })}
+                    placeholder="Manufacturer Part #"
                   />
                 </div>
               </div>
@@ -811,6 +956,92 @@ export function EbayBatchPanel({
                 itemSpecifics={editingRow.item_specifics || {}}
                 onChange={(specifics) => setEditingRow({ ...editingRow, item_specifics: specifics })}
               />
+
+              {/* Best Offer Settings */}
+              <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="best-offer"
+                    checked={editingRow.best_offer_enabled !== false}
+                    onCheckedChange={(checked) => setEditingRow({ ...editingRow, best_offer_enabled: checked === true })}
+                  />
+                  <Label htmlFor="best-offer" className="cursor-pointer">Best Offer Enabled</Label>
+                </div>
+                <div>
+                  <Label>Auto-Accept Price ($)</Label>
+                  <Input 
+                    type="number"
+                    step="0.01"
+                    value={editingRow.best_offer_auto_accept || ""}
+                    onChange={(e) => setEditingRow({ ...editingRow, best_offer_auto_accept: parseFloat(e.target.value) || undefined })}
+                    placeholder="Auto-accept above"
+                    disabled={editingRow.best_offer_enabled === false}
+                  />
+                </div>
+                <div>
+                  <Label>Minimum Offer ($)</Label>
+                  <Input 
+                    type="number"
+                    step="0.01"
+                    value={editingRow.minimum_best_offer || ""}
+                    onChange={(e) => setEditingRow({ ...editingRow, minimum_best_offer: parseFloat(e.target.value) || undefined })}
+                    placeholder="Auto-decline below"
+                    disabled={editingRow.best_offer_enabled === false}
+                  />
+                </div>
+              </div>
+
+              {/* Package Dimensions */}
+              <div className="pt-3 border-t border-border">
+                <Label className="text-sm font-medium mb-2 block">Package Dimensions (for calculated shipping)</Label>
+                <div className="grid grid-cols-5 gap-2">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Weight (lbs)</Label>
+                    <Input 
+                      type="number"
+                      step="0.1"
+                      value={editingRow.package_weight_lbs || ""}
+                      onChange={(e) => setEditingRow({ ...editingRow, package_weight_lbs: parseFloat(e.target.value) || 0 })}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Weight (oz)</Label>
+                    <Input 
+                      type="number"
+                      step="0.1"
+                      value={editingRow.package_weight_oz || ""}
+                      onChange={(e) => setEditingRow({ ...editingRow, package_weight_oz: parseFloat(e.target.value) || 0 })}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Length (in)</Label>
+                    <Input 
+                      type="number"
+                      step="0.1"
+                      value={editingRow.package_length || ""}
+                      onChange={(e) => setEditingRow({ ...editingRow, package_length: parseFloat(e.target.value) || 0 })}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Width (in)</Label>
+                    <Input 
+                      type="number"
+                      step="0.1"
+                      value={editingRow.package_width || ""}
+                      onChange={(e) => setEditingRow({ ...editingRow, package_width: parseFloat(e.target.value) || 0 })}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Height (in)</Label>
+                    <Input 
+                      type="number"
+                      step="0.1"
+                      value={editingRow.package_height || ""}
+                      onChange={(e) => setEditingRow({ ...editingRow, package_height: parseFloat(e.target.value) || 0 })}
+                    />
+                  </div>
+                </div>
+              </div>
 
               <EbayShippingSettings
                 settings={{
