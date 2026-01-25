@@ -208,26 +208,53 @@ export function EbayBatchPanel({
     return `<p>${sanitized.replace(/"/g, '""')}</p>`;
   };
 
-  // Generate CSV content matching eBay's official draft template
+  // Generate CSV content using eBay's FULL desktop File Exchange format
+  // This includes shipping, returns, and all required fields for complete listings
   // If excludeImages is true, we skip the image URLs to avoid EPS/self-hosted conflicts
   const generateCSVContent = (skipImages: boolean = false) => {
     // Get saved location from state/localStorage (eBay expects a ZIP/postal code or City, ST)
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
-    // eBay's official draft template headers - Item location is REQUIRED
+    // eBay's FULL desktop File Exchange headers - includes shipping, returns, and all required fields
+    // This is the complete format that properly populates all sections in Seller Hub
     const baseHeaders = [
       "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
       "Custom label (SKU)",
       "Category ID",
       "Title",
-      "UPC",
-      "Price",
+      "Relationship",
+      "Relationship details",
+      "P:UPC",
+      "P:ISBN",
+      "P:EAN",
+      "P:EPID",
+      "Start price",
       "Quantity",
-      "Item location",
       "Item photo URL",
       "Condition ID",
+      "Condition description",
       "Description",
-      "Format"
+      "Format",
+      "Duration",
+      "Buy It Now price",
+      "Best Offer enabled",
+      "Best Offer auto-accept price",
+      "Minimum best offer price",
+      "Location",
+      "Postcode",
+      "*Shipping profile name",
+      "*Return profile name",
+      "*Payment profile name",
+      "Shipping service 1 option",
+      "Shipping service 1 cost",
+      "Shipping service 2 option",
+      "Shipping service 2 cost",
+      "Max dispatch time",
+      "Returns accepted option",
+      "Returns within option",
+      "Refund option",
+      "Return shipping cost paid by",
+      "Immediate pay required"
     ];
 
     // Collect all item specifics across all rows for C: columns
@@ -240,17 +267,30 @@ export function EbayBatchPanel({
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
     const fullHeaders = [...baseHeaders, ...specificHeaders];
 
-    // eBay ConditionID must be numeric codes in the file-upload draft flow.
+    // eBay ConditionID must be numeric codes
     // Common values:
     // - 1000 = New
+    // - 1500 = New other
+    // - 2500 = Seller refurbished  
     // - 3000 = Used
     // - 7000 = For parts or not working
-    // Ref: eBay File Exchange / bulk upload conventions.
     const conditionMap: Record<string, string> = {
       "New": "1000",
-      "Open box": "3000",
+      "New other": "1500",
+      "Open box": "1500",
+      "Seller refurbished": "2500",
       "Used": "3000",
       "For parts": "7000",
+    };
+
+    // Shipping service codes for eBay
+    const getShippingService = (type: string | null): string => {
+      switch (type) {
+        case "free": return "USPSMedia";
+        case "flat": return "USPSPriority";
+        case "calculated": return "USPSPriority";
+        default: return "USPSMedia";
+      }
     };
 
     const csvRows = rows.map((row, index) => {
@@ -259,19 +299,47 @@ export function EbayBatchPanel({
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
       const categoryId = extractedCategoryId || fallbackCategoryId;
       
+      // Determine shipping cost (0 for free shipping)
+      const shippingCost = row.shipping_type === "free" ? "0" : (row.shipping_cost?.toString() || "0");
+      
       const base = [
-        "Draft",
+        "Add", // Use "Add" for full desktop format (creates as active or scheduled)
         row.lot_number?.toString() || (index + 1).toString(), // SKU = lot number
         categoryId,
         sanitizeForCSV(row.title || ""),
-        "", // UPC - leave empty
-        row.price?.toString() || "0",
+        "", // Relationship - empty for single items
+        "", // Relationship details
+        "", // P:UPC
+        "", // P:ISBN
+        "", // P:EAN
+        "", // P:EPID
+        row.price?.toString() || "0", // Start price
         "1", // Quantity
-        savedLocation, // Item location - REQUIRED by eBay
         skipImages ? "" : (row.image_urls || []).join("|"), // Skip images if requested
         conditionMap[row.condition || ""] || "3000",
+        "", // Condition description
         toHtmlDescription(row.description || ""),
-        "FixedPrice"
+        "FixedPrice",
+        "GTC", // Good 'Til Cancelled
+        "", // Buy It Now price (for auctions)
+        "1", // Best Offer enabled
+        "", // Best Offer auto-accept price
+        "", // Minimum best offer price
+        savedLocation, // Location - REQUIRED by eBay
+        savedLocation.match(/\d{5}/) ? savedLocation.match(/\d{5}/)?.[0] || "" : "", // Postcode
+        "", // Shipping profile name (leave empty to use manual settings)
+        "", // Return profile name
+        "", // Payment profile name
+        getShippingService(row.shipping_type), // Shipping service 1 option
+        shippingCost, // Shipping service 1 cost
+        "", // Shipping service 2 option
+        "", // Shipping service 2 cost
+        row.handling_time?.toString() || "3", // Max dispatch time (days)
+        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted", // Returns accepted option
+        row.return_period ? `Days_${row.return_period}` : "Days_30", // Returns within option
+        "MoneyBack", // Refund option
+        row.return_shipping === "buyer" ? "Buyer" : "Seller", // Return shipping cost paid by
+        "0" // Immediate pay required
       ];
 
       // Add item specifics values in order
@@ -282,16 +350,8 @@ export function EbayBatchPanel({
       return [...base, ...specificValues];
     });
 
-    // Build CSV with info headers matching eBay template
-    const infoLines = [
-      '#INFO,Version=0.0.2,Template= eBay-draft-listings-template_US',
-      '#INFO Action and Category ID are required fields. 1) Set Action to Draft 2) Please find the category ID for your listings here: https://pages.ebay.com/sellerinformation/news/categorychanges.html',
-      '"#INFO After you\'ve successfully uploaded your draft from the Seller Hub Reports tab, complete your drafts to active listings here: https://www.ebay.com/sh/lst/drafts"',
-      '#INFO'
-    ];
-
+    // Build CSV with standard eBay File Exchange format (no #INFO lines for Add action)
     const csvContent = [
-      ...infoLines,
       fullHeaders.join(","),
       ...csvRows.map(row => row.map(cell => 
         `"${String(cell).replace(/"/g, '""')}"`
@@ -546,19 +606,22 @@ export function EbayBatchPanel({
           <Alert className="border-blue-500/50 bg-blue-500/5">
             <Upload className="h-4 w-4 text-blue-500" />
             <AlertDescription className="text-sm">
-              <p className="font-medium mb-2">CSV downloaded! Now upload to eBay:</p>
+              <p className="font-medium mb-2">CSV downloaded! Upload to eBay (Desktop):</p>
               <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                <li>Go to <strong>Seller Hub → Listings → Create listing</strong></li>
-                <li>Click <strong>"File upload"</strong></li>
-                <li>Select <strong>"Create new drafts"</strong></li>
+                <li>Go to <strong>Seller Hub → Reports</strong></li>
+                <li>Click <strong>"Upload"</strong> in the top right</li>
+                <li>Select <strong>"Add, revise, relist, or end listings"</strong></li>
                 <li>Upload the CSV file you just downloaded</li>
+                <li>Review the upload results - listings will be created as active</li>
                 {excludeImages && (
-                  <li className="text-amber-600 font-medium">Add images to each draft directly in Seller Hub</li>
+                  <li className="text-amber-600 font-medium">Add images to each listing directly in Seller Hub</li>
                 )}
-                <li>Review and publish your drafts</li>
               </ol>
+              <p className="text-xs text-muted-foreground mt-2">
+                Using the full desktop File Exchange format with shipping, returns, and all fields pre-filled.
+              </p>
               {excludeImages && (
-                <p className="text-xs text-amber-600 mt-2">
+                <p className="text-xs text-amber-600 mt-1">
                   <ImageOff className="h-3 w-3 inline mr-1" />
                   Images were excluded to avoid EPS conflicts. Add them through eBay's interface.
                 </p>
@@ -566,10 +629,10 @@ export function EbayBatchPanel({
               <Button 
                 variant="link" 
                 className="h-auto p-0 mt-2 gap-1"
-                onClick={() => window.open('https://www.ebay.com/sh/lst', '_blank')}
+                onClick={() => window.open('https://www.ebay.com/sh/reports/uploads', '_blank')}
               >
                 <ExternalLink className="h-3 w-3" />
-                Open eBay Seller Hub
+                Open eBay Reports (Desktop Upload)
               </Button>
             </AlertDescription>
           </Alert>
