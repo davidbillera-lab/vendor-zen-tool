@@ -24,7 +24,9 @@ import {
   Camera,
   FolderArchive,
   Cloud,
-  Edit
+  Edit,
+  AlertTriangle,
+  CheckCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -39,6 +41,13 @@ import { saveAs } from "file-saver";
 import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
 import { EbayItemSpecificsEditor } from "@/components/ebay/EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "@/components/ebay/EbayShippingSettings";
+import { 
+  normalizeAndValidateBatch, 
+  generateLiveAuctioneersCSV, 
+  downloadCSV,
+  formatValidationErrors,
+  type ValidationIssue 
+} from "@/lib/liveauctioneers-csv";
 
 const platforms = [
   { id: "ebay" as Platform, name: "eBay", icon: Store, color: "bg-platform-ebay", description: "Cassini-optimized draft" },
@@ -151,6 +160,10 @@ export default function CreateListing() {
   // LiveAuctioneers Quick Capture mode
   const [laQuickCaptureOpen, setLaQuickCaptureOpen] = useState(false);
   const [editingLaLot, setEditingLaLot] = useState<any | null>(null);
+  
+  // LiveAuctioneers CSV validation state
+  const [csvValidationIssues, setCsvValidationIssues] = useState<ValidationIssue[]>([]);
+  const [csvValidated, setCsvValidated] = useState(false);
 
   // Fetch Denver lots when project changes
   useEffect(() => {
@@ -630,86 +643,67 @@ export default function CreateListing() {
     }
   };
 
-  const downloadBatchCSV = () => {
+  // Validate CSV data for LiveAuctioneers
+  const validateLACSV = useCallback(() => {
     if (dbBatchRows.length === 0) {
       toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
       return;
     }
 
-    // Find the maximum number of images across all lots
-    const maxImages = Math.max(...dbBatchRows.map(r => (r.image_urls || []).length), 4);
-    
-    // Build dynamic ImageFile columns
-    const imageColumns = Array.from({ length: maxImages }, (_, i) => `ImageFile.${i + 1}`);
-    
-    // Official LiveAuctioneers column headers - EXACT FORMAT REQUIRED
-    const headers = [
-      'LotNum', 'Title', 'Description', 'LowEst', 'HighEst', 'StartPrice',
-      'Condition', 'Consigner', 
-      ...imageColumns,
-      'Buy Now Price', 'Exclude From Buy Now', 'Reserve Price',
-      'Height', 'Width', 'Depth', 'Dimension Unit', 'Weight', 'Weight Unit',
-      'Domestic Flat Shipping Price', 'Quantity', 'Category', 'Origin',
-      'Style & Period', 'Creator', 'Materials & Techniques', 'Lot Reference Number', 'Location Nickname'
-    ];
+    const { issues } = normalizeAndValidateBatch(dbBatchRows);
+    setCsvValidationIssues(issues);
+    setCsvValidated(true);
 
-    const rows = dbBatchRows.map(r => {
-      const lotNum = r.lot_number || '';
-      
-      // Generate image filename entries for all columns
-      const imageEntries = Array.from({ length: maxImages }, (_, i) => 
-        (r.image_urls || [])[i] ? `${lotNum}_${i + 1}` : ''
-      );
-      
-      return [
-        lotNum,
-        (r.title || '').substring(0, 100),
-        r.description || '',
-        r.low_est || '',
-        r.high_est || '',
-        r.start_price || 5,
-        r.condition || '',
-        r.consignor || 'JSG',
-        ...imageEntries,
-        '', // Buy Now Price
-        '', // Exclude From Buy Now
-        '', // Reserve Price
-        r.height || '',
-        r.width || '',
-        r.depth || '',
-        r.dimension_unit || '',
-        r.weight || '',
-        r.weight_unit || '',
-        '', // Domestic Flat Shipping
-        '1', // Quantity
-        r.category || '',
-        '', // Origin
-        '', // Style & Period
-        '', // Creator
-        '', // Materials & Techniques
-        '', // Lot Reference Number
-        'Highlands Ranch' // Location Nickname
-      ];
+    if (issues.length === 0) {
+      toast({ 
+        title: "Validation Passed", 
+        description: `${dbBatchRows.length} lots ready for export` 
+      });
+    } else {
+      toast({ 
+        title: "Validation Issues Found", 
+        description: `${issues.length} issue(s) need attention`,
+        variant: "destructive"
+      });
+    }
+  }, [dbBatchRows]);
+
+  // Export LiveAuctioneers CSV with normalized data
+  const exportLACSV = useCallback(() => {
+    if (dbBatchRows.length === 0) {
+      toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
+      return;
+    }
+
+    const { normalizedRows, issues } = normalizeAndValidateBatch(dbBatchRows);
+    
+    // Block export if there are validation issues
+    if (issues.length > 0) {
+      setCsvValidationIssues(issues);
+      setCsvValidated(true);
+      toast({ 
+        title: "Export Blocked", 
+        description: `Fix ${issues.length} validation issue(s) before exporting`,
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Generate and download CSV
+    const csvContent = generateLiveAuctioneersCSV(normalizedRows);
+    downloadCSV(csvContent, 'liveauctioneers_upload.csv');
+    
+    toast({ 
+      title: "CSV Downloaded", 
+      description: `${dbBatchRows.length} lots exported successfully` 
     });
+  }, [dbBatchRows]);
 
-    const csvContent = [headers, ...rows]
-      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
-      .join('\r\n'); // Use CRLF for better compatibility
-    
-    // Add UTF-8 BOM for proper Google Sheets/Excel recognition
-    const BOM = '\uFEFF';
-    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `liveauctioneers_batch_${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(link); // Required for iOS Safari
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    
-    toast({ title: "CSV Downloaded", description: `${dbBatchRows.length} lots exported with images` });
-  };
+  // Clear validation when batch changes
+  useEffect(() => {
+    setCsvValidated(false);
+    setCsvValidationIssues([]);
+  }, [dbBatchRows]);
 
   const [downloadingImages, setDownloadingImages] = useState(false);
 
@@ -1006,15 +1000,24 @@ export default function CreateListing() {
           {/* Saved batch rows */}
           {dbBatchRows.length > 0 && (
             <div className="border-t border-border pt-4 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <span className="text-sm font-medium flex items-center gap-2">
                   <Check className="h-4 w-4 text-green-500" />
                   {dbBatchRows.length} lots in cloud batch
                 </span>
-                <div className="flex gap-2">
-                  <Button variant="gold" onClick={downloadBatchCSV} className="gap-2">
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="outline" onClick={validateLACSV} className="gap-2">
+                    <CheckCircle className="h-4 w-4" />
+                    Validate CSV
+                  </Button>
+                  <Button 
+                    variant="gold" 
+                    onClick={exportLACSV} 
+                    className="gap-2"
+                    disabled={csvValidated && csvValidationIssues.length > 0}
+                  >
                     <Download className="h-4 w-4" />
-                    Download CSV
+                    Export LiveAuctioneers CSV
                   </Button>
                   <Button variant="outline" onClick={downloadImagesZip} disabled={downloadingImages}>
                     {downloadingImages ? (
@@ -1029,6 +1032,33 @@ export default function CreateListing() {
                   </Button>
                 </div>
               </div>
+
+              {/* Validation Issues Display */}
+              {csvValidated && csvValidationIssues.length > 0 && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-destructive font-medium">
+                    <AlertTriangle className="h-4 w-4" />
+                    {csvValidationIssues.length} Validation Issue{csvValidationIssues.length > 1 ? 's' : ''}
+                  </div>
+                  <div className="max-h-32 overflow-y-auto space-y-1 text-xs font-mono">
+                    {csvValidationIssues.map((issue, idx) => (
+                      <div key={idx} className="text-destructive/90">
+                        Row {issue.row} (LotNum {issue.lotNum}): {issue.column} - {issue.message}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Validation Success Display */}
+              {csvValidated && csvValidationIssues.length === 0 && (
+                <div className="rounded-lg border border-green-500/50 bg-green-500/10 p-3">
+                  <div className="flex items-center gap-2 text-green-600 font-medium">
+                    <CheckCircle className="h-4 w-4" />
+                    All {dbBatchRows.length} lots passed validation - ready for export
+                  </div>
+                </div>
+              )}
               
               {/* Batch preview - click to edit */}
               <div className="max-h-60 overflow-y-auto space-y-1">
