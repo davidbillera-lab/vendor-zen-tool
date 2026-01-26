@@ -727,15 +727,18 @@ export default function CreateListing() {
         const imageUrls = row.image_urls || [];
         
         for (let i = 0; i < imageUrls.length; i++) {
+          // Use 2-digit padded index to match CSV format (1_01.jpg, 1_02.jpg, etc.)
+          const paddedIndex = (i + 1).toString().padStart(2, '0');
+          const expectedFilename = `${lotNum}_${paddedIndex}.jpg`;
+          
           const task = fetch(imageUrls[i])
             .then(async (response) => {
               const blob = await response.blob();
-              const contentType = response.headers.get('content-type') || 'image/jpeg';
-              const ext = contentType.includes('png') ? 'png' : contentType.includes('gif') ? 'gif' : 'jpg';
-              return { filename: `${lotNum}_${i + 1}.${ext}`, blob };
+              // Always use .jpg extension to match CSV expectations
+              return { filename: expectedFilename, blob };
             })
             .catch((err) => {
-              console.error(`Failed to download image ${lotNum}_${i + 1}:`, err);
+              console.error(`Failed to download image ${expectedFilename}:`, err);
               return null;
             });
           downloadTasks.push(task);
@@ -760,7 +763,7 @@ export default function CreateListing() {
       const imageCount = dbBatchRows.reduce((sum, r) => sum + ((r.image_urls)?.length || 0), 0);
       toast({ 
         title: "Images Downloaded!", 
-        description: `ZIP file with ${imageCount} images ready for LA upload`
+        description: `ZIP contains ${imageCount} images - extract the ZIP first, then upload images to LiveAuctioneers`
       });
     } catch (error) {
       console.error("Error creating ZIP:", error);
