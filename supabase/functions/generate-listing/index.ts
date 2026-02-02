@@ -110,22 +110,28 @@ TOYS & HOBBIES:
 
 If the item doesn't match these, use your full knowledge of eBay's category tree to find the CORRECT category ID. Double-check that the category matches what the item ACTUALLY IS.
 
-=== STEP 3: TITLE (80 CHARS MAX, KEYWORD-RICH) ===
+=== STEP 3: TITLE (HARD LIMIT: 80 CHARACTERS MAX) ===
+**THIS IS CRITICAL - COUNT YOUR CHARACTERS!**
+eBay will REJECT titles over 80 characters. You MUST:
+- Count every character including spaces
+- Stay AT OR UNDER 80 characters - NO EXCEPTIONS
+- Prioritize: Brand + Item Type + Key Feature + Size/Condition
+
 Create a title that:
-- Is EXACTLY 80 characters or less (this is a HARD LIMIT - count carefully!)
+- Is EXACTLY 80 characters or less (COUNT IT TWICE!)
 - Front-loads the most important keywords (brand, item type)
 - Includes: Brand + Item Type + Key Features + Size/Color + Condition
 - Uses natural search terms buyers actually type
 - NO filler words like "wow", "look", "nice", "great"
 
-GOOD EXAMPLES (under 80 chars):
-- "Patagonia Men's Down Jacket Blue Size L Puffer Winter Coat Excellent Condition"
-- "Vintage Pyrex Pink Gooseberry Casserole Dish 1.5 Qt with Lid 1950s"
-- "Sony WH-1000XM4 Wireless Noise Canceling Headphones Black Bluetooth"
+GOOD EXAMPLES (count them - all under 80 chars):
+- "Patagonia Men's Down Puffer Jacket Blue Size L Winter Coat Excellent" (68 chars)
+- "Vintage Pyrex Pink Gooseberry Casserole 1.5 Qt with Lid 1950s" (61 chars)
+- "Sony WH-1000XM4 Wireless Noise Canceling Headphones Black" (57 chars)
 
 BAD EXAMPLES:
 - "Nice Jacket Great Condition Look!" (no keywords, filler words)
-- "Blue Thing For Sale" (too vague)
+- Any title over 80 characters (WILL BE REJECTED)
 
 === STEP 4: PRICING (BASED ON SOLD COMPS - CRITICAL) ===
 Price MUST be based on what similar items have ACTUALLY SOLD for on eBay, not guesses.
@@ -450,6 +456,18 @@ serve(async (req) => {
     // Some models occasionally emit "CategoryId" or "category_id" even when instructed otherwise.
     if (platform === 'ebay' && parsedListing && typeof parsedListing === 'object') {
       const anyListing = parsedListing as Record<string, unknown>;
+
+      // CRITICAL: Enforce 80-character title limit for eBay
+      if (typeof anyListing['title'] === 'string' && anyListing['title'].length > 80) {
+        console.log(`Title too long (${anyListing['title'].length} chars), truncating to 80`);
+        // Smart truncation: try to break at word boundary
+        let truncated = (anyListing['title'] as string).substring(0, 80);
+        const lastSpace = truncated.lastIndexOf(' ');
+        if (lastSpace > 60) {
+          truncated = truncated.substring(0, lastSpace);
+        }
+        anyListing['title'] = truncated.trim();
+      }
 
       const categoryIdCandidate =
         (anyListing['categoryId'] as unknown) ??
