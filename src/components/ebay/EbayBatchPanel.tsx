@@ -414,9 +414,10 @@ export function EbayBatchPanel({
         "", // Shipping service 2 cost
         row.handling_time?.toString() || "3", // Max dispatch time (days)
         "", // Domestic handling costs
-        // International shipping
-        "USPSFirstClassMailInternational", // IntlShippingService-1:Option
-        "", // IntlShippingService-1:Cost (leave empty if not offering)
+        // International shipping - leave empty to avoid eBay validation errors
+        // Only include if user explicitly sets up international shipping
+        "", // IntlShippingService-1:Option (empty = no international shipping)
+        "", // IntlShippingService-1:Cost
         "", // IntlShippingService-1:Locations
         // Returns
         row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted",
