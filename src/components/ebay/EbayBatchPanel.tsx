@@ -371,7 +371,7 @@ export function EbayBatchPanel({
         row.lot_number?.toString() || (index + 1).toString(), // SKU = lot number
         categoryId,
         row.store_category || "", // Store category
-        sanitizeForCSV(row.title || ""),
+        sanitizeForCSV((row.title || "").substring(0, 80)), // Truncate to 80 chars max
         sanitizeForCSV(row.subtitle || ""), // Subtitle ($2 fee)
         "", // Relationship - empty for single items
         "", // Relationship details
@@ -463,6 +463,13 @@ export function EbayBatchPanel({
       }
     });
     return missing;
+  };
+
+  // Get lots with titles exceeding 80 characters
+  const getOverlongTitleLots = (): number[] => {
+    return rows
+      .filter(row => (row.title?.length || 0) > 80)
+      .map((row, idx) => row.lot_number ?? (idx + 1));
   };
 
   const backfillMissingCategoryIds = async () => {
