@@ -517,6 +517,29 @@ serve(async (req) => {
       if (anyListing['itemSpecifics'] == null && anyListing['ItemSpecifics'] != null) {
         anyListing['itemSpecifics'] = anyListing['ItemSpecifics'];
       }
+
+      // Ensure required clothing item specifics have default values
+      const itemSpecs = anyListing['itemSpecifics'] as Record<string, string> | undefined;
+      if (itemSpecs) {
+        // Normalize Department if missing
+        if (!itemSpecs['Department']) {
+          const title = (anyListing['title'] as string || '').toLowerCase();
+          if (title.includes("women") || title.includes("ladies")) {
+            itemSpecs['Department'] = 'Women';
+          } else if (title.includes("men")) {
+            itemSpecs['Department'] = 'Men';
+          } else if (title.includes("boy")) {
+            itemSpecs['Department'] = 'Boys';
+          } else if (title.includes("girl")) {
+            itemSpecs['Department'] = 'Girls';
+          }
+        }
+        // Normalize Size Type if missing
+        if (!itemSpecs['Size Type']) {
+          itemSpecs['Size Type'] = 'Regular';
+        }
+        anyListing['itemSpecifics'] = itemSpecs;
+      }
     }
 
     return new Response(

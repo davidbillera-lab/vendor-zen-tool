@@ -236,93 +236,166 @@ export function EbayBatchPanel({
     return `<p>${sanitized.replace(/"/g, '""')}</p>`;
   };
 
-  // Generate CSV content using eBay's FULL desktop File Exchange format
-  // This includes shipping, returns, package dimensions, and all required fields for complete listings
-  // If excludeImages is true, we skip the image URLs to avoid EPS/self-hosted conflicts
+  // Check if a category ID is a known leaf category (not parent)
+  // This is a subset of common categories - actual validation happens via eBay API
+  const KNOWN_LEAF_CATEGORIES: Record<number, string> = {
+    // Men's Clothing
+    57988: "Men's Coats & Jackets",
+    185099: "Men's Vests",
+    57990: "Men's Casual Shirts",
+    57991: "Men's Dress Shirts",
+    11483: "Men's Jeans",
+    57989: "Men's Dress Pants",
+    11484: "Men's Sweaters",
+    3001: "Men's Suits",
+    // Women's Clothing
+    63862: "Women's Coats & Jackets",
+    53159: "Women's Tops",
+    63861: "Women's Dresses",
+    11554: "Women's Jeans",
+    63866: "Women's Sweaters",
+    185176: "Women's Activewear",
+    // Jewelry
+    67681: "Fine Rings",
+    67652: "Fine Necklaces",
+    10968: "Costume Jewelry",
+    31387: "Wristwatches",
+    // Collectibles
+    36019: "Collectible Figurines",
+    48579: "Vintage Jewelry",
+    213: "Baseball Cards",
+    175759: "Men's Vintage Clothing",
+    175781: "Women's Vintage Clothing",
+    // Art
+    118429: "Contemporary Paintings",
+    117089: "Antique Paintings",
+    360: "Art Prints",
+    // Home
+    36018: "Decorative Plates",
+    162032: "Home Figurines",
+    20625: "Kitchen Glassware",
+    112581: "Table Lamps",
+    20706: "Floor Lamps",
+    45510: "Area Rugs",
+    // Shoes
+    15709: "Men's Athletic Shoes",
+    24087: "Men's Loafers",
+    53120: "Men's Dress Shoes",
+    55793: "Women's Pumps",
+    45333: "Women's Flats",
+    95672: "Women's Athletic Shoes",
+    // Bags
+    169291: "Women's Shoulder/Crossbody",
+    169285: "Women's Totes",
+    4250: "Men's Bags",
+    // Electronics
+    112529: "Wireless Headphones",
+    31388: "Digital Cameras",
+    139971: "Video Game Consoles",
+    // Toys
+    261068: "Action Figures",
+    262346: "Barbie Dolls",
+    180349: "Board Games",
+  };
+
+  // Categories that require Department and Size Type
+  const CLOTHING_CATEGORY_RANGES = [
+    { start: 11450, end: 11499 }, // Men's clothing ranges
+    { start: 11550, end: 11599 }, // Women's clothing ranges  
+    { start: 53000, end: 54000 }, // Various clothing
+    { start: 57980, end: 58000 }, // Men's specific
+    { start: 63850, end: 63900 }, // Women's specific
+    { start: 185000, end: 186000 }, // Activewear
+    { start: 175750, end: 175800 }, // Vintage clothing
+  ];
+
+  const isClothingCategory = (categoryId: number): boolean => {
+    return CLOTHING_CATEGORY_RANGES.some(range => 
+      categoryId >= range.start && categoryId <= range.end
+    );
+  };
+
+  // Get lots missing required item specifics for their category
+  const getMissingItemSpecificsLots = (): { lotNumber: number; missing: string[] }[] => {
+    const results: { lotNumber: number; missing: string[] }[] = [];
+    
+    rows.forEach((row, idx) => {
+      const categoryId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
+      const missing: string[] = [];
+      
+      // Check if this is a clothing category
+      if (categoryId && isClothingCategory(categoryId)) {
+        const specs = row.item_specifics || {};
+        if (!specs["Department"] && !specs["department"]) {
+          missing.push("Department");
+        }
+        if (!specs["Size Type"] && !specs["size_type"] && !specs["SizeType"]) {
+          missing.push("Size Type");
+        }
+      }
+      
+      if (missing.length > 0) {
+        results.push({ lotNumber: row.lot_number ?? (idx + 1), missing });
+      }
+    });
+    
+    return results;
+  };
+
+  // Generate CSV content using eBay's File Exchange format
+  // Matches required column structure for successful bulk uploads
   const generateCSVContent = (skipImages: boolean = false) => {
-    // Get saved location from state/localStorage (eBay expects a ZIP/postal code or City, ST)
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
-    // eBay's FULL desktop File Exchange headers - matches the desktop Seller Hub form exactly
-    // This format populates all sections: basic info, item specifics, condition, pricing, shipping, returns
+    // eBay File Exchange required headers - exact order matters
     const baseHeaders = [
       "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
+      "ItemID",
       "Custom label (SKU)",
       "Category ID",
-      "Store category",
       "Title",
-      "Subtitle",
-      "Relationship",
-      "Relationship details",
-      "P:UPC",
-      "P:ISBN",
-      "P:EAN",
-      "P:EPID",
-      "P:Brand",
-      "P:MPN",
-      "Start price",
-      "Buy It Now price",
-      "Quantity",
-      "Item photo URL",
-      "Condition ID",
-      "Condition description",
       "Description",
+      "ConditionID",
+      "PicURL",
+      "Quantity",
+      "Start price",
       "Format",
       "Duration",
-      "Best Offer enabled",
-      "Best Offer auto-accept price",
-      "Minimum best offer price",
       "Location",
-      "Postcode",
-      // Package dimensions for calculated shipping
-      "WeightMajor",
-      "WeightMinor",
-      "WeightUnit",
-      "PackageLength",
-      "PackageWidth",
-      "PackageDepth",
-      "MeasurementUnit",
-      // Shipping settings
-      "*Shipping profile name",
-      "*Return profile name",
-      "*Payment profile name",
+      "ShippingType",
       "Shipping service 1 option",
       "Shipping service 1 cost",
-      "Shipping service 1 additional cost",
-      "Shipping service 2 option",
-      "Shipping service 2 cost",
       "Max dispatch time",
-      "Domestic handling costs",
-      // International shipping
-      "IntlShippingService-1:Option",
-      "IntlShippingService-1:Cost",
-      "IntlShippingService-1:Locations",
-      // Returns
       "Returns accepted option",
       "Returns within option",
       "Refund option",
       "Return shipping cost paid by",
-      // Promoted listings
-      "eBay Promoted Listings",
-      "Ad rate",
-      // Payment
-      "Immediate pay required"
+      "Best Offer enabled",
+      "Best Offer auto-accept price",
+      "Minimum best offer price",
+      // Package dimensions
+      "WeightMajor",
+      "WeightMinor",
+      "PackageLength",
+      "PackageWidth",
+      "PackageDepth",
     ];
 
-    // Collect all item specifics across all rows for C: columns
-    const allSpecifics = new Set<string>();
+    // Collect ALL item specifics across rows - ensure required ones come first
+    const requiredSpecifics = ["Department", "Size Type", "Size", "Color", "Brand", "Material"];
+    const allSpecifics = new Set<string>(requiredSpecifics);
     rows.forEach(r => {
       if (r.item_specifics) {
         Object.keys(r.item_specifics).forEach(k => allSpecifics.add(k));
       }
-      // Also add brand if specified separately
       if (r.brand) allSpecifics.add("Brand");
     });
+    
+    // C: prefix for item specifics columns
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
     const fullHeaders = [...baseHeaders, ...specificHeaders];
 
-    // eBay ConditionID must be numeric codes
-    // Full mapping from eBay desktop form
+    // eBay ConditionID mapping
     const conditionMap: Record<string, string> = {
       "New": "1000",
       "New with tags": "1000",
@@ -343,7 +416,6 @@ export function EbayBatchPanel({
       "For parts or not working": "7000",
     };
 
-    // Shipping service codes for eBay
     const getShippingService = (type: string | null): string => {
       switch (type) {
         case "free": return "USPSMedia";
@@ -354,94 +426,58 @@ export function EbayBatchPanel({
     };
 
     const csvRows = rows.map((row, index) => {
-      // Extract numeric category ID from category string (e.g. "Shoes (47140)" -> "47140")
+      // Extract numeric category ID
       const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
       const categoryId = extractedCategoryId || fallbackCategoryId;
       
-      // Determine shipping cost (0 for free shipping)
       const shippingCost = row.shipping_type === "free" ? "0" : (row.shipping_cost?.toString() || "0");
       
-      // Extract postcode from location
-      const postcodeMatch = savedLocation.match(/\d{5}/);
-      const postcode = postcodeMatch ? postcodeMatch[0] : "";
+      // Build item specifics - ensure required fields are populated
+      const specs = { ...(row.item_specifics || {}) };
+      if (row.brand && !specs["Brand"]) specs["Brand"] = row.brand;
       
       const base = [
-        "Add", // Use "Add" for full desktop format (creates as active or scheduled)
-        row.lot_number?.toString() || (index + 1).toString(), // SKU = lot number
+        "Add",
+        "", // ItemID - empty for new listings
+        row.lot_number?.toString() || (index + 1).toString(),
         categoryId,
-        row.store_category || "", // Store category
-        sanitizeForCSV((row.title || "").substring(0, 80)), // Truncate to 80 chars max
-        sanitizeForCSV(row.subtitle || ""), // Subtitle ($2 fee)
-        "", // Relationship - empty for single items
-        "", // Relationship details
-        row.upc || "", // P:UPC
-        "", // P:ISBN
-        "", // P:EAN
-        "", // P:EPID
-        row.brand || "", // P:Brand
-        row.mpn || "", // P:MPN
-        row.price?.toString() || "0", // Start price
-        "", // Buy It Now price (for auctions)
-        "1", // Quantity
-        skipImages ? "" : (row.image_urls || []).join("|"), // Skip images if requested
-        conditionMap[row.condition || ""] || "3000",
-        "", // Condition description
+        sanitizeForCSV((row.title || "").substring(0, 80)),
         toHtmlDescription(row.description || ""),
+        conditionMap[row.condition || ""] || "3000",
+        skipImages ? "" : (row.image_urls || []).join("|"),
+        "1",
+        row.price?.toString() || "0",
         "FixedPrice",
-        "GTC", // Good 'Til Cancelled
-        row.best_offer_enabled !== false ? "1" : "0", // Best Offer enabled
-        row.best_offer_auto_accept?.toString() || "", // Best Offer auto-accept price
-        row.minimum_best_offer?.toString() || "", // Minimum best offer price
-        savedLocation, // Location - REQUIRED by eBay
-        postcode, // Postcode
-        // Package dimensions
-        row.package_weight_lbs?.toString() || "", // WeightMajor
-        row.package_weight_oz?.toString() || "", // WeightMinor
-        row.package_weight_lbs || row.package_weight_oz ? "lb" : "", // WeightUnit
-        row.package_length?.toString() || "", // PackageLength
-        row.package_width?.toString() || "", // PackageWidth  
-        row.package_height?.toString() || "", // PackageDepth
-        row.package_length || row.package_width || row.package_height ? "in" : "", // MeasurementUnit
-        // Shipping profiles (leave empty to use manual settings)
-        "", // Shipping profile name
-        "", // Return profile name
-        "", // Payment profile name
-        getShippingService(row.shipping_type), // Shipping service 1 option
-        shippingCost, // Shipping service 1 cost
-        "", // Shipping service 1 additional cost
-        "", // Shipping service 2 option
-        "", // Shipping service 2 cost
-        row.handling_time?.toString() || "3", // Max dispatch time (days)
-        "", // Domestic handling costs
-        // International shipping - leave empty to avoid eBay validation errors
-        // Only include if user explicitly sets up international shipping
-        "", // IntlShippingService-1:Option (empty = no international shipping)
-        "", // IntlShippingService-1:Cost
-        "", // IntlShippingService-1:Locations
-        // Returns
+        "GTC",
+        savedLocation,
+        row.shipping_type === "free" ? "Free" : "Flat",
+        getShippingService(row.shipping_type),
+        shippingCost,
+        row.handling_time?.toString() || "3",
         row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted",
         row.return_period ? `Days_${row.return_period}` : "Days_30",
-        "MoneyBack", // Refund option
+        "MoneyBack",
         row.return_shipping === "buyer" ? "Buyer" : "Seller",
-        // Promoted listings
-        row.promotion_rate && row.promotion_rate > 0 ? "1" : "0",
-        row.promotion_rate?.toString() || "",
-        // Payment
-        "0" // Immediate pay required
+        row.best_offer_enabled !== false ? "1" : "0",
+        row.best_offer_auto_accept?.toString() || "",
+        row.minimum_best_offer?.toString() || "",
+        row.package_weight_lbs?.toString() || "",
+        row.package_weight_oz?.toString() || "",
+        row.package_length?.toString() || "",
+        row.package_width?.toString() || "",
+        row.package_height?.toString() || "",
       ];
 
-      // Add item specifics values in order
+      // Add item specifics values in header order
       const specificValues = Array.from(allSpecifics).map(s => {
-        // Check if it's brand and we have a separate brand field
-        if (s === "Brand" && row.brand) return sanitizeForCSV(row.brand);
-        return sanitizeForCSV(row.item_specifics?.[s] || "");
+        return sanitizeForCSV(specs[s] || "");
       });
 
       return [...base, ...specificValues];
     });
 
-    // Build CSV with standard eBay File Exchange format
+    // Build CSV with CRLF line endings and proper escaping
     const csvContent = [
       fullHeaders.join(","),
       ...csvRows.map(row => row.map(cell => 
@@ -560,27 +596,56 @@ export function EbayBatchPanel({
       return;
     }
 
+    // Validation 1: Check for missing category IDs
     const missingLots = getMissingCategoryLots();
     if (missingLots.length > 0) {
       const preview = missingLots.slice(0, 5).join(", ");
       toast({
         title: "Missing Category ID",
-        description: `Add a numeric Category ID (or set a Default Category ID) for lot(s): ${preview}${missingLots.length > 5 ? "…" : ""}. eBay drafts won’t import without it.`,
+        description: `Add a numeric Category ID (or set a Default Category ID) for lot(s): ${preview}${missingLots.length > 5 ? "…" : ""}. eBay rejects uploads without leaf category IDs.`,
         variant: "destructive",
       });
       return;
     }
 
+    // Validation 2: Check for overlong titles
+    const overlongLots = getOverlongTitleLots();
+    if (overlongLots.length > 0) {
+      const preview = overlongLots.slice(0, 5).join(", ");
+      toast({
+        title: "Title Too Long",
+        description: `eBay requires titles under 80 characters. Fix lot(s): ${preview}${overlongLots.length > 5 ? "…" : ""}`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validation 3: Check for missing required item specifics (Department, Size Type for clothing)
+    const missingSpecsLots = getMissingItemSpecificsLots();
+    if (missingSpecsLots.length > 0) {
+      const preview = missingSpecsLots.slice(0, 3).map(l => 
+        `#${l.lotNumber} (${l.missing.join(", ")})`
+      ).join("; ");
+      toast({
+        title: "Missing Required Item Specifics",
+        description: `Clothing categories require Department and Size Type. Fix: ${preview}${missingSpecsLots.length > 3 ? "…" : ""}`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validation 4: Check for location
     const normalizedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     if (!normalizedLocation) {
       toast({
         title: "Missing Location",
-        description: "eBay requires an Item location (usually a ZIP/postal code or City, ST). Add it once, then re-download.",
+        description: "eBay requires an Item location (ZIP code or City, ST). Add it in the header, then re-download.",
         variant: "destructive",
       });
       return;
     }
 
+    // All validations passed - generate CSV
     const csvContent = generateCSVContent(excludeImages);
 
     // Add UTF-8 BOM for proper Google Sheets/Excel recognition
@@ -590,13 +655,13 @@ export function EbayBatchPanel({
     const link = document.createElement("a");
     link.href = url;
     link.download = `ebay-listings-${new Date().toISOString().split("T")[0]}.csv`;
-    document.body.appendChild(link); // Required for iOS Safari
+    document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     
     const imageNote = excludeImages ? " (without images - add them in Seller Hub)" : "";
-    toast({ title: "CSV Downloaded", description: `${rows.length} listings ready for eBay bulk upload${imageNote}` });
+    toast({ title: "CSV Downloaded", description: `${rows.length} listings ready for eBay File Exchange${imageNote}` });
     setShowUploadInstructions(true);
   };
   if (!projectId) {
