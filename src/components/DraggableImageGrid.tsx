@@ -1,13 +1,8 @@
  import { useState } from "react";
- import { GripVertical, X, Sparkles } from "lucide-react";
+import { GripVertical, X } from "lucide-react";
  import { Button } from "@/components/ui/button";
  import { cn } from "@/lib/utils";
  import { ImageEnhancer } from "./ImageEnhancer";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
  
  interface DraggableImageGridProps {
    images: string[];
@@ -28,7 +23,6 @@ import {
  }: DraggableImageGridProps) {
    const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
    const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
  
    const sizeClasses = {
      sm: 'w-16 h-16',
@@ -38,7 +32,6 @@ import {
  
    const handleDragStart = (index: number) => {
      setDraggedIndex(index);
-    setIsDragging(true);
    };
  
    const handleDragOver = (e: React.DragEvent, index: number) => {
@@ -57,7 +50,6 @@ import {
      }
      setDraggedIndex(null);
      setDragOverIndex(null);
-    setIsDragging(false);
    };
  
    const handleDragLeave = () => {
@@ -82,69 +74,70 @@ import {
    return (
      <div className="flex gap-2 overflow-x-auto pb-2">
        {images.map((url, i) => (
-        <HoverCard key={`${url}-${i}`} openDelay={300} closeDelay={100}>
-          <HoverCardTrigger asChild>
-            <div
-              draggable
-              onDragStart={() => handleDragStart(i)}
-              onDragOver={(e) => handleDragOver(e, i)}
-              onDragEnd={handleDragEnd}
-              onDragLeave={handleDragLeave}
-              className={cn(
-                "relative flex-shrink-0 cursor-grab active:cursor-grabbing transition-all",
-                draggedIndex === i && "opacity-50 scale-95",
-                dragOverIndex === i && "ring-2 ring-primary ring-offset-2"
-              )}
-            >
-              <img
-                src={url}
-                alt={`Image ${i + 1}`}
-                className={cn(sizeClasses[size], "object-cover rounded-lg border border-border")}
-                draggable={false}
-              />
-              
-              {/* Drag Handle */}
-              <div className="absolute top-0 left-0 right-0 flex justify-center pointer-events-none">
-                <div className="bg-black/60 rounded-b px-1 py-0.5">
-                  <GripVertical className="h-3 w-3 text-white" />
-                </div>
-              </div>
-              
-              {/* Position Badge */}
-              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[10px] bg-primary text-primary-foreground px-1.5 rounded pointer-events-none">
-                {i + 1}
-              </span>
-
-              {/* Remove Button - Always visible on corner */}
-              {onRemove && !isDragging && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemove(i);
-                  }}
-                  className="absolute -top-1 -right-1 w-5 h-5 bg-destructive rounded-full flex items-center justify-center hover:bg-destructive/80 shadow-md"
-                  title="Remove image"
-                >
-                  <X className="h-3 w-3 text-white" />
-                </button>
-              )}
+        <div
+          key={`${url}-${i}`}
+          draggable
+          onDragStart={() => handleDragStart(i)}
+          onDragOver={(e) => handleDragOver(e, i)}
+          onDragEnd={handleDragEnd}
+          onDragLeave={handleDragLeave}
+          className={cn(
+            "relative flex-shrink-0 cursor-grab active:cursor-grabbing transition-all group",
+            draggedIndex === i && "opacity-50 scale-95",
+            dragOverIndex === i && "ring-2 ring-primary ring-offset-2"
+          )}
+        >
+          <img
+            src={url}
+            alt={`Image ${i + 1}`}
+            className={cn(sizeClasses[size], "object-cover rounded-lg border border-border")}
+            draggable={false}
+          />
+          
+          {/* Drag Handle */}
+          <div className="absolute top-0 left-0 right-0 flex justify-center pointer-events-none">
+            <div className="bg-black/60 rounded-b px-1 py-0.5">
+              <GripVertical className="h-3 w-3 text-white" />
              </div>
-          </HoverCardTrigger>
-          {showEnhance && !isDragging && (
-            <HoverCardContent side="top" className="w-auto p-2">
+          </div>
+          
+          {/* Position Badge */}
+          <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[10px] bg-primary text-primary-foreground px-1.5 rounded pointer-events-none">
+            {i + 1}
+          </span>
+
+          {/* Action Buttons (visible on hover) */}
+          <div className="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {showEnhance && (
                <ImageEnhancer
                  imageUrl={url}
                  onImageGenerated={(newUrl) => handleEnhanced(i, newUrl)}
                  trigger={
-                  <Button size="sm" variant="outline" className="gap-1">
-                    <Sparkles className="h-3 w-3" />
-                    AI Enhance
+                  <Button
+                    size="icon"
+                    variant="secondary"
+                    className="h-6 w-6 rounded-full shadow-md"
+                    title="AI Enhance"
+                  >
+                    <span className="text-xs">✨</span>
                   </Button>
                  }
                />
-            </HoverCardContent>
-          )}
-        </HoverCard>
+            )}
+            {onRemove && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove(i);
+                }}
+                className="h-6 w-6 bg-destructive rounded-full flex items-center justify-center hover:bg-destructive/80 shadow-md"
+                title="Remove image"
+              >
+                <X className="h-3 w-3 text-white" />
+              </button>
+            )}
+          </div>
+        </div>
        ))}
      </div>
    );
