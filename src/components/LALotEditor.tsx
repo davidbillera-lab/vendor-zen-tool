@@ -1,11 +1,13 @@
 import { useState, useRef } from "react";
-import { X, Check, Loader2, Sparkles, Send, Trash2, GripVertical } from "lucide-react";
+import { X, Check, Loader2, Sparkles, Send, Trash2, ImagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { DraggableImageGrid } from "./DraggableImageGrid";
+import { ImageEnhancer } from "./ImageEnhancer";
 
 interface LALotEditorProps {
   lot: {
@@ -53,35 +55,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
   const [saving, setSaving] = useState(false);
   const [correctionPrompt, setCorrectionPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const correctionInputRef = useRef<HTMLInputElement>(null);
-
-  const handleDragStart = (index: number) => {
-    setDraggedIndex(index);
-  };
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (draggedIndex !== null && draggedIndex !== index) {
-      setDragOverIndex(index);
-    }
-  };
-
-  const handleDragEnd = () => {
-    if (draggedIndex !== null && dragOverIndex !== null && draggedIndex !== dragOverIndex) {
-      const newUrls = [...imageUrls];
-      const [draggedItem] = newUrls.splice(draggedIndex, 1);
-      newUrls.splice(dragOverIndex, 0, draggedItem);
-      setImageUrls(newUrls);
-    }
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-  };
-
-  const handleDragLeave = () => {
-    setDragOverIndex(null);
-  };
 
   const handleChange = (field: string, value: string | number) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -222,45 +196,34 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Images - Draggable */}
-          {imageUrls.length > 0 && (
-            <div>
-              <Label className="text-xs text-muted-foreground uppercase mb-2 block">
-                Images (drag to reorder)
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <Label className="text-xs text-muted-foreground uppercase">
+                Images (drag to reorder, hover for AI enhance)
               </Label>
-              <div className="flex gap-2 overflow-x-auto pb-2">
-                {imageUrls.map((url, i) => (
-                  <div
-                    key={`${url}-${i}`}
-                    draggable
-                    onDragStart={() => handleDragStart(i)}
-                    onDragOver={(e) => handleDragOver(e, i)}
-                    onDragEnd={handleDragEnd}
-                    onDragLeave={handleDragLeave}
-                    className={cn(
-                      "relative flex-shrink-0 cursor-grab active:cursor-grabbing transition-all",
-                      draggedIndex === i && "opacity-50 scale-95",
-                      dragOverIndex === i && "ring-2 ring-primary ring-offset-2"
-                    )}
-                  >
-                    <img
-                      src={url}
-                      alt={`Lot ${lot.lot_number} image ${i + 1}`}
-                      className="w-20 h-20 object-cover rounded-lg border border-border"
-                      draggable={false}
-                    />
-                    <div className="absolute top-0 left-0 right-0 flex justify-center">
-                      <div className="bg-black/60 rounded-b px-1 py-0.5">
-                        <GripVertical className="h-3 w-3 text-white" />
-                      </div>
-                    </div>
-                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[10px] bg-primary text-primary-foreground px-1.5 rounded">
-                      {i + 1}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <ImageEnhancer
+                onImageGenerated={(url) => setImageUrls(prev => [...prev, url])}
+                trigger={
+                  <Button variant="outline" size="sm" className="gap-1 h-7">
+                    <ImagePlus className="h-3 w-3" />
+                    AI Generate
+                  </Button>
+                }
+              />
             </div>
-          )}
+            {imageUrls.length > 0 ? (
+              <DraggableImageGrid
+                images={imageUrls}
+                onReorder={setImageUrls}
+                onRemove={(index) => {
+                  setImageUrls(prev => prev.filter((_, i) => i !== index));
+                }}
+                showEnhance={true}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">No images. Use AI Generate to create one.</p>
+            )}
+          </div>
 
           {/* Title */}
           <div>
