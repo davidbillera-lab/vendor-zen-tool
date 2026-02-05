@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.refine-listing]
 verify_jwt = false
+ 
+ [functions.enhance-image]
+ verify_jwt = false

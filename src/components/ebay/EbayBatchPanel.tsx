@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,8 @@ import {
   Eye,
   Upload,
   ExternalLink,
-  ImageOff
+  ImageOff,
+  ImagePlus
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -28,6 +29,8 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { EbayItemSpecificsEditor } from "./EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "./EbayShippingSettings";
+import { DraggableImageGrid } from "../DraggableImageGrid";
+import { ImageEnhancer } from "../ImageEnhancer";
 
 interface EbayRow {
   id: string;
@@ -920,6 +923,42 @@ export function EbayBatchPanel({
           </DialogHeader>
           {editingRow && (
             <div className="space-y-4">
+              {/* Images Section with drag-and-drop and AI enhance */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <Label className="text-xs text-muted-foreground uppercase">
+                    Images (drag to reorder, hover for AI)
+                  </Label>
+                  <ImageEnhancer
+                    onImageGenerated={(url) => setEditingRow({ 
+                      ...editingRow, 
+                      image_urls: [...(editingRow.image_urls || []), url] 
+                    })}
+                    trigger={
+                      <Button variant="outline" size="sm" className="gap-1 h-7">
+                        <ImagePlus className="h-3 w-3" />
+                        AI Generate
+                      </Button>
+                    }
+                  />
+                </div>
+                {editingRow.image_urls && editingRow.image_urls.length > 0 ? (
+                  <DraggableImageGrid
+                    images={editingRow.image_urls}
+                    onReorder={(newImages) => setEditingRow({ ...editingRow, image_urls: newImages })}
+                    onRemove={(index) => {
+                      const newImages = [...(editingRow.image_urls || [])];
+                      newImages.splice(index, 1);
+                      setEditingRow({ ...editingRow, image_urls: newImages });
+                    }}
+                    showEnhance={true}
+                    size="md"
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">No images yet. Use AI Generate to create one.</p>
+                )}
+              </div>
+
               {/* Title & Subtitle */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
