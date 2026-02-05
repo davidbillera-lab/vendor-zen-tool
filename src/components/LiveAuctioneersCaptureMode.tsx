@@ -1,11 +1,13 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Camera, X, SwitchCamera, Check, Plus, Loader2, Gavel, Send, MessageSquare, Sparkles } from "lucide-react";
+import { Camera, X, SwitchCamera, Check, Plus, Loader2, Gavel, Send, MessageSquare, Sparkles, ImagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { uploadImage, generateListing, type GeneratedListing } from "@/lib/api/listings";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { DraggableImageGrid } from "./DraggableImageGrid";
+import { ImageEnhancer } from "./ImageEnhancer";
 
 interface LiveAuctioneersCaptureProps {
   lotNumber: number;
@@ -383,15 +385,36 @@ export function LiveAuctioneersCaptureMode({
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Photos */}
-          <div className="flex gap-2 overflow-x-auto pb-2">
-            {capturedPhotos.map((photo, i) => (
-              <img 
-                key={i}
-                src={photo.preview}
-                alt=""
-                className="w-20 h-20 rounded-lg object-cover border border-border flex-shrink-0"
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-muted-foreground uppercase">
+                Images (drag to reorder, hover for AI)
+              </span>
+              <ImageEnhancer
+                onImageGenerated={(url) => setUploadedUrls(prev => [...prev, url])}
+                trigger={
+                  <Button variant="outline" size="sm" className="gap-1 h-7">
+                    <ImagePlus className="h-3 w-3" />
+                    AI Generate
+                  </Button>
+                }
               />
-            ))}
+            </div>
+            <DraggableImageGrid
+              images={uploadedUrls.length > 0 ? uploadedUrls : capturedPhotos.map(p => p.preview)}
+              onReorder={(newUrls) => {
+                if (uploadedUrls.length > 0) {
+                  setUploadedUrls(newUrls);
+                }
+              }}
+              onRemove={(index) => {
+                if (uploadedUrls.length > 0) {
+                  setUploadedUrls(prev => prev.filter((_, i) => i !== index));
+                }
+              }}
+              showEnhance={uploadedUrls.length > 0}
+              size="md"
+            />
           </div>
 
           {/* Editable Fields */}
