@@ -1,17 +1,18 @@
- import { useState } from "react";
-import { GripVertical, X } from "lucide-react";
- import { Button } from "@/components/ui/button";
- import { cn } from "@/lib/utils";
- import { ImageEnhancer } from "./ImageEnhancer";
- 
- interface DraggableImageGridProps {
-   images: string[];
-   onReorder: (images: string[]) => void;
-   onRemove?: (index: number) => void;
-   onEnhance?: (index: number, newUrl: string) => void;
-   showEnhance?: boolean;
-   size?: 'sm' | 'md' | 'lg';
- }
+import { useState } from "react";
+import { GripVertical, X, RotateCw, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { ImageEnhancer } from "./ImageEnhancer";
+import { toast } from "@/hooks/use-toast";
+
+interface DraggableImageGridProps {
+  images: string[];
+  onReorder: (images: string[]) => void;
+  onRemove?: (index: number) => void;
+  onEnhance?: (index: number, newUrl: string) => void;
+  showEnhance?: boolean;
+  size?: 'sm' | 'md' | 'lg';
+}
  
  export function DraggableImageGrid({ 
    images, 
@@ -20,15 +21,68 @@ import { GripVertical, X } from "lucide-react";
    onEnhance,
    showEnhance = true,
    size = 'md'
- }: DraggableImageGridProps) {
-   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
- 
-   const sizeClasses = {
-     sm: 'w-16 h-16',
-     md: 'w-20 h-20',
-     lg: 'w-24 h-24',
-   };
+}: DraggableImageGridProps) {
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [rotatingIndex, setRotatingIndex] = useState<number | null>(null);
+
+  const sizeClasses = {
+    sm: 'w-16 h-16',
+    md: 'w-20 h-20',
+    lg: 'w-24 h-24',
+  };
+
+  const rotateImage = async (imageUrl: string, degrees: number = 90): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Could not get canvas context'));
+          return;
+        }
+
+        // Swap width and height for 90/270 degree rotations
+        if (degrees === 90 || degrees === 270) {
+          canvas.width = img.height;
+          canvas.height = img.width;
+        } else {
+          canvas.width = img.width;
+          canvas.height = img.height;
+        }
+
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate((degrees * Math.PI) / 180);
+        ctx.drawImage(img, -img.width / 2, -img.height / 2);
+
+        resolve(canvas.toDataURL('image/jpeg', 0.92));
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = imageUrl;
+    });
+  };
+
+  const handleRotate = async (index: number) => {
+    setRotatingIndex(index);
+    try {
+      const rotatedUrl = await rotateImage(images[index]);
+      const newImages = [...images];
+      newImages[index] = rotatedUrl;
+      onReorder(newImages);
+      toast({ title: "Image rotated", description: "Rotated 90° clockwise" });
+    } catch (error) {
+      console.error('Rotation error:', error);
+      toast({ 
+        title: "Rotation failed", 
+        description: "Could not rotate this image. It may be from another domain.",
+        variant: "destructive" 
+      });
+    } finally {
+      setRotatingIndex(null);
+    }
+  };
  
    const handleDragStart = (index: number) => {
      setDraggedIndex(index);
@@ -108,6 +162,24 @@ import { GripVertical, X } from "lucide-react";
 
           {/* Action Buttons (visible on hover) */}
           <div className="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* Rotate Button */}
+            <Button
+              size="icon"
+              variant="secondary"
+              className="h-6 w-6 rounded-full shadow-md"
+              title="Rotate 90°"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRotate(i);
+              }}
+              disabled={rotatingIndex === i}
+            >
+              {rotatingIndex === i ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <RotateCw className="h-3 w-3" />
+              )}
+            </Button>
             {showEnhance && (
                <ImageEnhancer
                  imageUrl={url}
