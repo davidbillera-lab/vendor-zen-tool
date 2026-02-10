@@ -11,3 +11,6 @@ verify_jwt = false
  
  [functions.enhance-image]
  verify_jwt = false
+
+[functions.generate-images-zip]
+verify_jwt = false

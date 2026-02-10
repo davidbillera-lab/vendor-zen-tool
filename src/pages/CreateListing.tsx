@@ -36,7 +36,7 @@ import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureM
 import { ProjectManager, type Project } from "@/components/BatchManager";
 import { LALotEditor } from "@/components/LALotEditor";
 import { supabase } from "@/integrations/supabase/client";
-import JSZip from "jszip";
+
 import { saveAs } from "file-saver";
 import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
 import { EbayItemSpecificsEditor } from "@/components/ebay/EbayItemSpecificsEditor";
@@ -708,134 +708,63 @@ export default function CreateListing() {
   const [downloadingImages, setDownloadingImages] = useState(false);
   const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
 
-  // Helper function to fetch image with retry and CORS handling
-  const fetchImageWithRetry = async (url: string, filename: string, retries = 5): Promise<{ filename: string; blob: Blob } | null> => {
-    for (let attempt = 0; attempt < retries; attempt++) {
-      try {
-        const urlWithCacheBust = url.includes('?') ? `${url}&_t=${Date.now()}` : `${url}?_t=${Date.now()}`;
-        
-        const response = await fetch(urlWithCacheBust, {
-          mode: 'cors',
-          credentials: 'omit',
-          cache: 'no-store',
-        });
-        
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const blob = await response.blob();
-        if (blob.size === 0) throw new Error('Empty blob');
-        return { filename, blob };
-      } catch (err) {
-        console.warn(`Attempt ${attempt + 1}/${retries} failed for ${filename}:`, err);
-        if (attempt < retries - 1) {
-          // Longer exponential backoff: 1s, 2s, 4s, 8s
-          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
-        }
-      }
-    }
-    console.error(`Failed to download image ${filename} after ${retries} attempts`);
-    return null;
-  };
-
   const downloadImagesZip = async () => {
     if (dbBatchRows.length === 0) {
       toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
       return;
     }
 
-    setDownloadingImages(true);
-    
-    // Build list of {url, filename} pairs
-    const imageItems: { url: string; filename: string }[] = [];
-    for (const row of dbBatchRows) {
-      const lotNum = row.lot_number;
-      const imageUrls = row.image_urls || [];
-      for (let i = 0; i < imageUrls.length; i++) {
-        const paddedIndex = (i + 1).toString().padStart(2, '0');
-        imageItems.push({ url: imageUrls[i], filename: `${lotNum}_${paddedIndex}.jpg` });
-      }
+    if (!selectedProject?.id) {
+      toast({ title: "No Project", description: "No batch selected", variant: "destructive" });
+      return;
     }
 
-    setZipProgress({ current: 0, total: imageItems.length, failed: 0, phase: 'Downloading' });
+    setDownloadingImages(true);
+    const totalImages = dbBatchRows.reduce((sum, r) => sum + ((r.image_urls)?.length || 0), 0);
+    setZipProgress({ current: 0, total: totalImages, failed: 0, phase: 'Building ZIP on server' });
 
     try {
-      const zip = new JSZip();
-      
-      // First pass: download in small chunks to avoid overwhelming connections
-      const CHUNK_SIZE = 20;
-      const results = new Map<string, Blob>();
-      const failedItems: { url: string; filename: string }[] = [];
-      
-      let downloadedCount = 0;
-      
-      for (let i = 0; i < imageItems.length; i += CHUNK_SIZE) {
-        const chunk = imageItems.slice(i, i + CHUNK_SIZE);
-        const chunkResults = await Promise.all(
-          chunk.map(item => fetchImageWithRetry(item.url, item.filename))
-        );
-        
-        for (let j = 0; j < chunkResults.length; j++) {
-          if (chunkResults[j]) {
-            results.set(chunkResults[j]!.filename, chunkResults[j]!.blob);
-          } else {
-            failedItems.push(chunk[j]);
-          }
-        }
-        
-        downloadedCount = Math.min(i + CHUNK_SIZE, imageItems.length);
-        setZipProgress({ current: downloadedCount, total: imageItems.length, failed: failedItems.length, phase: 'Downloading' });
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: "Not authenticated", description: "Please log in again", variant: "destructive" });
+        return;
       }
-      
-      // Second pass: retry all failures with even smaller chunks and longer delays
-      if (failedItems.length > 0) {
-        setZipProgress(p => ({ ...p, phase: 'Retrying', current: 0, total: failedItems.length }));
-        
-        // Wait a bit before retrying to let rate limits reset
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        const RETRY_CHUNK = 10;
-        let retried = 0;
-        for (let i = 0; i < failedItems.length; i += RETRY_CHUNK) {
-          const chunk = failedItems.slice(i, i + RETRY_CHUNK);
-          const retryResults = await Promise.all(
-            chunk.map(item => fetchImageWithRetry(item.url, item.filename, 3))
-          );
-          
-          for (const result of retryResults) {
-            if (result) {
-              results.set(result.filename, result.blob);
-            }
-          }
-          
-          retried = Math.min(i + RETRY_CHUNK, failedItems.length);
-          setZipProgress(p => ({ ...p, current: retried, failed: failedItems.length - (results.size - (imageItems.length - failedItems.length)) }));
-          
-          // Pause between retry chunks
-          if (i + RETRY_CHUNK < failedItems.length) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-        }
-      }
-      
-      // Add all successful downloads to zip
-      for (const [filename, blob] of results) {
-        zip.file(filename, blob);
-      }
-      
-      const successCount = results.size;
-      const finalFailCount = imageItems.length - successCount;
 
-      setZipProgress(p => ({ ...p, phase: 'Generating ZIP' }));
-      const content = await zip.generateAsync({ type: "blob" });
+      // Determine platform based on which tab has data
+      const platform = activePlatform || 'liveauctioneers';
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-images-zip`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ batch_id: selectedProject.id, platform }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `Server error ${response.status}`);
+      }
+
+      const successCount = parseInt(response.headers.get('X-Success-Count') || '0');
+      const failedCount = parseInt(response.headers.get('X-Failed-Count') || '0');
+      const failedFiles = response.headers.get('X-Failed-Files') || '';
+
+      setZipProgress({ current: totalImages, total: totalImages, failed: failedCount, phase: 'Complete' });
+
+      const blob = await response.blob();
       const dateStr = new Date().toISOString().split('T')[0];
-      saveAs(content, `liveauctioneers-images-${dateStr}.zip`);
+      saveAs(blob, `liveauctioneers-images-${dateStr}.zip`);
 
-      if (finalFailCount > 0) {
+      if (failedCount > 0) {
         toast({ 
           title: "Images Downloaded (with some failures)", 
-          description: `ZIP contains ${successCount}/${imageItems.length} images. ${finalFailCount} failed - extract ZIP first, then upload to LiveAuctioneers`,
+          description: `ZIP contains ${successCount}/${totalImages} images. ${failedCount} failed: ${failedFiles} - extract ZIP first, then upload to LiveAuctioneers`,
           variant: "destructive"
         });
       } else {
@@ -848,7 +777,7 @@ export default function CreateListing() {
       console.error("Error creating ZIP:", error);
       toast({ 
         title: "Download Failed", 
-        description: "Could not create image ZIP file",
+        description: error instanceof Error ? error.message : "Could not create image ZIP file",
         variant: "destructive"
       });
     } finally {
