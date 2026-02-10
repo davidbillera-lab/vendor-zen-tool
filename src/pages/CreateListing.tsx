@@ -706,6 +706,7 @@ export default function CreateListing() {
   }, [dbBatchRows]);
 
   const [downloadingImages, setDownloadingImages] = useState(false);
+  const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
 
   // Helper function to fetch image with retry and CORS handling
   const fetchImageWithRetry = async (url: string, filename: string, retries = 5): Promise<{ filename: string; blob: Blob } | null> => {
@@ -757,7 +758,7 @@ export default function CreateListing() {
       }
     }
 
-    toast({ title: "Preparing Images...", description: `Downloading ${imageItems.length} images...` });
+    setZipProgress({ current: 0, total: imageItems.length, failed: 0, phase: 'Downloading' });
 
     try {
       const zip = new JSZip();
@@ -766,6 +767,8 @@ export default function CreateListing() {
       const CHUNK_SIZE = 20;
       const results = new Map<string, Blob>();
       const failedItems: { url: string; filename: string }[] = [];
+      
+      let downloadedCount = 0;
       
       for (let i = 0; i < imageItems.length; i += CHUNK_SIZE) {
         const chunk = imageItems.slice(i, i + CHUNK_SIZE);
@@ -781,19 +784,19 @@ export default function CreateListing() {
           }
         }
         
-        const downloaded = Math.min(i + CHUNK_SIZE, imageItems.length);
-        console.log(`Pass 1: ${downloaded}/${imageItems.length} (${failedItems.length} failed so far)`);
+        downloadedCount = Math.min(i + CHUNK_SIZE, imageItems.length);
+        setZipProgress({ current: downloadedCount, total: imageItems.length, failed: failedItems.length, phase: 'Downloading' });
       }
       
       // Second pass: retry all failures with even smaller chunks and longer delays
       if (failedItems.length > 0) {
-        console.log(`Retrying ${failedItems.length} failed images (pass 2)...`);
-        toast({ title: "Retrying failed images...", description: `${failedItems.length} images need another attempt` });
+        setZipProgress(p => ({ ...p, phase: 'Retrying', current: 0, total: failedItems.length }));
         
         // Wait a bit before retrying to let rate limits reset
         await new Promise(resolve => setTimeout(resolve, 3000));
         
         const RETRY_CHUNK = 10;
+        let retried = 0;
         for (let i = 0; i < failedItems.length; i += RETRY_CHUNK) {
           const chunk = failedItems.slice(i, i + RETRY_CHUNK);
           const retryResults = await Promise.all(
@@ -805,6 +808,9 @@ export default function CreateListing() {
               results.set(result.filename, result.blob);
             }
           }
+          
+          retried = Math.min(i + RETRY_CHUNK, failedItems.length);
+          setZipProgress(p => ({ ...p, current: retried, failed: failedItems.length - (results.size - (imageItems.length - failedItems.length)) }));
           
           // Pause between retry chunks
           if (i + RETRY_CHUNK < failedItems.length) {
@@ -821,6 +827,7 @@ export default function CreateListing() {
       const successCount = results.size;
       const finalFailCount = imageItems.length - successCount;
 
+      setZipProgress(p => ({ ...p, phase: 'Generating ZIP' }));
       const content = await zip.generateAsync({ type: "blob" });
       const dateStr = new Date().toISOString().split('T')[0];
       saveAs(content, `liveauctioneers-images-${dateStr}.zip`);
@@ -846,6 +853,7 @@ export default function CreateListing() {
       });
     } finally {
       setDownloadingImages(false);
+      setZipProgress({ current: 0, total: 0, failed: 0, phase: '' });
     }
   };
 
@@ -1106,6 +1114,23 @@ export default function CreateListing() {
                     Clear All
                   </Button>
                 </div>
+                {downloadingImages && zipProgress.total > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{zipProgress.phase}: {zipProgress.current}/{zipProgress.total}</span>
+                      {zipProgress.failed > 0 && (
+                        <span className="text-destructive">{zipProgress.failed} failed</span>
+                      )}
+                      <span>{Math.round((zipProgress.current / zipProgress.total) * 100)}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                      <div 
+                        className="h-full rounded-full bg-primary transition-all duration-300"
+                        style={{ width: `${(zipProgress.current / zipProgress.total) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Validation Issues Display */}
