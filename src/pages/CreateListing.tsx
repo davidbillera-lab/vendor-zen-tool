@@ -708,10 +708,9 @@ export default function CreateListing() {
   const [downloadingImages, setDownloadingImages] = useState(false);
 
   // Helper function to fetch image with retry and CORS handling
-  const fetchImageWithRetry = async (url: string, filename: string, retries = 3): Promise<{ filename: string; blob: Blob } | null> => {
+  const fetchImageWithRetry = async (url: string, filename: string, retries = 5): Promise<{ filename: string; blob: Blob } | null> => {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
-        // Add cache-busting parameter to avoid stale responses
         const urlWithCacheBust = url.includes('?') ? `${url}&_t=${Date.now()}` : `${url}?_t=${Date.now()}`;
         
         const response = await fetch(urlWithCacheBust, {
@@ -725,12 +724,13 @@ export default function CreateListing() {
         }
         
         const blob = await response.blob();
+        if (blob.size === 0) throw new Error('Empty blob');
         return { filename, blob };
       } catch (err) {
         console.warn(`Attempt ${attempt + 1}/${retries} failed for ${filename}:`, err);
         if (attempt < retries - 1) {
-          // Wait before retry with exponential backoff
-          await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+          // Longer exponential backoff: 1s, 2s, 4s, 8s
+          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
         }
       }
     }
@@ -746,70 +746,95 @@ export default function CreateListing() {
 
     setDownloadingImages(true);
     
-    // Count total images for progress
-    const totalImages = dbBatchRows.reduce((sum, r) => sum + ((r.image_urls)?.length || 0), 0);
-    toast({ title: "Preparing Images...", description: `Downloading ${totalImages} images...` });
+    // Build list of {url, filename} pairs
+    const imageItems: { url: string; filename: string }[] = [];
+    for (const row of dbBatchRows) {
+      const lotNum = row.lot_number;
+      const imageUrls = row.image_urls || [];
+      for (let i = 0; i < imageUrls.length; i++) {
+        const paddedIndex = (i + 1).toString().padStart(2, '0');
+        imageItems.push({ url: imageUrls[i], filename: `${lotNum}_${paddedIndex}.jpg` });
+      }
+    }
+
+    toast({ title: "Preparing Images...", description: `Downloading ${imageItems.length} images...` });
 
     try {
       const zip = new JSZip();
       
-      // Collect all image download tasks
-      const downloadTasks: Promise<{ filename: string; blob: Blob } | null>[] = [];
+      // First pass: download in small chunks to avoid overwhelming connections
+      const CHUNK_SIZE = 20;
+      const results = new Map<string, Blob>();
+      const failedItems: { url: string; filename: string }[] = [];
       
-      for (const row of dbBatchRows) {
-        const lotNum = row.lot_number;
-        const imageUrls = row.image_urls || [];
+      for (let i = 0; i < imageItems.length; i += CHUNK_SIZE) {
+        const chunk = imageItems.slice(i, i + CHUNK_SIZE);
+        const chunkResults = await Promise.all(
+          chunk.map(item => fetchImageWithRetry(item.url, item.filename))
+        );
         
-        for (let i = 0; i < imageUrls.length; i++) {
-          // Use 2-digit padded index to match CSV format (1_01.jpg, 1_02.jpg, etc.)
-          const paddedIndex = (i + 1).toString().padStart(2, '0');
-          const expectedFilename = `${lotNum}_${paddedIndex}.jpg`;
+        for (let j = 0; j < chunkResults.length; j++) {
+          if (chunkResults[j]) {
+            results.set(chunkResults[j]!.filename, chunkResults[j]!.blob);
+          } else {
+            failedItems.push(chunk[j]);
+          }
+        }
+        
+        const downloaded = Math.min(i + CHUNK_SIZE, imageItems.length);
+        console.log(`Pass 1: ${downloaded}/${imageItems.length} (${failedItems.length} failed so far)`);
+      }
+      
+      // Second pass: retry all failures with even smaller chunks and longer delays
+      if (failedItems.length > 0) {
+        console.log(`Retrying ${failedItems.length} failed images (pass 2)...`);
+        toast({ title: "Retrying failed images...", description: `${failedItems.length} images need another attempt` });
+        
+        // Wait a bit before retrying to let rate limits reset
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        const RETRY_CHUNK = 10;
+        for (let i = 0; i < failedItems.length; i += RETRY_CHUNK) {
+          const chunk = failedItems.slice(i, i + RETRY_CHUNK);
+          const retryResults = await Promise.all(
+            chunk.map(item => fetchImageWithRetry(item.url, item.filename, 3))
+          );
           
-          downloadTasks.push(fetchImageWithRetry(imageUrls[i], expectedFilename));
+          for (const result of retryResults) {
+            if (result) {
+              results.set(result.filename, result.blob);
+            }
+          }
+          
+          // Pause between retry chunks
+          if (i + RETRY_CHUNK < failedItems.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
       }
       
-      // Download all images in parallel with chunking to avoid overwhelming the browser
-      const CHUNK_SIZE = 50;
-      const allResults: ({ filename: string; blob: Blob } | null)[] = [];
-      
-      for (let i = 0; i < downloadTasks.length; i += CHUNK_SIZE) {
-        const chunk = downloadTasks.slice(i, i + CHUNK_SIZE);
-        const chunkResults = await Promise.all(chunk);
-        allResults.push(...chunkResults);
-        
-        // Update progress
-        const downloaded = Math.min(i + CHUNK_SIZE, downloadTasks.length);
-        console.log(`Downloaded ${downloaded}/${downloadTasks.length} images`);
+      // Add all successful downloads to zip
+      for (const [filename, blob] of results) {
+        zip.file(filename, blob);
       }
       
-      // Add successful downloads to zip
-      let successCount = 0;
-      let failCount = 0;
-      for (const result of allResults) {
-        if (result) {
-          zip.file(result.filename, result.blob);
-          successCount++;
-        } else {
-          failCount++;
-        }
-      }
+      const successCount = results.size;
+      const finalFailCount = imageItems.length - successCount;
 
-      // Generate and download the zip
       const content = await zip.generateAsync({ type: "blob" });
       const dateStr = new Date().toISOString().split('T')[0];
       saveAs(content, `liveauctioneers-images-${dateStr}.zip`);
 
-      if (failCount > 0) {
+      if (finalFailCount > 0) {
         toast({ 
           title: "Images Downloaded (with some failures)", 
-          description: `ZIP contains ${successCount} images. ${failCount} images failed to download - extract ZIP first, then upload to LiveAuctioneers`,
+          description: `ZIP contains ${successCount}/${imageItems.length} images. ${finalFailCount} failed - extract ZIP first, then upload to LiveAuctioneers`,
           variant: "destructive"
         });
       } else {
         toast({ 
           title: "Images Downloaded!", 
-          description: `ZIP contains ${successCount} images - extract the ZIP first, then upload images to LiveAuctioneers`
+          description: `All ${successCount} images included - extract the ZIP first, then upload to LiveAuctioneers`
         });
       }
     } catch (error) {
