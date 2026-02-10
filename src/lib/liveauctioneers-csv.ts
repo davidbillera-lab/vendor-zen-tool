@@ -307,8 +307,7 @@ function escapeCSVCell(value: string): string {
  * Creates a downloadable CSV file with UTF-8 BOM.
  */
 export function downloadCSV(csvContent: string, filename: string = 'liveauctioneers_upload.csv'): void {
-  const BOM = '\uFEFF';
-  const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
