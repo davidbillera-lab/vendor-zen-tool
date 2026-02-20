@@ -345,8 +345,8 @@ export function EbayBatchPanel({
     return results;
   };
 
-  // Generate CSV content using eBay File Exchange format
-  // Uses the category template format recognized by Seller Hub Reports
+  // Generate CSV content using eBay's official category listing template format
+  // Matches the template downloaded from Seller Hub Reports (Version=1193)
   const generateCSVContent = (skipImages: boolean = false) => {
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
@@ -362,43 +362,45 @@ export function EbayBatchPanel({
     // C: prefix for item specifics columns
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
 
-    // eBay File Exchange headers - asterisk (*) prefix marks required fields
-    // This format is recognized by Seller Hub Reports uploader
+    // Exact eBay category listing template headers (Version=1193)
+    // Must match the template downloaded from Seller Hub Reports
     const baseHeaders = [
-      "*Action(SiteID=US|Country=US|Currency=USD|Version=745|CC=UTF-8)",
-      "ItemID",
-      "CustomLabel",
-      "*Category",
-      "*Title",
-      "Subtitle",
-      "*Description",
-      "*ConditionID",
-      "PicURL",
-      "*Quantity",
-      "*StartPrice",
-      "*Format",
-      "*Duration",
-      "*Location",
-      "StoreCategory",
-      "ShippingType",
-      "ShippingService-1:Option",
-      "ShippingService-1:Cost",
-      "*DispatchTimeMax",
-      "ReturnsAcceptedOption",
-      "ReturnsWithinOption",
-      "RefundOption",
-      "ShippingCostPaidByOption",
-      "BestOfferEnabled",
-      "BestOfferAutoAcceptPrice",
-      "MinimumBestOfferPrice",
-      "Product:UPC",
-      "Product:Brand",
-      "Product:MPN",
-      "WeightMajor",
-      "WeightMinor",
-      "PackageLength",
-      "PackageWidth",
-      "PackageDepth",
+      "*Action(SiteID=US|Country=US|Currency=USD|Version=1193)",
+      "Custom Label (SKU)",
+      "Category Name",
+      "Title",
+      "Relationship",
+      "Relationship details",
+      "Schedule Time",
+      "P:EPID",
+      "Start price",
+      "Quantity",
+      "Item photo URL",
+      "VideoID",
+      "Condition ID",
+      "Description",
+      "Format",
+      "Duration",
+      "Buy It Now price",
+      "Best Offer Enabled",
+      "Best Offer Auto Accept Price",
+      "Minimum Best Offer Price",
+      "Immediate pay required",
+      "Location",
+      "Shipping service 1 option",
+      "Shipping service 1 cost",
+      "Shipping service 1 priority",
+      "Shipping service 2 option",
+      "Shipping service 2 cost",
+      "Shipping service 2 priority",
+      "Max dispatch time",
+      "Returns accepted option",
+      "Returns within option",
+      "Refund option",
+      "Return shipping cost paid by",
+      "Shipping profile name",
+      "Return profile name",
+      "Payment profile name",
     ];
 
     const fullHeaders = [...baseHeaders, ...specificHeaders];
@@ -443,46 +445,45 @@ export function EbayBatchPanel({
       
       // Build item specifics values
       const specs = { ...(row.item_specifics || {}) };
-      // Ensure brand from dedicated field is in specs
       if (row.brand && !specs["Brand"]) specs["Brand"] = row.brand;
       
       const base = [
-        "Add",
-        "", // ItemID - empty for new listings
-        row.lot_number?.toString() || (index + 1).toString(),
-        categoryId,
-        sanitizeForCSV((row.title || "").substring(0, 80)),
-        sanitizeForCSV(row.subtitle || ""),
-        toHtmlDescription(row.description || ""),
-        conditionMap[row.condition || ""] || "3000",
-        skipImages ? "" : (row.image_urls || []).join("|"),
-        "1",
-        row.price?.toString() || "0",
-        "FixedPrice",
-        "GTC",
-        savedLocation,
-        sanitizeForCSV(row.store_category || ""),
-        row.shipping_type === "free" ? "Free" : "Flat",
-        getShippingService(row.shipping_type),
-        shippingCost,
-        row.handling_time?.toString() || "3",
-        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted",
-        row.return_period ? `Days_${row.return_period}` : "Days_30",
-        "MoneyBack",
-        row.return_shipping === "buyer" ? "Buyer" : "Seller",
-        row.best_offer_enabled !== false ? "1" : "0",
-        row.best_offer_auto_accept?.toString() || "",
-        row.minimum_best_offer?.toString() || "",
-        // Product identifiers
-        row.upc || "Does not apply",
-        specs["Brand"] || row.brand || "Unbranded",
-        row.mpn || "Does not apply",
-        // Package dimensions
-        row.package_weight_lbs?.toString() || "",
-        row.package_weight_oz?.toString() || "",
-        row.package_length?.toString() || "",
-        row.package_width?.toString() || "",
-        row.package_height?.toString() || "",
+        "Add",                                                           // *Action
+        row.lot_number?.toString() || (index + 1).toString(),            // Custom Label (SKU)
+        categoryId,                                                      // Category Name (accepts numeric ID)
+        sanitizeForCSV((row.title || "").substring(0, 80)),              // Title
+        "",                                                              // Relationship (empty for non-variation)
+        "",                                                              // Relationship details
+        "",                                                              // Schedule Time
+        "",                                                              // P:EPID
+        row.price?.toString() || "0",                                    // Start price
+        "1",                                                             // Quantity
+        skipImages ? "" : (row.image_urls || []).join("|"),               // Item photo URL
+        "",                                                              // VideoID
+        conditionMap[row.condition || ""] || "3000",                      // Condition ID
+        toHtmlDescription(row.description || ""),                        // Description
+        "FixedPrice",                                                    // Format
+        "GTC",                                                           // Duration
+        "",                                                              // Buy It Now price
+        row.best_offer_enabled !== false ? "1" : "0",                    // Best Offer Enabled
+        row.best_offer_auto_accept?.toString() || "",                    // Best Offer Auto Accept Price
+        row.minimum_best_offer?.toString() || "",                        // Minimum Best Offer Price
+        "",                                                              // Immediate pay required
+        savedLocation,                                                   // Location
+        getShippingService(row.shipping_type),                           // Shipping service 1 option
+        shippingCost,                                                    // Shipping service 1 cost
+        "1",                                                             // Shipping service 1 priority
+        "",                                                              // Shipping service 2 option
+        "",                                                              // Shipping service 2 cost
+        "",                                                              // Shipping service 2 priority
+        row.handling_time?.toString() || "3",                            // Max dispatch time
+        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted", // Returns accepted option
+        row.return_period ? `Days_${row.return_period}` : "Days_30",     // Returns within option
+        "MoneyBack",                                                     // Refund option
+        row.return_shipping === "buyer" ? "Buyer" : "Seller",           // Return shipping cost paid by
+        "",                                                              // Shipping profile name
+        "",                                                              // Return profile name
+        "",                                                              // Payment profile name
       ];
 
       // Add item specifics values in header order
@@ -493,8 +494,16 @@ export function EbayBatchPanel({
       return [...base, ...specificValues];
     });
 
+    // #INFO rows required by eBay's category template format
+    const infoRows = [
+      `#INFO,Created=${Date.now()},,Template=fx_multi_category_template_EBAY_US`,
+      `#INFO,Version=1.0`,
+      `#INFO`,
+    ];
+
     // Build CSV with CRLF line endings - NO BOM
     const csvContent = [
+      ...infoRows,
       fullHeaders.join(","),
       ...csvRows.map(row => row.map(cell => 
         `"${String(cell).replace(/"/g, '""')}"`
