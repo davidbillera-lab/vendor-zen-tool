@@ -46,93 +46,29 @@ COMMON MISTAKES TO AVOID:
 After identifying the item, select the CORRECT eBay LEAF category ID.
 **IMPORTANT: eBay REJECTS parent categories. You MUST use the most specific (leaf) category.**
 
-CLOTHING - Men's (LEAF CATEGORIES ONLY):
-- Men's Coats & Jackets > Puffer/Down Jackets: 57988
-- Men's Coats & Jackets > Parkas: 57988
-- Men's Coats & Jackets > Trench Coats: 57988
-- Men's Coats & Jackets > Vests: 185099
-- Men's Shirts > Casual Button-Down: 57990
-- Men's Shirts > Dress Shirts: 57991
-- Men's Pants > Jeans: 11483
-- Men's Pants > Dress Pants: 57989
-- Men's Sweaters > Crewneck: 11484
-- Men's Suits > Two-Piece: 3001
+CRITICAL: eBay frequently deprecates and remaps category IDs. Use your MOST CURRENT knowledge of eBay's category tree. DO NOT use old/deprecated IDs.
 
-CLOTHING - Women's (LEAF CATEGORIES ONLY):
-- Women's Coats & Jackets > Puffer/Down: 63862
-- Women's Coats & Jackets > Blazers: 63862
-- Women's Tops > Blouses: 53159
-- Women's Tops > T-Shirts: 53159
-- Women's Dresses > Casual: 63861
-- Women's Dresses > Formal: 63861
-- Women's Pants > Jeans: 11554
-- Women's Sweaters: 63866
-- Women's Activewear > Tops: 185176
+HOW TO PICK THE RIGHT LEAF CATEGORY:
+1. Identify the top-level category (e.g., "Clothing, Shoes & Accessories" = 11450)
+2. Drill down to the MOST SPECIFIC subcategory that matches the item
+3. The leaf category is the DEEPEST level - it has NO children
+4. If you're unsure, pick the broader leaf category rather than guessing a specific one
 
-COLLECTIBLES (LEAF CATEGORIES):
-- Collectible Figurines > Contemporary: 36019
-- Vintage & Antique Jewelry > Fine: 48579
-- Sports Memorabilia > Cards > Baseball: 213
-- Vintage Clothing > Men's: 175759
-- Vintage Clothing > Women's: 175781
+EXAMPLES OF CORRECT LEAF CATEGORIES (verify these are current before using):
+- Men's Coats, Jackets & Vests: 3001 (if still valid, otherwise use the current equivalent)
+- Women's Dresses: 63861
+- Wristwatches: 31387
+- Art Prints: 360
+- Home Décor Figurines: 162032
+- Seasonal Décor > Christmas Wreaths: 33164
+- Kitchen Glassware: 20625
 
-ART & ANTIQUES (LEAF CATEGORIES):
-- Art Paintings > Contemporary (1950-Now): 118429
-- Art Paintings > Antique (Pre-1900): 117089
-- Art Prints > Contemporary: 360
-- Antique Decorative Arts > Metalware: 20082
-- Antique Furniture > Chairs: 20091
-- Pottery & Glass > Art Pottery: 870
-- Pottery & Glass > Depression Glass: 40053
-
-JEWELRY & WATCHES (LEAF CATEGORIES):
-- Fine Rings > Diamond: 67681
-- Fine Rings > Gemstone: 67681
-- Fine Necklaces & Pendants: 67652
-- Costume Jewelry > Vintage (Pre-1980): 10968
-- Watches > Wristwatches > Mechanical: 31387
-- Watches > Wristwatches > Quartz: 31387
-
-HOME & GARDEN (LEAF CATEGORIES):
-- Home Décor > Decorative Plates: 36018
-- Home Décor > Figurines: 162032
-- Kitchen > Glassware > Drinkware: 20625
-- Kitchen > Dinnerware > Plates: 36029
-- Lamps > Table Lamps: 112581
-- Lamps > Floor Lamps: 20706
-- Rugs > Area Rugs: 45510
-
-ELECTRONICS (LEAF CATEGORIES):
-- Headphones > Wireless: 112529
-- Cameras > Digital Cameras: 31388
-- Video Games > Consoles: 139971
-
-SHOES (LEAF CATEGORIES):
-- Men's Athletic Shoes > Running: 15709
-- Men's Casual Shoes > Loafers: 24087
-- Men's Dress Shoes > Oxfords: 53120
-- Women's Heels > Pumps: 55793
-- Women's Flats: 45333
-- Women's Athletic Shoes: 95672
-
-HANDBAGS (LEAF CATEGORIES):
-- Women's Bags > Shoulder Bags: 169291
-- Women's Bags > Totes: 169285
-- Women's Bags > Crossbody: 169291
-- Men's Bags > Messenger/Shoulder: 4250
-
-BOOKS & MEDIA (LEAF CATEGORIES):
-- Books > Antiquarian & Collectible: 29223
-- Books > Fiction: 279
-- Music CDs > Rock: 176984
-- DVDs > Action: 617
-
-TOYS (LEAF CATEGORIES):
-- Action Figures > TV/Movie: 261068
-- Dolls > Barbie Contemporary: 262346
-- Board Games > Contemporary: 180349
-
-**If the item doesn't match these, use your full knowledge to find the CORRECT LEAF category ID. Verify it's not a parent category.**
+IMPORTANT RULES:
+- NEVER use parent/intermediate categories (e.g., 11450 "Clothing, Shoes & Accessories" is a PARENT - do not use it)
+- If an item is seasonal décor (wreaths, ornaments, etc.), use the Holiday/Seasonal category tree, NOT "Home Décor" generically
+- If a category ID you know has been deprecated, use your best knowledge of the CURRENT replacement
+- The categoryId MUST be a number, not a string
+- When in doubt, pick the most commonly used leaf category for that item type
 
 === STEP 3: TITLE (HARD LIMIT: 80 CHARACTERS MAX) ===
 **THIS IS CRITICAL - COUNT YOUR CHARACTERS!**
