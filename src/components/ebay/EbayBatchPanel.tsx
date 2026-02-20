@@ -345,18 +345,19 @@ export function EbayBatchPanel({
     return results;
   };
 
-  // Generate CSV content using eBay's File Exchange format
+  // Generate CSV content using eBay Seller Hub Reports format
   // Matches required column structure for successful bulk uploads
   const generateCSVContent = (skipImages: boolean = false) => {
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
-    // eBay File Exchange required headers - exact order matters
+    // eBay Seller Hub Reports headers - exact names and order matter
     const baseHeaders = [
       "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
       "ItemID",
       "Custom label (SKU)",
       "Category ID",
       "Title",
+      "Subtitle",
       "Description",
       "ConditionID",
       "PicURL",
@@ -365,6 +366,7 @@ export function EbayBatchPanel({
       "Format",
       "Duration",
       "Location",
+      "StoreCategory",
       "ShippingType",
       "Shipping service 1 option",
       "Shipping service 1 cost",
@@ -376,6 +378,10 @@ export function EbayBatchPanel({
       "Best Offer enabled",
       "Best Offer auto-accept price",
       "Minimum best offer price",
+      // Product identifiers - eBay requires P: prefix for catalog matching
+      "P:UPC",
+      "P:Brand",
+      "P:MPN",
       // Package dimensions
       "WeightMajor",
       "WeightMinor",
@@ -385,13 +391,12 @@ export function EbayBatchPanel({
     ];
 
     // Collect ALL item specifics across rows - ensure required ones come first
-    const requiredSpecifics = ["Department", "Size Type", "Size", "Color", "Brand", "Material"];
+    const requiredSpecifics = ["Brand", "Type", "Department", "Size Type", "Size", "Color", "Material", "Style"];
     const allSpecifics = new Set<string>(requiredSpecifics);
     rows.forEach(r => {
       if (r.item_specifics) {
         Object.keys(r.item_specifics).forEach(k => allSpecifics.add(k));
       }
-      if (r.brand) allSpecifics.add("Brand");
     });
     
     // C: prefix for item specifics columns
@@ -436,8 +441,9 @@ export function EbayBatchPanel({
       
       const shippingCost = row.shipping_type === "free" ? "0" : (row.shipping_cost?.toString() || "0");
       
-      // Build item specifics - ensure required fields are populated
+      // Build item specifics values
       const specs = { ...(row.item_specifics || {}) };
+      // Ensure brand from dedicated field is in specs
       if (row.brand && !specs["Brand"]) specs["Brand"] = row.brand;
       
       const base = [
@@ -446,6 +452,7 @@ export function EbayBatchPanel({
         row.lot_number?.toString() || (index + 1).toString(),
         categoryId,
         sanitizeForCSV((row.title || "").substring(0, 80)),
+        sanitizeForCSV(row.subtitle || ""),
         toHtmlDescription(row.description || ""),
         conditionMap[row.condition || ""] || "3000",
         skipImages ? "" : (row.image_urls || []).join("|"),
@@ -454,6 +461,7 @@ export function EbayBatchPanel({
         "FixedPrice",
         "GTC",
         savedLocation,
+        sanitizeForCSV(row.store_category || ""),
         row.shipping_type === "free" ? "Free" : "Flat",
         getShippingService(row.shipping_type),
         shippingCost,
@@ -465,6 +473,11 @@ export function EbayBatchPanel({
         row.best_offer_enabled !== false ? "1" : "0",
         row.best_offer_auto_accept?.toString() || "",
         row.minimum_best_offer?.toString() || "",
+        // Product identifiers
+        row.upc || "Does not apply",
+        specs["Brand"] || row.brand || "Unbranded",
+        row.mpn || "Does not apply",
+        // Package dimensions
         row.package_weight_lbs?.toString() || "",
         row.package_weight_oz?.toString() || "",
         row.package_length?.toString() || "",
@@ -480,7 +493,7 @@ export function EbayBatchPanel({
       return [...base, ...specificValues];
     });
 
-    // Build CSV with CRLF line endings and proper escaping
+    // Build CSV with CRLF line endings - NO BOM (causes header parsing failures)
     const csvContent = [
       fullHeaders.join(","),
       ...csvRows.map(row => row.map(cell => 
@@ -651,9 +664,8 @@ export function EbayBatchPanel({
     // All validations passed - generate CSV
     const csvContent = generateCSVContent(excludeImages);
 
-    // Add UTF-8 BOM for proper Google Sheets/Excel recognition
-    const BOM = '\uFEFF';
-    const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" });
+    // No BOM - eBay Seller Hub Reports rejects files with BOM prefix on headers
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -664,7 +676,7 @@ export function EbayBatchPanel({
     URL.revokeObjectURL(url);
     
     const imageNote = excludeImages ? " (without images - add them in Seller Hub)" : "";
-    toast({ title: "CSV Downloaded", description: `${rows.length} listings ready for eBay File Exchange${imageNote}` });
+    toast({ title: "CSV Downloaded", description: `${rows.length} listings ready for Seller Hub Reports upload${imageNote}` });
     setShowUploadInstructions(true);
   };
   if (!projectId) {
