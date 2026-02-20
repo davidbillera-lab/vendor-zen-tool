@@ -345,51 +345,11 @@ export function EbayBatchPanel({
     return results;
   };
 
-  // Generate CSV content using eBay Seller Hub Reports format
-  // Matches required column structure for successful bulk uploads
+  // Generate CSV content using eBay File Exchange format
+  // Uses the category template format recognized by Seller Hub Reports
   const generateCSVContent = (skipImages: boolean = false) => {
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
-    // eBay Seller Hub Reports headers - exact names and order matter
-    const baseHeaders = [
-      "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
-      "ItemID",
-      "Custom label (SKU)",
-      "Category ID",
-      "Title",
-      "Subtitle",
-      "Description",
-      "ConditionID",
-      "PicURL",
-      "Quantity",
-      "Start price",
-      "Format",
-      "Duration",
-      "Location",
-      "StoreCategory",
-      "ShippingType",
-      "Shipping service 1 option",
-      "Shipping service 1 cost",
-      "Max dispatch time",
-      "Returns accepted option",
-      "Returns within option",
-      "Refund option",
-      "Return shipping cost paid by",
-      "Best Offer enabled",
-      "Best Offer auto-accept price",
-      "Minimum best offer price",
-      // Product identifiers - eBay requires P: prefix for catalog matching
-      "P:UPC",
-      "P:Brand",
-      "P:MPN",
-      // Package dimensions
-      "WeightMajor",
-      "WeightMinor",
-      "PackageLength",
-      "PackageWidth",
-      "PackageDepth",
-    ];
-
     // Collect ALL item specifics across rows - ensure required ones come first
     const requiredSpecifics = ["Brand", "Type", "Department", "Size Type", "Size", "Color", "Material", "Style"];
     const allSpecifics = new Set<string>(requiredSpecifics);
@@ -401,6 +361,46 @@ export function EbayBatchPanel({
     
     // C: prefix for item specifics columns
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
+
+    // eBay File Exchange headers - asterisk (*) prefix marks required fields
+    // This format is recognized by Seller Hub Reports uploader
+    const baseHeaders = [
+      "*Action(SiteID=US|Country=US|Currency=USD|Version=745|CC=UTF-8)",
+      "ItemID",
+      "CustomLabel",
+      "*Category",
+      "*Title",
+      "Subtitle",
+      "*Description",
+      "*ConditionID",
+      "PicURL",
+      "*Quantity",
+      "*StartPrice",
+      "*Format",
+      "*Duration",
+      "*Location",
+      "StoreCategory",
+      "ShippingType",
+      "ShippingService-1:Option",
+      "ShippingService-1:Cost",
+      "*DispatchTimeMax",
+      "ReturnsAcceptedOption",
+      "ReturnsWithinOption",
+      "RefundOption",
+      "ShippingCostPaidByOption",
+      "BestOfferEnabled",
+      "BestOfferAutoAcceptPrice",
+      "MinimumBestOfferPrice",
+      "Product:UPC",
+      "Product:Brand",
+      "Product:MPN",
+      "WeightMajor",
+      "WeightMinor",
+      "PackageLength",
+      "PackageWidth",
+      "PackageDepth",
+    ];
+
     const fullHeaders = [...baseHeaders, ...specificHeaders];
 
     // eBay ConditionID mapping
@@ -493,7 +493,7 @@ export function EbayBatchPanel({
       return [...base, ...specificValues];
     });
 
-    // Build CSV with CRLF line endings - NO BOM (causes header parsing failures)
+    // Build CSV with CRLF line endings - NO BOM
     const csvContent = [
       fullHeaders.join(","),
       ...csvRows.map(row => row.map(cell => 
