@@ -54,21 +54,65 @@ HOW TO PICK THE RIGHT LEAF CATEGORY:
 3. The leaf category is the DEEPEST level - it has NO children
 4. If you're unsure, pick the broader leaf category rather than guessing a specific one
 
-EXAMPLES OF CORRECT LEAF CATEGORIES (verify these are current before using):
-- Men's Coats, Jackets & Vests: 3001 (if still valid, otherwise use the current equivalent)
+VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
+- Men's Coats, Jackets & Vests: 3001
+- Men's Casual Shirts: 57990
+- Men's Dress Shirts: 57991
+- Men's Jeans: 11483
+- Men's Sweaters: 11484
+- Men's Dress Pants: 57989
+- Women's Coats & Jackets: 63862
+- Women's Tops & Blouses: 53159
 - Women's Dresses: 63861
+- Women's Jeans: 11554
+- Women's Sweaters: 63866
+- Women's Activewear Tops: 185176
 - Wristwatches: 31387
+- Fine Rings: 67681
+- Fine Necklaces & Pendants: 67652
+- Fashion Jewelry Necklaces: 10968
 - Art Prints: 360
-- Home Décor Figurines: 162032
-- Seasonal Décor > Christmas Wreaths: 33164
+- Paintings: 551 (DO NOT use 118429 or 117089 — those are deprecated)
+- Sculptures & Carvings: 60628
+- Mixed Media Art & Collage Art: 158658
+- Decorative Collectible Figurines: 162032
 - Kitchen Glassware: 20625
+- Decorative Plates & Bowls: 36018
+- Table Lamps: 112581
+- Floor Lamps: 20706
+- Area Rugs: 45510
+- Men's Athletic Shoes: 15709
+- Men's Casual Shoes: 24087
+- Men's Dress Shoes: 53120
+- Women's Heels: 55793
+- Women's Flats: 45333
+- Women's Athletic Shoes: 95672
+- Women's Handbags: 169291
+- Men's Bags: 4250
+- Wireless/Bluetooth Headphones: 112529
+- Digital Cameras: 31388
+- Video Game Consoles: 139971
+- Action Figures & Accessories: 261068
+- Board & Traditional Games: 180349
+- Christmas Wreaths, Garlands & Plants: 33164 (NOT 159769 — that was remapped!)
+- Christmas Ornaments: 170091
+- Christmas Stockings & Hangers: 170098
+- Other Christmas Décor: 170083
+- Seasonal Home Décor: 116022
+- Candles: 46782
+- Vases: 20625
+- Bookends: 261
+- Picture Frames: 16041
+- Mirrors: 20580
+- Clocks: 20562
+- Baskets: 20563
+- Pottery & Glass: 870
 
 IMPORTANT RULES:
 - NEVER use parent/intermediate categories (e.g., 11450 "Clothing, Shoes & Accessories" is a PARENT - do not use it)
 - If an item is seasonal décor (wreaths, ornaments, etc.), use the Holiday/Seasonal category tree, NOT "Home Décor" generically
-- If a category ID you know has been deprecated, use your best knowledge of the CURRENT replacement
 - The categoryId MUST be a number, not a string
-- When in doubt, pick the most commonly used leaf category for that item type
+- When in doubt, pick from the VERIFIED list above rather than guessing
 
 === STEP 3: TITLE (HARD LIMIT: 80 CHARACTERS MAX) ===
 **THIS IS CRITICAL - COUNT YOUR CHARACTERS!**
@@ -374,7 +418,7 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-lite',
+        model: platform === 'ebay' ? 'google/gemini-2.5-flash' : 'google/gemini-2.5-flash-lite',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content }
@@ -443,10 +487,37 @@ serve(async (req) => {
         (anyListing['category_id'] as unknown) ??
         (anyListing['CategoryID'] as unknown);
 
-      if (anyListing['categoryId'] == null && categoryIdCandidate != null) {
-        const asNum = Number(categoryIdCandidate);
-        if (!Number.isNaN(asNum)) {
+      // Normalize categoryId to a clean integer
+      const rawCatId = categoryIdCandidate ?? anyListing['categoryId'];
+      if (rawCatId != null) {
+        const asNum = Math.floor(Number(rawCatId));
+        if (!Number.isNaN(asNum) && asNum > 0) {
           anyListing['categoryId'] = asNum;
+        }
+      } else {
+        // No category ID at all
+        anyListing['categoryId'] = null;
+      }
+
+      // Known deprecated/parent category IDs that eBay rejects → map to correct leaf
+      const CATEGORY_REMAPS: Record<number, number> = {
+        // Deprecated seasonal
+        159769: 33164,   // Old Christmas Wreaths → Christmas Wreaths, Garlands & Plants
+        128035: 170083,  // Old holiday décor → Other Christmas Décor (common remap)
+        // Parent categories that are NOT leaf
+        11450: 57990,    // Clothing parent → Men's Casual Shirts (fallback)
+        550: 360,        // Art parent → Art Prints
+        20081: 162032,   // Home Décor parent → Figurines
+        281: 261068,     // Toys parent → Action Figures
+        625: 112529,     // Audio parent → Wireless Headphones
+        14339: 31388,    // Cameras parent → Digital Cameras
+      };
+
+      if (typeof anyListing['categoryId'] === 'number') {
+        const remapped = CATEGORY_REMAPS[anyListing['categoryId'] as number];
+        if (remapped) {
+          console.log(`Category ${anyListing['categoryId']} remapped to ${remapped} (known deprecated/parent)`);
+          anyListing['categoryId'] = remapped;
         }
       }
 
