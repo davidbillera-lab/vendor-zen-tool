@@ -240,8 +240,16 @@ export function EbayBatchPanel({
     return `<p>${sanitized.replace(/"/g, '""')}</p>`;
   };
 
-  // Check if a category ID is a known leaf category (not parent)
-  // This is a subset of common categories - actual validation happens via eBay API
+  // Categories that eBay has deprecated or remapped — warn before export
+  const DEPRECATED_CATEGORIES: Record<number, { replacement: number; label: string }> = {
+    159769: { replacement: 33164, label: "Christmas Wreaths → 33164" },
+    128035: { replacement: 170083, label: "Holiday Décor → 170083" },
+    11450: { replacement: 57990, label: "Clothing parent → pick a leaf" },
+    550: { replacement: 360, label: "Art parent → Art Prints 360" },
+    20081: { replacement: 162032, label: "Home Décor parent → Figurines 162032" },
+  };
+
+  // Known valid leaf categories for quick reference
   const KNOWN_LEAF_CATEGORIES: Record<number, string> = {
     // Men's Clothing
     57988: "Men's Coats & Jackets",
@@ -251,7 +259,7 @@ export function EbayBatchPanel({
     11483: "Men's Jeans",
     57989: "Men's Dress Pants",
     11484: "Men's Sweaters",
-    3001: "Men's Suits",
+    3001: "Men's Suits & Blazers",
     // Women's Clothing
     63862: "Women's Coats & Jackets",
     53159: "Women's Tops",
@@ -264,19 +272,16 @@ export function EbayBatchPanel({
     67652: "Fine Necklaces",
     10968: "Costume Jewelry",
     31387: "Wristwatches",
-    // Collectibles
-    36019: "Collectible Figurines",
-    48579: "Vintage Jewelry",
-    213: "Baseball Cards",
-    175759: "Men's Vintage Clothing",
-    175781: "Women's Vintage Clothing",
     // Art
-    118429: "Contemporary Paintings",
-    117089: "Antique Paintings",
     360: "Art Prints",
-    // Home
-    36018: "Decorative Plates",
+    551: "Paintings",
+    60628: "Sculptures & Carvings",
+    158658: "Mixed Media Art",
+    // Collectibles
     162032: "Home Figurines",
+    36018: "Decorative Plates",
+    48579: "Vintage Jewelry",
+    // Home
     20625: "Kitchen Glassware",
     112581: "Table Lamps",
     20706: "Floor Lamps",
@@ -298,8 +303,13 @@ export function EbayBatchPanel({
     139971: "Video Game Consoles",
     // Toys
     261068: "Action Figures",
-    262346: "Barbie Dolls",
     180349: "Board Games",
+    // Seasonal / Holiday
+    33164: "Christmas Wreaths",
+    170091: "Christmas Ornaments",
+    170098: "Christmas Stockings",
+    170083: "Other Christmas Décor",
+    116022: "Seasonal Home Décor",
   };
 
   // Categories that require Department and Size Type
@@ -527,6 +537,47 @@ export function EbayBatchPanel({
     return missing;
   };
 
+  // Get lots with deprecated/remapped categories and auto-fix them
+  const getDeprecatedCategoryLots = (): { lotNumber: number; oldCat: number; newCat: number; label: string }[] => {
+    const results: { lotNumber: number; oldCat: number; newCat: number; label: string }[] = [];
+    rows.forEach((row, idx) => {
+      const catId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
+      if (catId && DEPRECATED_CATEGORIES[catId]) {
+        const dep = DEPRECATED_CATEGORIES[catId];
+        results.push({
+          lotNumber: row.lot_number ?? (idx + 1),
+          oldCat: catId,
+          newCat: dep.replacement,
+          label: dep.label,
+        });
+      }
+    });
+    return results;
+  };
+
+  // Auto-fix deprecated categories in batch
+  const fixDeprecatedCategories = async () => {
+    const deprecated = getDeprecatedCategoryLots();
+    if (deprecated.length === 0) return;
+
+    const updates = deprecated.map(d => {
+      const row = rows.find(r => r.lot_number === d.lotNumber || rows.indexOf(r) === d.lotNumber - 1);
+      if (!row) return null;
+      return { id: row.id, newCat: String(d.newCat) };
+    }).filter(Boolean) as { id: string; newCat: string }[];
+
+    for (const u of updates) {
+      await supabase.from('ebay_batch_rows').update({ category: u.newCat }).eq('id', u.id);
+    }
+
+    onRowsChange(rows.map(r => {
+      const hit = updates.find(u => u.id === r.id);
+      return hit ? { ...r, category: hit.newCat } : r;
+    }));
+
+    toast({ title: "Categories fixed", description: `Updated ${updates.length} deprecated category ID(s) to current ones.` });
+  };
+
   // Get lots with titles exceeding 80 characters
   const getOverlongTitleLots = (): number[] => {
     return rows
@@ -616,9 +667,20 @@ export function EbayBatchPanel({
     }
   };
 
-  const downloadCSV = () => {
+  const downloadCSV = async () => {
     if (rows.length === 0) {
       toast({ title: "No data", description: "Add some listings first", variant: "destructive" });
+      return;
+    }
+
+    // Validation 0: Auto-fix deprecated categories before export
+    const deprecated = getDeprecatedCategoryLots();
+    if (deprecated.length > 0) {
+      await fixDeprecatedCategories();
+      toast({
+        title: "Deprecated categories auto-fixed",
+        description: `Fixed ${deprecated.length} deprecated category ID(s). Click Download again to export.`,
+      });
       return;
     }
 
