@@ -367,7 +367,7 @@ export function EbayBatchPanel({
     const baseHeaders = [
       "*Action(SiteID=US|Country=US|Currency=USD|Version=1193)",
       "Custom Label (SKU)",
-      "Category Name",
+      "Category",
       "Title",
       "Relationship",
       "Relationship details",
@@ -439,7 +439,7 @@ export function EbayBatchPanel({
       // Extract numeric category ID
       const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
-      const categoryId = extractedCategoryId || fallbackCategoryId;
+      const categoryId = (extractedCategoryId || fallbackCategoryId).replace(/\.0$/, '').trim();
       
       const shippingCost = row.shipping_type === "free" ? "0" : (row.shipping_cost?.toString() || "0");
       
@@ -450,7 +450,7 @@ export function EbayBatchPanel({
       const base = [
         "Add",                                                           // *Action
         row.lot_number?.toString() || (index + 1).toString(),            // Custom Label (SKU)
-        categoryId,                                                      // Category Name (accepts numeric ID)
+        categoryId,                                                      // Category (numeric leaf ID)
         sanitizeForCSV((row.title || "").substring(0, 80)),              // Title
         "",                                                              // Relationship (empty for non-variation)
         "",                                                              // Relationship details
