@@ -86,11 +86,12 @@ export function EbayBatchPanel({
   const [viewingRow, setViewingRow] = useState<EbayRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [showUploadInstructions, setShowUploadInstructions] = useState(false);
+  const [showCSVPreview, setShowCSVPreview] = useState(false);
+  const [csvPreviewContent, setCsvPreviewContent] = useState("");
+  const [pendingCSVBlob, setPendingCSVBlob] = useState<Blob | null>(null);
   const [defaultCategoryId, setDefaultCategoryId] = useState<string>("");
-  // eBay draft CSV requires a non-empty location (typically a ZIP/postal code or City, ST)
   const [itemLocation, setItemLocation] = useState<string>("");
   const [backfillingCategories, setBackfillingCategories] = useState(false);
-  // Option to export without images to avoid EPS/self-hosted conflicts
   const [excludeImages, setExcludeImages] = useState(false);
 
   // Persist default category and location per project
@@ -670,12 +671,22 @@ export function EbayBatchPanel({
       return;
     }
 
-    // All validations passed - generate CSV
+    // All validations passed - generate CSV and show preview
     const csvContent = generateCSVContent(excludeImages);
 
-    // No BOM - eBay Seller Hub Reports rejects files with BOM prefix on headers
+    // Build preview: show #INFO rows + header + first 3 data rows
+    const allLines = csvContent.split("\r\n");
+    const previewLines = allLines.slice(0, Math.min(allLines.length, 7)); // 3 info + 1 header + 3 data
+    setCsvPreviewContent(previewLines.join("\n"));
+
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
+    setPendingCSVBlob(blob);
+    setShowCSVPreview(true);
+  };
+
+  const confirmDownloadCSV = () => {
+    if (!pendingCSVBlob) return;
+    const url = URL.createObjectURL(pendingCSVBlob);
     const link = document.createElement("a");
     link.href = url;
     link.download = `ebay-listings-${new Date().toISOString().split("T")[0]}.csv`;
@@ -683,9 +694,12 @@ export function EbayBatchPanel({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    
+
     const imageNote = excludeImages ? " (without images - add them in Seller Hub)" : "";
     toast({ title: "CSV Downloaded", description: `${rows.length} listings ready for Seller Hub Reports upload${imageNote}` });
+    setShowCSVPreview(false);
+    setPendingCSVBlob(null);
+    setCsvPreviewContent("");
     setShowUploadInstructions(true);
   };
   if (!projectId) {
@@ -787,6 +801,38 @@ export function EbayBatchPanel({
             )}
           </div>
         </div>
+
+        {/* CSV Preview Modal */}
+        <Dialog open={showCSVPreview} onOpenChange={(open) => {
+          setShowCSVPreview(open);
+          if (!open) { setPendingCSVBlob(null); setCsvPreviewContent(""); }
+        }}>
+          <DialogContent className="max-w-3xl max-h-[80vh]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Eye className="h-5 w-5" />
+                CSV Preview — First 3 Rows
+              </DialogTitle>
+            </DialogHeader>
+            <div className="overflow-auto max-h-[55vh] rounded-md border border-border bg-muted/30 p-3">
+              <pre className="text-xs font-mono whitespace-pre-wrap break-all text-foreground leading-relaxed">
+                {csvPreviewContent}
+              </pre>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Verify the header row has <code className="bg-muted px-1 rounded">Category</code> (not "Category ID") and each data row has a numeric category value.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => { setShowCSVPreview(false); setPendingCSVBlob(null); setCsvPreviewContent(""); }}>
+                Cancel
+              </Button>
+              <Button onClick={confirmDownloadCSV}>
+                <Download className="h-4 w-4 mr-2" />
+                Download CSV
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Upload Instructions */}
         {showUploadInstructions && (
