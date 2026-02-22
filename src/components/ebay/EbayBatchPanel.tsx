@@ -14,7 +14,8 @@ import {
   Upload,
   ExternalLink,
   ImageOff,
-  ImagePlus
+  ImagePlus,
+  Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -93,6 +94,7 @@ export function EbayBatchPanel({
   const [itemLocation, setItemLocation] = useState<string>("");
   const [backfillingCategories, setBackfillingCategories] = useState(false);
   const [excludeImages, setExcludeImages] = useState(false);
+  const [publishing, setPublishing] = useState(false);
 
   // Persist default category and location per project
   useEffect(() => {
@@ -764,6 +766,53 @@ export function EbayBatchPanel({
     setCsvPreviewContent("");
     setShowUploadInstructions(true);
   };
+  const handlePushToEbay = async () => {
+    if (rows.length === 0) {
+      toast({ title: "No listings", description: "Add listings first.", variant: "destructive" });
+      return;
+    }
+    const loc = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
+    if (!loc) {
+      toast({ title: "Missing Location", description: "Set an Item Location (ZIP or City, ST) before pushing to eBay.", variant: "destructive" });
+      return;
+    }
+    if (!confirm(`Push ${rows.length} listing(s) as drafts to your eBay Seller Hub?`)) return;
+
+    setPublishing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("ebay-publish", {
+        body: { rowIds: rows.map(r => r.id), location: loc },
+      });
+
+      if (error) {
+        toast({ title: "Push failed", description: error.message, variant: "destructive" });
+        return;
+      }
+
+      const { succeeded, failed, results } = data;
+      // Update local status for succeeded rows
+      if (succeeded > 0) {
+        const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
+        onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
+      }
+
+      if (failed > 0) {
+        const firstError = results.find((r: any) => !r.success)?.error || "Unknown";
+        toast({
+          title: `${succeeded} pushed, ${failed} failed`,
+          description: `First error: ${firstError.substring(0, 120)}`,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Pushed to eBay!", description: `${succeeded} listing(s) are now in your Seller Hub drafts.` });
+      }
+    } catch (e) {
+      toast({ title: "Push failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   if (!projectId) {
     return (
       <div className="rounded-xl border border-border bg-card p-4">
@@ -854,6 +903,12 @@ export function EbayBatchPanel({
               <Button variant="gold" onClick={downloadCSV} className="gap-2">
                 <Download className="h-4 w-4" />
                 Download CSV for eBay
+              </Button>
+            )}
+            {rows.length > 0 && (
+              <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
+                {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {publishing ? "Pushing…" : "Push to eBay"}
               </Button>
             )}
             {rows.length > 0 && (
