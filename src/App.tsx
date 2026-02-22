@@ -14,6 +14,7 @@ import Platforms from "./pages/Platforms";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import { AIChatPanel } from "@/components/AIChatPanel";
 
 const queryClient = new QueryClient();
 
@@ -35,6 +36,7 @@ const App = () => (
             <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
+          <AIChatPanel />
         </BrowserRouter>
       </TooltipProvider>
     </AuthProvider>
