@@ -848,7 +848,7 @@ export function EbayBatchPanel({
     }
   };
 
-
+  const handlePushToEbay = async () => {
     if (rows.length === 0) {
       toast({ title: "No listings", description: "Add listings first.", variant: "destructive" });
       return;
@@ -872,7 +872,6 @@ export function EbayBatchPanel({
       }
 
       const { succeeded, failed, results } = data;
-      // Update local status for succeeded rows
       if (succeeded > 0) {
         const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
         onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
