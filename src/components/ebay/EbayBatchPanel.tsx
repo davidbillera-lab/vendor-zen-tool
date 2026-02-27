@@ -95,7 +95,7 @@ export function EbayBatchPanel({
   const [backfillingCategories, setBackfillingCategories] = useState(false);
   const [excludeImages, setExcludeImages] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const [zapierWebhookUrl, setZapierWebhookUrl] = useState("");
+  const [zapierWebhookUrl, setZapierWebhookUrl] = useState("https://hooks.zapier.com/hooks/catch/26172063/uqfpdh0/");
   const [sendingToZapier, setSendingToZapier] = useState(false);
   const [showZapierConfig, setShowZapierConfig] = useState(false);
 
