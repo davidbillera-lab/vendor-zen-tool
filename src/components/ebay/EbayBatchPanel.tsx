@@ -95,6 +95,9 @@ export function EbayBatchPanel({
   const [backfillingCategories, setBackfillingCategories] = useState(false);
   const [excludeImages, setExcludeImages] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [zapierWebhookUrl, setZapierWebhookUrl] = useState("");
+  const [sendingToZapier, setSendingToZapier] = useState(false);
+  const [showZapierConfig, setShowZapierConfig] = useState(false);
 
   // Persist default category and location per project
   useEffect(() => {
@@ -104,6 +107,8 @@ export function EbayBatchPanel({
       if (savedCategory) setDefaultCategoryId(savedCategory);
       const savedLocation = localStorage.getItem(`ebay_location_${projectId}`);
       if (savedLocation) setItemLocation(savedLocation);
+      const savedWebhook = localStorage.getItem(`ebay_zapier_webhook`);
+      if (savedWebhook) setZapierWebhookUrl(savedWebhook);
     } catch {
       // ignore
     }
@@ -766,7 +771,84 @@ export function EbayBatchPanel({
     setCsvPreviewContent("");
     setShowUploadInstructions(true);
   };
-  const handlePushToEbay = async () => {
+  // eBay condition name → numeric ID for Zapier
+  const conditionToZapierMap: Record<string, string> = {
+    "New": "1000", "New with tags": "1000", "New other": "1500",
+    "New without tags": "1500", "Open box": "1500",
+    "Certified refurbished": "2000", "Seller refurbished": "2500",
+    "Used": "3000", "Pre-owned": "3000", "Pre-owned - Excellent": "3000",
+    "Pre-owned - Good": "4000", "Pre-owned - Fair": "5000",
+    "For parts": "7000", "For parts or not working": "7000",
+  };
+
+  const handleSendToZapier = async () => {
+    if (rows.length === 0) {
+      toast({ title: "No listings", description: "Add listings first.", variant: "destructive" });
+      return;
+    }
+    if (!zapierWebhookUrl.trim()) {
+      toast({ title: "Missing webhook URL", description: "Enter your Zapier webhook URL first.", variant: "destructive" });
+      return;
+    }
+
+    // Persist the webhook URL
+    localStorage.setItem(`ebay_zapier_webhook`, zapierWebhookUrl.trim());
+
+    setSendingToZapier(true);
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const row of rows) {
+      const categoryId = row.category?.match(/\d{3,}/)?.[0] || defaultCategoryId.trim() || "";
+      const conditionId = conditionToZapierMap[row.condition || ""] || "3000";
+
+      const payload = {
+        itemTitle: (row.title || "").substring(0, 80),
+        description: row.description || "",
+        startPrice: row.price || 0,
+        quantity: 1,
+        categoryID: categoryId,
+        condition: conditionId,
+        duration: "GTC",
+        paymentMethods: ["PayPal"],
+        shippingType: row.shipping_type || "flat",
+        shippingCost: row.shipping_type === "free" ? 0 : (row.shipping_cost || 0),
+        returnDays: row.return_period || 30,
+        returnsAccepted: row.returns_accepted !== false,
+        bestOfferEnabled: row.best_offer_enabled !== false,
+        bestOfferAutoAccept: row.best_offer_auto_accept || null,
+        minimumBestOffer: row.minimum_best_offer || null,
+        location: itemLocation.trim() || "",
+        imageUrls: row.image_urls || [],
+        sku: row.lot_number?.toString() || "",
+        subtitle: row.subtitle || "",
+        itemSpecifics: row.item_specifics || {},
+      };
+
+      try {
+        await fetch(zapierWebhookUrl.trim(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          mode: "no-cors",
+          body: JSON.stringify(payload),
+        });
+        succeeded++;
+      } catch (e) {
+        failed++;
+        console.error("Zapier webhook error for lot", row.lot_number, e);
+      }
+    }
+
+    setSendingToZapier(false);
+
+    if (failed === 0) {
+      toast({ title: "Sent to Zapier!", description: `${succeeded} listing(s) sent. Check your Zap history to confirm.` });
+    } else {
+      toast({ title: `Sent ${succeeded}, failed ${failed}`, description: "Check console for errors.", variant: "destructive" });
+    }
+  };
+
+
     if (rows.length === 0) {
       toast({ title: "No listings", description: "Add listings first.", variant: "destructive" });
       return;
@@ -912,6 +994,16 @@ export function EbayBatchPanel({
               </Button>
             )}
             {rows.length > 0 && (
+              <Button 
+                variant="outline" 
+                onClick={() => setShowZapierConfig(!showZapierConfig)}
+                className="gap-2"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Zapier
+              </Button>
+            )}
+            {rows.length > 0 && (
               <Button variant="outline" onClick={handleClearAll}>
                 Clear All
               </Button>
@@ -919,7 +1011,35 @@ export function EbayBatchPanel({
           </div>
         </div>
 
-        {/* CSV Preview Modal */}
+        {/* Zapier Webhook Config */}
+        {showZapierConfig && (
+          <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <ExternalLink className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium text-foreground">Zapier Webhook</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Paste your Zapier Catch Hook URL. Each listing will be sent as JSON with itemTitle, description, categoryID, condition, itemSpecifics, and all core fields.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                placeholder="https://hooks.zapier.com/hooks/catch/..."
+                value={zapierWebhookUrl}
+                onChange={(e) => setZapierWebhookUrl(e.target.value)}
+                className="flex-1"
+              />
+              <Button 
+                onClick={handleSendToZapier} 
+                disabled={sendingToZapier || !zapierWebhookUrl.trim()}
+                className="gap-2"
+              >
+                {sendingToZapier ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {sendingToZapier ? `Sending…` : `Send ${rows.length} to Zapier`}
+              </Button>
+            </div>
+          </div>
+        )}
+
         <Dialog open={showCSVPreview} onOpenChange={(open) => {
           setShowCSVPreview(open);
           if (!open) { setPendingCSVBlob(null); setCsvPreviewContent(""); }
