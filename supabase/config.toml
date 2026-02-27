@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.ebay-publish]
 verify_jwt = false
+
+[functions.zapier-proxy]
+verify_jwt = false
