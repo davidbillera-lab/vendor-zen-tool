@@ -826,12 +826,13 @@ export function EbayBatchPanel({
       };
 
       try {
-        await fetch(zapierWebhookUrl.trim(), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          mode: "no-cors",
-          body: JSON.stringify(payload),
+        const { data, error } = await supabase.functions.invoke("zapier-proxy", {
+          body: {
+            webhookUrl: zapierWebhookUrl.trim(),
+            payload,
+          },
         });
+        if (error) throw error;
         succeeded++;
       } catch (e) {
         failed++;
