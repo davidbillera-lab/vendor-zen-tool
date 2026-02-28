@@ -414,15 +414,20 @@ serve(async (req) => {
       throw new Error(`Unknown platform: ${platform}`);
     }
 
-    // Build content array with images
+    // Build content array with images - limit to 4 for speed (AI gets diminishing returns beyond that)
     const content: any[] = [];
+    const maxImagesForAI = Math.min(imageUrls.length, 4);
     
     // Add images first for visual analysis
-    for (const url of imageUrls) {
+    for (let i = 0; i < maxImagesForAI; i++) {
       content.push({
         type: "image_url",
-        image_url: { url }
+        image_url: { url: imageUrls[i] }
       });
+    }
+    
+    if (imageUrls.length > maxImagesForAI) {
+      console.log(`Using ${maxImagesForAI} of ${imageUrls.length} images for AI analysis`);
     }
 
     // Add text prompt
@@ -446,7 +451,8 @@ serve(async (req) => {
           { role: 'system', content: systemPrompt },
           { role: 'user', content }
         ],
-        max_tokens: 1500,
+        max_tokens: platform === 'ebay' ? 2000 : 1500,
+        temperature: 0.3,
       }),
     });
 
