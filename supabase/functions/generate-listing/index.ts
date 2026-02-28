@@ -114,28 +114,51 @@ IMPORTANT RULES:
 - The categoryId MUST be a number, not a string
 - When in doubt, pick from the VERIFIED list above rather than guessing
 
-=== STEP 3: TITLE (HARD LIMIT: 80 CHARACTERS MAX) ===
+=== STEP 3: TITLE (HARD LIMIT: 80 CHARACTERS MAX — CASSINI OPTIMIZED) ===
 **THIS IS CRITICAL - COUNT YOUR CHARACTERS!**
 eBay will REJECT titles over 80 characters. You MUST:
 - Count every character including spaces
 - Stay AT OR UNDER 80 characters - NO EXCEPTIONS
-- Prioritize: Brand + Item Type + Key Feature + Size/Condition
 
-Create a title that:
-- Is EXACTLY 80 characters or less (COUNT IT TWICE!)
-- Front-loads the most important keywords (brand, item type)
-- Includes: Brand + Item Type + Key Features + Size/Color + Condition
-- Uses natural search terms buyers actually type
-- NO filler words like "wow", "look", "nice", "great"
+CASSINI ALGORITHM OPTIMIZATION:
+eBay's Cassini search engine ranks listings based on keyword relevance, buyer intent match, and listing quality signals. Your title MUST be engineered for Cassini:
+
+1. **Front-load high-value keywords**: Brand name FIRST, then item type, then differentiators
+2. **Use exact buyer search terms**: Think about what a buyer types into the search bar — use THOSE words
+3. **Include long-tail keywords**: Specific descriptors that match niche searches (e.g., "mid-century modern" not just "vintage")
+4. **Stack keyword density**: Every word must serve a search purpose — NO filler words (wow, look, nice, great, beautiful, stunning)
+5. **Include key attributes**: Brand + Item Type + Material/Feature + Size/Color + Condition keyword
+6. **Use natural word order**: Cassini penalizes keyword stuffing — titles should read naturally while being keyword-dense
+7. **Capitalize strategically**: Title case for readability, which improves click-through rate (a Cassini signal)
 
 GOOD EXAMPLES (count them - all under 80 chars):
 - "Patagonia Men's Down Puffer Jacket Blue Size L Winter Coat Excellent" (68 chars)
-- "Vintage Pyrex Pink Gooseberry Casserole 1.5 Qt with Lid 1950s" (61 chars)
-- "Sony WH-1000XM4 Wireless Noise Canceling Headphones Black" (57 chars)
+- "Vintage Pyrex Pink Gooseberry Casserole Dish 1.5 Qt with Lid 1950s" (66 chars)
+- "Sony WH-1000XM4 Wireless Noise Canceling Over-Ear Headphones Black" (66 chars)
+- "Mid Century Modern Teak Danish Credenza Sideboard 60in Scandinavian" (67 chars)
 
 BAD EXAMPLES:
-- "Nice Jacket Great Condition Look!" (no keywords, filler words)
+- "Nice Jacket Great Condition Look!" (filler words, no keywords)
+- "RARE AMAZING BEAUTIFUL Vintage Item WOW" (keyword stuffing, no specifics)
 - Any title over 80 characters (WILL BE REJECTED)
+
+=== STEP 3B: DESCRIPTION (CASSINI OPTIMIZED — DETAILED & KEYWORD-RICH) ===
+eBay's Cassini algorithm indexes description text for search ranking. A well-written description directly improves visibility and conversion.
+
+CASSINI DESCRIPTION REQUIREMENTS:
+1. **Minimum 150 words** — longer, detailed descriptions rank higher
+2. **Repeat key title keywords naturally** in the first 1-2 sentences
+3. **Include long-tail search phrases** buyers might use that didn't fit in the 80-char title
+4. **Structure with clear sections** using line breaks:
+   - Opening hook: What the item IS + brand + key selling point
+   - Detailed specifications: Measurements, materials, model numbers, dates
+   - Condition report: Honest, thorough assessment of wear/flaws/completeness
+   - What's included: List all items/accessories in the sale
+   - Shipping note: "Ships fast and securely packaged"
+5. **Use natural keyword variations**: If title says "jacket", also use "coat", "outerwear"
+6. **Include brand story/context** when relevant
+7. **Add scarcity signals** when honest: "discontinued", "no longer in production", "hard to find"
+8. **Avoid**: ALL CAPS blocks, excessive exclamation marks, "L@@K", emoji, HTML tags
 
 === STEP 4: PRICING (BASED ON SOLD COMPS - CRITICAL) ===
 Price MUST be based on what similar items have ACTUALLY SOLD for on eBay, not guesses.
@@ -184,8 +207,8 @@ CATEGORY-SPECIFIC:
 
 === REQUIRED JSON OUTPUT FORMAT ===
 {
-  "title": "string (MUST be 80 chars or less - COUNT IT!)",
-  "description": "string (detailed, professional)",
+  "title": "string (MUST be 80 chars or less - Cassini optimized, keyword-dense)",
+  "description": "string (150+ words, Cassini optimized, structured with specs/condition/includes)",
   "price": number (based on sold comps, not random),
   "category": "string (human readable like 'Men's Coats, Jackets & Vests')",
   "categoryId": number (REQUIRED - must be a LEAF category ID, not parent),
