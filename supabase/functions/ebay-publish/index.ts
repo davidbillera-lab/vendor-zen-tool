@@ -55,6 +55,10 @@ async function requestAccessToken(environment: EbayEnvironment): Promise<string>
   const clientSecret = sanitizeSecret("EBAY_CLIENT_SECRET");
   const refreshToken = sanitizeSecret("EBAY_REFRESH_TOKEN");
 
+  // Diagnostic: log credential fingerprints (first 8 + last 4 chars) to verify they match
+  const fp = (s: string) => s.length > 12 ? `${s.slice(0, 8)}...${s.slice(-4)}` : `${s.slice(0, 4)}...`;
+  console.log(`[eBay ${environment}] ClientID: ${fp(clientId)}, Secret length: ${clientSecret.length}, RefreshToken: ${fp(refreshToken)}`);
+
   const res = await fetch(EBAY_ENV_CONFIG[environment].oauthTokenUrl, {
     method: "POST",
     headers: {
