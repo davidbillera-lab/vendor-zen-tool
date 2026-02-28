@@ -70,6 +70,45 @@ async function uploadImageToEPS(
   return epsData.imageUrl || imageUrl;
 }
 
+/* ───────────── Ensure merchant location exists ───────────── */
+
+async function ensureLocation(accessToken: string): Promise<void> {
+  const locationKey = "HIGHLANDS_RANCH";
+  // Try to create; if it already exists eBay returns 409 which we ignore
+  const res = await fetch(
+    `https://api.ebay.com/sell/inventory/v1/location/${locationKey}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        location: {
+          address: {
+            city: "Highlands Ranch",
+            stateOrProvince: "CO",
+            postalCode: "80129",
+            country: "US",
+          },
+        },
+        locationTypes: ["WAREHOUSE"],
+        name: "Highlands Ranch",
+        merchantLocationStatus: "ENABLED",
+      }),
+    }
+  );
+  // 204 = created, 409 = already exists — both are fine
+  if (!res.ok && res.status !== 409 && res.status !== 204) {
+    const errText = await res.text();
+    console.warn(`Location creation returned ${res.status}: ${errText}`);
+  }
+  // Consume body to prevent leak
+  if (res.status !== 204) {
+    try { await res.text(); } catch {}
+  }
+}
+
 /* ──────────── eBay condition enum mapping ──────────── */
 
 function mapCondition(condition: string | null): string {
@@ -159,6 +198,9 @@ async function publishRow(
     const sku = `LOT-${row.lot_number}`;
 
     // 3. Create inventory item
+    // Ensure merchant location exists (create once, ignore if exists)
+    await ensureLocation(accessToken);
+
     const inventoryBody: Record<string, unknown> = {
       availability: {
         shipToLocationAvailability: { quantity: 1 },
@@ -240,7 +282,7 @@ async function publishRow(
             ? [{ shippingCost: { value: String(row.shipping_cost), currency: "USD" }, shippingServiceType: "DOMESTIC", priority: 1 }]
             : undefined,
       },
-      merchantLocationKey: location || undefined,
+      merchantLocationKey: "HIGHLANDS_RANCH",
       availableQuantity: 1,
       ...(row.best_offer_enabled
         ? {
