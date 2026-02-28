@@ -70,14 +70,14 @@ export async function generateListing(
 }
 
 // Compress image before upload for faster processing
-async function compressImage(file: File, maxWidth = 1200, quality = 0.8): Promise<Blob> {
+async function compressImage(file: File, maxWidth = 1024, quality = 0.75): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     
     img.onload = () => {
-      // Calculate new dimensions
+      URL.revokeObjectURL(img.src); // Clean up immediately
       let { width, height } = img;
       if (width > maxWidth) {
         height = (height * maxWidth) / width;
