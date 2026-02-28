@@ -91,7 +91,7 @@ export function EbayBatchPanel({
   const [csvPreviewContent, setCsvPreviewContent] = useState("");
   const [pendingCSVBlob, setPendingCSVBlob] = useState<Blob | null>(null);
   const [defaultCategoryId, setDefaultCategoryId] = useState<string>("");
-  const [itemLocation, setItemLocation] = useState<string>("");
+  const [itemLocation, setItemLocation] = useState<string>("80129");
   const [backfillingCategories, setBackfillingCategories] = useState(false);
   const [excludeImages, setExcludeImages] = useState(false);
   const [publishing, setPublishing] = useState(false);
