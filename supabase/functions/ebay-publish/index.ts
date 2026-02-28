@@ -8,12 +8,54 @@ const corsHeaders = {
 
 /* ───────────────────── eBay OAuth helpers ───────────────────── */
 
-async function getAccessToken(): Promise<string> {
-  const clientId = Deno.env.get("EBAY_CLIENT_ID")!;
-  const clientSecret = Deno.env.get("EBAY_CLIENT_SECRET")!;
-  const refreshToken = Deno.env.get("EBAY_REFRESH_TOKEN")!;
+type EbayEnvironment = "production" | "sandbox";
 
-  const res = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+interface EbayAuthContext {
+  accessToken: string;
+  apiBaseUrl: string;
+  environment: EbayEnvironment;
+}
+
+const EBAY_ENV_CONFIG: Record<EbayEnvironment, { apiBaseUrl: string; oauthTokenUrl: string }> = {
+  production: {
+    apiBaseUrl: "https://api.ebay.com",
+    oauthTokenUrl: "https://api.ebay.com/identity/v1/oauth2/token",
+  },
+  sandbox: {
+    apiBaseUrl: "https://api.sandbox.ebay.com",
+    oauthTokenUrl: "https://api.sandbox.ebay.com/identity/v1/oauth2/token",
+  },
+};
+
+function sanitizeSecret(secretName: string): string {
+  const raw = Deno.env.get(secretName) ?? "";
+  const cleaned = raw.trim().replace(/^['"]|['"]$/g, "");
+
+  if (!cleaned) {
+    throw new Error(`Missing or empty required secret: ${secretName}`);
+  }
+
+  return cleaned;
+}
+
+function getEnvironmentOrder(): EbayEnvironment[] {
+  const configured = (Deno.env.get("EBAY_ENV") || Deno.env.get("EBAY_ENVIRONMENT") || "")
+    .trim()
+    .toLowerCase();
+
+  if (configured === "sandbox") return ["sandbox"];
+  if (configured === "production") return ["production"];
+
+  // Try production first (default), then sandbox fallback for mismatched app/token env.
+  return ["production", "sandbox"];
+}
+
+async function requestAccessToken(environment: EbayEnvironment): Promise<string> {
+  const clientId = sanitizeSecret("EBAY_CLIENT_ID");
+  const clientSecret = sanitizeSecret("EBAY_CLIENT_SECRET");
+  const refreshToken = sanitizeSecret("EBAY_REFRESH_TOKEN");
+
+  const res = await fetch(EBAY_ENV_CONFIG[environment].oauthTokenUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -22,23 +64,46 @@ async function getAccessToken(): Promise<string> {
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshToken,
-      scope: "https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/commerce.media.upload",
     }),
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`OAuth token refresh failed (${res.status}): ${text}`);
+    throw new Error(`OAuth token refresh failed in ${environment} (${res.status}): ${text}`);
   }
+
   const data = await res.json();
   return data.access_token;
+}
+
+async function getAccessToken(): Promise<EbayAuthContext> {
+  const environments = getEnvironmentOrder();
+  const errors: string[] = [];
+
+  for (const environment of environments) {
+    try {
+      const accessToken = await requestAccessToken(environment);
+      return {
+        accessToken,
+        apiBaseUrl: EBAY_ENV_CONFIG[environment].apiBaseUrl,
+        environment,
+      };
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  throw new Error(
+    `OAuth token refresh failed for all configured eBay environments. ${errors.join(" | ")}`
+  );
 }
 
 /* ───────────────── Upload image to eBay EPS ─────────────────── */
 
 async function uploadImageToEPS(
   imageUrl: string,
-  accessToken: string
+  accessToken: string,
+  apiBaseUrl: string
 ): Promise<string> {
   // Download image bytes
   const imgRes = await fetch(imageUrl);
@@ -48,7 +113,7 @@ async function uploadImageToEPS(
 
   // Upload to eBay
   const epsRes = await fetch(
-    "https://api.ebay.com/commerce/media/v1_beta/image",
+    `${apiBaseUrl}/commerce/media/v1_beta/image`,
     {
       method: "POST",
       headers: {
@@ -72,11 +137,11 @@ async function uploadImageToEPS(
 
 /* ───────────── Ensure merchant location exists ───────────── */
 
-async function ensureLocation(accessToken: string): Promise<void> {
+async function ensureLocation(accessToken: string, apiBaseUrl: string): Promise<void> {
   const locationKey = "HIGHLANDS_RANCH";
   // Try to create; if it already exists eBay returns 409 which we ignore
   const res = await fetch(
-    `https://api.ebay.com/sell/inventory/v1/location/${locationKey}`,
+    `${apiBaseUrl}/sell/inventory/v1/location/${locationKey}`,
     {
       method: "PUT",
       headers: {
@@ -166,7 +231,8 @@ interface EbayRow {
 async function publishRow(
   row: EbayRow,
   accessToken: string,
-  location: string
+  location: string,
+  apiBaseUrl: string
 ): Promise<{ success: boolean; error?: string; listingId?: string }> {
   try {
     // 1. Upload images to EPS
@@ -174,7 +240,7 @@ async function publishRow(
     if (row.image_urls && row.image_urls.length > 0) {
       for (const url of row.image_urls.slice(0, 24)) {
         try {
-          const epsUrl = await uploadImageToEPS(url, accessToken);
+          const epsUrl = await uploadImageToEPS(url, accessToken, apiBaseUrl);
           epsImageUrls.push(epsUrl);
         } catch (e) {
           console.warn(`EPS upload failed for ${url}, using original`, e);
@@ -199,7 +265,7 @@ async function publishRow(
 
     // 3. Create inventory item
     // Ensure merchant location exists (create once, ignore if exists)
-    await ensureLocation(accessToken);
+    await ensureLocation(accessToken, apiBaseUrl);
 
     const inventoryBody: Record<string, unknown> = {
       availability: {
@@ -239,7 +305,7 @@ async function publishRow(
     }
 
     const invRes = await fetch(
-      `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+      `${apiBaseUrl}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
       {
         method: "PUT",
         headers: {
@@ -301,7 +367,7 @@ async function publishRow(
     };
 
     const offerRes = await fetch(
-      "https://api.ebay.com/sell/inventory/v1/offer",
+      `${apiBaseUrl}/sell/inventory/v1/offer`,
       {
         method: "POST",
         headers: {
@@ -373,12 +439,13 @@ Deno.serve(async (req: Request) => {
     }
 
     // Get eBay access token
-    const accessToken = await getAccessToken();
+    const { accessToken, apiBaseUrl, environment } = await getAccessToken();
+    console.log(`Publishing with eBay ${environment} environment`);
 
     // Process each row
     const results = [];
     for (const row of rows) {
-      const result = await publishRow(row as unknown as EbayRow, accessToken, location || "");
+      const result = await publishRow(row as unknown as EbayRow, accessToken, location || "", apiBaseUrl);
       results.push({ id: row.id, lot_number: row.lot_number, ...result });
 
       // Update status in DB
