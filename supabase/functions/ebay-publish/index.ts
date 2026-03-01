@@ -411,6 +411,17 @@ Deno.serve(async (req: Request) => {
       { global: { headers: { Authorization: authHeader || "" } } }
     );
 
+    const body = await req.json();
+
+    // Quick auth test mode (no user auth needed)
+    if (body.test_auth_only) {
+      const auth = await getAccessToken();
+      return new Response(
+        JSON.stringify({ success: true, environment: auth.environment }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -421,7 +432,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { rowIds, location } = await req.json();
+    const { rowIds, location } = body;
     if (!rowIds || !Array.isArray(rowIds) || rowIds.length === 0) {
       return new Response(
         JSON.stringify({ error: "rowIds array required" }),
