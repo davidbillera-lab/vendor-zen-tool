@@ -20,57 +20,20 @@ serve(async (req) => {
       });
     }
 
-    // Fetch a fresh eBay access token using the stored refresh token
-    const clientId = Deno.env.get("EBAY_CLIENT_ID");
-    const clientSecret = Deno.env.get("EBAY_CLIENT_SECRET");
-    const refreshToken = Deno.env.get("EBAY_REFRESH_TOKEN");
+    console.log("[zapier-proxy] Forwarding payload to Zapier webhook");
 
-    if (!clientId || !clientSecret || !refreshToken) {
-      return new Response(JSON.stringify({ error: "eBay credentials not configured" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const tokenResponse = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
-      },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        scope: "https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/commerce.media.upload",
-      }),
-    });
-
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      console.error("eBay token refresh failed:", errorText);
-      return new Response(JSON.stringify({ error: "Failed to get eBay access token", details: errorText }), {
-        status: 502,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
-
-    // Embed the token in the payload and forward to Zapier
-    const enrichedPayload = {
-      ...payload,
-      auth_token: accessToken,
-    };
-
+    // Simply forward the payload to Zapier — Zapier's native eBay integration
+    // handles OAuth internally, no API keys needed from our side.
     const zapierResponse = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(enrichedPayload),
+      body: JSON.stringify(payload),
     });
 
     const zapierStatus = zapierResponse.status;
     const zapierBody = await zapierResponse.text();
+
+    console.log(`[zapier-proxy] Zapier responded: ${zapierStatus}`);
 
     return new Response(JSON.stringify({ success: true, zapierStatus, zapierBody }), {
       status: 200,
