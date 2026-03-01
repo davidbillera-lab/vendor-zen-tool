@@ -59,16 +59,23 @@ async function requestAccessToken(environment: EbayEnvironment): Promise<string>
   const fp = (s: string) => s.length > 12 ? `${s.slice(0, 8)}...${s.slice(-4)}` : `${s.slice(0, 4)}...`;
   console.log(`[eBay ${environment}] ClientID: ${fp(clientId)}, Secret length: ${clientSecret.length}, RefreshToken: ${fp(refreshToken)}`);
 
+  const params: Record<string, string> = {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    scope: "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+  };
+
+  // Log the full Base64 auth header length for debugging
+  const b64Auth = btoa(`${clientId}:${clientSecret}`);
+  console.log(`[eBay ${environment}] Auth header Base64 length: ${b64Auth.length}, RefreshToken length: ${refreshToken.length}`);
+
   const res = await fetch(EBAY_ENV_CONFIG[environment].oauthTokenUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      Authorization: `Basic ${b64Auth}`,
     },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
+    body: new URLSearchParams(params),
   });
 
   if (!res.ok) {
