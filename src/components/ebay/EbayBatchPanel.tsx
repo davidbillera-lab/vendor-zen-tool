@@ -16,6 +16,7 @@ import {
   ImageOff,
   ImagePlus,
   Send,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -98,6 +99,7 @@ export function EbayBatchPanel({
   const [zapierWebhookUrl, setZapierWebhookUrl] = useState("https://hooks.zapier.com/hooks/catch/26172063/uqfpdh0/");
   const [sendingToZapier, setSendingToZapier] = useState(false);
   const [showZapierConfig, setShowZapierConfig] = useState(false);
+  const [enriching, setEnriching] = useState(false);
 
   // Persist default category and location per project
   useEffect(() => {
@@ -674,6 +676,113 @@ export function EbayBatchPanel({
     }
   };
 
+  const bulkEnrichItemSpecifics = async () => {
+    if (!projectId || rows.length === 0) return;
+
+    // Find rows with sparse item specifics (fewer than 3 keys)
+    const sparseRows = rows.filter((r) => {
+      const specCount = Object.keys(r.item_specifics || {}).length;
+      return specCount < 3;
+    });
+
+    if (sparseRows.length === 0) {
+      toast({ title: "All enriched", description: "All listings already have 3+ item specifics." });
+      return;
+    }
+
+    setEnriching(true);
+    try {
+      // Process in batches of 10 to avoid token limits
+      const batchSize = 10;
+      let totalUpdated = 0;
+      let totalFailed = 0;
+
+      for (let i = 0; i < sparseRows.length; i += batchSize) {
+        const batch = sparseRows.slice(i, i + batchSize);
+        
+        const payload = batch.map((r) => ({
+          id: r.id,
+          title: r.title,
+          description: r.description,
+          category: r.category,
+          condition: r.condition,
+          item_specifics: r.item_specifics,
+          image_urls: r.image_urls,
+        }));
+
+        const { data, error } = await supabase.functions.invoke("enrich-ebay-batch", {
+          body: { rows: payload },
+        });
+
+        if (error || !data?.enriched) {
+          console.error("Enrich error:", error || data?.error);
+          totalFailed += batch.length;
+          continue;
+        }
+
+        const enriched = data.enriched as Array<{
+          id: string;
+          item_specifics: Record<string, string>;
+          category_id?: number | null;
+        }>;
+
+        // Update each row in DB and local state
+        for (const item of enriched) {
+          const row = rows.find((r) => r.id === item.id);
+          if (!row) continue;
+
+          const mergedSpecifics = { ...(row.item_specifics || {}), ...item.item_specifics };
+          const updatePayload: any = { item_specifics: mergedSpecifics };
+          
+          // Also update category if AI found a better one and current is missing
+          if (item.category_id && !row.category?.match(/\d{3,}/)) {
+            updatePayload.category = String(item.category_id);
+          }
+
+          const { error: updateError } = await supabase
+            .from("ebay_batch_rows")
+            .update(updatePayload)
+            .eq("id", item.id);
+
+          if (updateError) {
+            totalFailed++;
+          } else {
+            totalUpdated++;
+          }
+        }
+
+        // Update local state after each batch
+        onRowsChange(
+          rows.map((r) => {
+            const hit = enriched.find((e) => e.id === r.id);
+            if (!hit) return r;
+            const merged = { ...(r.item_specifics || {}), ...hit.item_specifics };
+            const updatedRow = { ...r, item_specifics: merged };
+            if (hit.category_id && !r.category?.match(/\d{3,}/)) {
+              updatedRow.category = String(hit.category_id);
+            }
+            return updatedRow;
+          })
+        );
+      }
+
+      toast({
+        title: "AI Enrichment complete",
+        description: `Updated ${totalUpdated} listing(s) with item specifics.${totalFailed > 0 ? ` ${totalFailed} failed.` : ""}`,
+        variant: totalFailed > 0 ? "destructive" : "default",
+      });
+    } catch (e) {
+      console.error("Bulk enrich error:", e);
+      toast({
+        title: "Enrichment failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setEnriching(false);
+    }
+  };
+
   const downloadCSV = async () => {
     if (rows.length === 0) {
       toast({ title: "No data", description: "Add some listings first", variant: "destructive" });
@@ -964,6 +1073,18 @@ export function EbayBatchPanel({
               >
                 {backfillingCategories ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 Auto-fill Category IDs
+              </Button>
+            )}
+
+            {rows.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={bulkEnrichItemSpecifics}
+                disabled={enriching}
+                className="gap-2"
+              >
+                {enriching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {enriching ? "Enriching…" : "Bulk AI Enrich"}
               </Button>
             )}
 

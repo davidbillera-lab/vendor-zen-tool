@@ -20,3 +20,6 @@ verify_jwt = false
 
 [functions.zapier-proxy]
 verify_jwt = false
+
+[functions.enrich-ebay-batch]
+verify_jwt = false
