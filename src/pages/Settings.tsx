@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { EbayOAuthManager } from "@/components/ebay/EbayOAuthManager";
 import { 
   User, 
   Bell, 
@@ -130,18 +131,22 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* API Keys Section */}
+          {/* eBay OAuth Section */}
           <div className="rounded-xl border border-border bg-card p-6">
-            <h2 className="font-serif text-xl font-semibold text-foreground">Platform API Keys</h2>
+            <h2 className="font-serif text-xl font-semibold text-foreground">eBay Connection</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Manage your API connections to selling platforms
+              Set up and test your eBay OAuth 2.0 credentials
             </p>
-
             <Separator className="my-6" />
+            <EbayOAuthManager />
+          </div>
 
+          {/* Other Platforms */}
+          <div className="rounded-xl border border-border bg-card p-6">
+            <h2 className="font-serif text-xl font-semibold text-foreground">Other Platforms</h2>
+            <Separator className="my-6" />
             <div className="space-y-4">
               {[
-                { platform: "eBay", status: "Connected" },
                 { platform: "Facebook", status: "Connected" },
                 { platform: "LiveAuctioneers", status: "Connected" },
                 { platform: "Denver Auctions", status: "Connected" },
