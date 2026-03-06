@@ -142,8 +142,8 @@ export async function authenticate() {
 
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
-    log.error('Supabase authentication failed', error);
-    throw error;
+    log.warn(`Supabase auth failed (${error.message}) — continuing with anon key access`);
+    return;
   }
 
   log.success('Authenticated with Supabase successfully');
