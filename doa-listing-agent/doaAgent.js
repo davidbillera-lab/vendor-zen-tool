@@ -27,14 +27,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
 // ── Read config from .env ─────────────────────────────────────────────────────
-const DOA_BASE_URL  = process.env.DOA_BASE_URL  || 'https://denveronlineauctions.com';
-const DOA_EMAIL     = process.env.DOA_EMAIL;
-const DOA_PASSWORD  = process.env.DOA_PASSWORD;
-const DOA_PARTY_ID  = process.env.DOA_PARTY_ID  || '115';
-const DOA_AUCTION_ID = process.env.DOA_AUCTION_ID || '1678301';
+const DOA_BASE_URL    = process.env.DOA_BASE_URL    || 'https://denveronlineauctions.com';
+const DOA_EMAIL       = process.env.DOA_EMAIL;
+const DOA_PASSWORD    = process.env.DOA_PASSWORD;
+const DOA_AUCTION_SLUG = process.env.DOA_AUCTION_SLUG || '175-oz-silver-exgle-vintage-collectibles-china';
 
 const LOGIN_URL   = `${DOA_BASE_URL}/sub-admin/`;
-const AUCTION_URL = `${DOA_BASE_URL}/sub-admin/EditAuction?id=${DOA_AUCTION_ID}&PartyId=${DOA_PARTY_ID}`;
+const AUCTION_URL = `${DOA_BASE_URL}/auction/${DOA_AUCTION_SLUG}`;
 
 // ── Screenshot helper ─────────────────────────────────────────────────────────
 
@@ -166,7 +165,7 @@ async function doLogin(page) {
 // ── Navigate to Auction Edit Page ─────────────────────────────────────────────
 
 async function goToAuctionPage(page) {
-  log.info(`Navigating to auction edit page… (ID: ${DOA_AUCTION_ID})`);
+  log.info(`Navigating to auction page… (${DOA_AUCTION_SLUG})`);
   await page.goto(AUCTION_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForTimeout(2000); // Let dynamic content settle
   log.success(`On auction edit page: ${AUCTION_URL}`);

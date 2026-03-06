@@ -42,7 +42,7 @@ Step 5: Create your .env file
   - SUPABASE_PASSWORD (your Supabase login password)
   - DOA_EMAIL (your Denver Online Auctions login)
   - DOA_PASSWORD (your Denver Online Auctions password)
-  - DOA_AUCTION_ID (the auction you want to add lots to)
+  - DOA_AUCTION_SLUG (the slug from your auction URL, e.g. 175-oz-silver-exgle-vintage-collectibles-china)
 
 Step 6: Make sure your Supabase table has a "status" column
   In Supabase, go to your denver_batch_rows table.
