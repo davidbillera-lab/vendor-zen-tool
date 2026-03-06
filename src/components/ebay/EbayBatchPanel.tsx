@@ -245,8 +245,9 @@ export function EbayBatchPanel({
   const toHtmlDescription = (text: string): string => {
     // First sanitize to remove ALL line breaks, then wrap in HTML
     const sanitized = sanitizeForCSV(text);
-    // Double-escape quotes for CSV field embedding
-    return `<p>${sanitized.replace(/"/g, '""')}</p>`;
+    // Do NOT escape quotes here - the final CSV builder wraps each cell in quotes
+    // and escapes internal quotes via .replace(/"/g, '""') at line ~529
+    return `<p>${sanitized}</p>`;
   };
 
   // Categories that eBay has deprecated or remapped — warn before export
