@@ -26,7 +26,9 @@ import {
   Cloud,
   Edit,
   AlertTriangle,
-  CheckCircle
+  CheckCircle,
+  RefreshCw,
+  Clock
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -200,6 +202,49 @@ export default function CreateListing() {
     
     fetchDenverLots();
   }, [selectedProject?.id]);
+
+  // Real-time subscription: refresh Denver lot status when agent updates rows
+  useEffect(() => {
+    if (!selectedProject?.id) return;
+
+    const channel = supabase
+      .channel(`denver_status_${selectedProject.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'denver_batch_rows', filter: `batch_id=eq.${selectedProject.id}` },
+        (payload) => {
+          setDenverLots(prev =>
+            prev.map(lot => lot.id === payload.new.id ? { ...lot, ...payload.new } : lot)
+          );
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [selectedProject?.id]);
+
+  const requeueDenverLot = async (lotId: string) => {
+    const { error } = await supabase
+      .from('denver_batch_rows')
+      .update({ status: 'pending', error_log: null })
+      .eq('id', lotId);
+
+    if (!error) {
+      setDenverLots(prev =>
+        prev.map(l => l.id === lotId ? { ...l, status: 'pending', error_log: null } : l)
+      );
+      toast({ title: "Lot re-queued", description: "It will be picked up on the next agent run." });
+    }
+  };
+
+  const getDenverStatusBadge = (status: string | null) => {
+    switch (status) {
+      case 'completed':  return <span className="text-xs font-medium bg-green-500/20 text-green-600 px-1.5 py-0.5 rounded-full">done</span>;
+      case 'failed':     return <span className="text-xs font-medium bg-red-500/20 text-red-600 px-1.5 py-0.5 rounded-full">failed</span>;
+      case 'in_progress': return <span className="text-xs font-medium bg-blue-500/20 text-blue-600 px-1.5 py-0.5 rounded-full">running</span>;
+      default:           return <span className="text-xs font-medium bg-amber-500/20 text-amber-600 px-1.5 py-0.5 rounded-full">pending</span>;
+    }
+  };
 
   // Fetch eBay batch rows when project changes
   useEffect(() => {
@@ -1156,8 +1201,10 @@ export default function CreateListing() {
                       variant={selectedDenverLot === lot.lot_number ? "default" : "outline"}
                       size="sm"
                       onClick={() => setSelectedDenverLot(lot.lot_number)}
+                      className="gap-1.5"
                     >
                       Lot #{lot.lot_number}
+                      {getDenverStatusBadge(lot.status)}
                     </Button>
                   ))}
                 </div>
@@ -1167,8 +1214,31 @@ export default function CreateListing() {
                   <div className="border border-border rounded-lg p-4 bg-card space-y-3">
                     {denverLots.filter(l => l.lot_number === selectedDenverLot).map((lot) => (
                       <div key={lot.id} className="space-y-3">
-                        <h3 className="font-semibold">Lot #{lot.lot_number}</h3>
-                        
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-semibold">Lot #{lot.lot_number}</h3>
+                          <div className="flex items-center gap-2">
+                            {getDenverStatusBadge(lot.status)}
+                            {lot.status === 'failed' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 text-xs gap-1"
+                                onClick={() => requeueDenverLot(lot.id)}
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                                Re-queue
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+
+                        {lot.error_log && (
+                          <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-600">
+                            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                            <span className="break-all">{lot.error_log}</span>
+                          </div>
+                        )}
+
                         <div className="grid gap-3">
                           <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
                             <div className="flex-1 min-w-0">

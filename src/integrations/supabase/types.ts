@@ -50,10 +50,12 @@ export type Database = {
           created_at: string
           created_by: string | null
           description: string | null
+          error_log: string | null
           id: string
           image_urls: string[] | null
           lot_number: number
           starting_bid: number | null
+          status: string | null
           title: string
         }
         Insert: {
@@ -61,10 +63,12 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           description?: string | null
+          error_log?: string | null
           id?: string
           image_urls?: string[] | null
           lot_number: number
           starting_bid?: number | null
+          status?: string | null
           title: string
         }
         Update: {
@@ -72,10 +76,12 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           description?: string | null
+          error_log?: string | null
           id?: string
           image_urls?: string[] | null
           lot_number?: number
           starting_bid?: number | null
+          status?: string | null
           title?: string
         }
         Relationships: [
