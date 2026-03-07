@@ -21,15 +21,20 @@ import log from './logger.js';
 
 // ── Connection setup ──────────────────────────────────────────────────────────
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabaseUrl        = process.env.SUPABASE_URL;
+const supabaseAnonKey    = process.env.SUPABASE_ANON_KEY;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-  log.error('SUPABASE_URL and SUPABASE_ANON_KEY must be set in your .env file');
+if (!supabaseUrl || (!supabaseAnonKey && !supabaseServiceKey)) {
+  log.error('SUPABASE_URL and either SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY must be set in your .env file');
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Service role key bypasses RLS and needs no email/password auth — preferred for local agents
+const supabaseKey = supabaseServiceKey || supabaseAnonKey;
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
 
 // ── Column name mapping ───────────────────────────────────────────────────────
 // Your table might use different column names than what the agent expects.
@@ -130,6 +135,12 @@ function normalizeRow(raw) {
  * Must be called before getLots() or any update functions.
  */
 export async function authenticate() {
+  // If service role key is set, no auth step needed — it already has full access
+  if (supabaseServiceKey) {
+    log.success('Using service role key — skipping email/password auth');
+    return;
+  }
+
   const email    = process.env.SUPABASE_EMAIL;
   const password = process.env.SUPABASE_PASSWORD;
 
