@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.ebay-oauth]
 verify_jwt = false
+
+[functions.generate-denver-listing]
+verify_jwt = false
