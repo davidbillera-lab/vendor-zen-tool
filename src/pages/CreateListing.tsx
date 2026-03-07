@@ -1114,12 +1114,14 @@ export default function CreateListing() {
         {/* Denver Auctions Batch */}
         {(denverLots.length > 0 || selectedProject) && (
           <div className="rounded-xl border border-amber-500/50 bg-amber-500/5 p-4 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <span className="font-semibold text-foreground">Denver Auctions</span>
-                <span className="text-muted-foreground ml-2">{denverLots.length} lots • Next: #{denverLotNumber}</span>
+                <span className="text-muted-foreground ml-2">
+                  {denverLots.length} lots • Next: #{denverLotNumber}
+                </span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <Input
                   type="number"
                   value={denverLotNumber}
@@ -1128,83 +1130,83 @@ export default function CreateListing() {
                   disabled={!selectedProject}
                 />
                 {denverLots.length > 0 && (
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={async () => {
-                      if (!selectedProject?.id) return;
-                      if (!confirm('Clear all Denver lots?')) return;
-                      await supabase.from('denver_batch_rows').delete().eq('batch_id', selectedProject.id);
-                      setDenverLots([]);
-                      setSelectedDenverLot(null);
-                      setDenverLotNumber(1);
-                    }}
-                  >
-                    Clear All
-                  </Button>
+                  <>
+                    <Button
+                      variant="gold"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => {
+                        if (denverLots.length === 0) {
+                          toast({ title: "No Data", description: "No Denver lots to export", variant: "destructive" });
+                          return;
+                        }
+                        // Generate Denver CSV
+                        const headers = ["LotNumber", "Title", "Description", "StartingBid", "ImageURL"];
+                        const csvRows = denverLots
+                          .sort((a: any, b: any) => a.lot_number - b.lot_number)
+                          .map((lot: any) => {
+                            const escape = (val: string) => `"${(val || '').replace(/"/g, '""')}"`;
+                            const imgUrl = (lot.image_urls && lot.image_urls.length > 0) ? lot.image_urls[0] : '';
+                            return [
+                              lot.lot_number,
+                              escape(lot.title || ''),
+                              escape(lot.description || ''),
+                              lot.starting_bid ?? 5,
+                              escape(imgUrl),
+                            ].join(',');
+                          });
+                        const csvContent = [headers.join(','), ...csvRows].join('\r\n');
+                        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+                        saveAs(blob, `denver-auctions-${selectedProject?.name || 'batch'}.csv`);
+                        toast({ title: "CSV Downloaded", description: `${denverLots.length} Denver lots exported` });
+                      }}
+                    >
+                      <Download className="h-4 w-4" />
+                      Export Denver CSV
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        if (!selectedProject?.id) return;
+                        if (!confirm('Clear all Denver lots?')) return;
+                        await supabase.from('denver_batch_rows').delete().eq('batch_id', selectedProject.id);
+                        setDenverLots([]);
+                        setDenverLotNumber(1);
+                      }}
+                    >
+                      Clear All
+                    </Button>
+                  </>
                 )}
               </div>
             </div>
-            
-            {/* Lot List */}
+
+            {/* Lot List - inline editable like LA */}
             {denverLots.length > 0 && (
-              <>
-                <div className="flex flex-wrap gap-2">
-                  {denverLots.map((lot) => (
-                    <Button
+              <div className="border-t border-border pt-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Check className="h-4 w-4 text-green-500" />
+                  <span className="text-sm font-medium">{denverLots.length} lots in batch</span>
+                </div>
+                <div className="max-h-60 overflow-y-auto space-y-1">
+                  {denverLots.map((lot: any) => (
+                    <div
                       key={lot.id}
-                      variant={selectedDenverLot === lot.lot_number ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setSelectedDenverLot(lot.lot_number)}
+                      onClick={() => setEditingDenverLot(lot)}
+                      className="text-xs flex justify-between items-center py-2 px-3 bg-background/50 rounded cursor-pointer hover:bg-primary/10 hover:border-primary/30 border border-transparent transition-colors group"
                     >
-                      Lot #{lot.lot_number}
-                    </Button>
+                      <span className="font-mono font-semibold">#{lot.lot_number}</span>
+                      <span className="truncate flex-1 mx-3">{lot.title}</span>
+                      <span className="text-muted-foreground">${lot.starting_bid ?? 5}</span>
+                      <Edit className="h-3 w-3 ml-2 opacity-0 group-hover:opacity-100 text-primary transition-opacity" />
+                    </div>
                   ))}
                 </div>
-
-                {/* Selected Lot Details */}
-                {selectedDenverLot && (
-                  <div className="border border-border rounded-lg p-4 bg-card space-y-3">
-                    {denverLots.filter(l => l.lot_number === selectedDenverLot).map((lot) => (
-                      <div key={lot.id} className="space-y-3">
-                        <h3 className="font-semibold">Lot #{lot.lot_number}</h3>
-                        
-                        <div className="grid gap-3">
-                          <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
-                            <div className="flex-1 min-w-0">
-                              <Label className="text-xs text-muted-foreground">TITLE</Label>
-                              <p className="font-medium truncate">{lot.title}</p>
-                            </div>
-                            <Button variant="ghost" size="sm" onClick={() => handleCopy(lot.title, `denver-title-${lot.lot_number}`)}>
-                              {copied === `denver-title-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                            </Button>
-                          </div>
-
-                          <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
-                            <div className="flex-1 min-w-0">
-                              <Label className="text-xs text-muted-foreground">STARTING BID</Label>
-                              <p className="font-semibold text-primary">${lot.starting_bid || 5}</p>
-                            </div>
-                            <Button variant="ghost" size="sm" onClick={() => handleCopy(String(lot.starting_bid || 5), `denver-bid-${lot.lot_number}`)}>
-                              {copied === `denver-bid-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                            </Button>
-                          </div>
-
-                          <div className="flex items-start justify-between p-2 bg-secondary/30 rounded">
-                            <div className="flex-1 min-w-0">
-                              <Label className="text-xs text-muted-foreground">DESCRIPTION</Label>
-                              <p className="text-sm text-muted-foreground whitespace-pre-wrap max-h-24 overflow-y-auto">{lot.description}</p>
-                            </div>
-                            <Button variant="ghost" size="sm" onClick={() => handleCopy(lot.description || '', `denver-desc-${lot.lot_number}`)}>
-                              {copied === `denver-desc-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
+                <p className="text-xs text-muted-foreground text-center mt-2">
+                  Click any lot to edit • All fields editable
+                </p>
+              </div>
             )}
           </div>
         )}
