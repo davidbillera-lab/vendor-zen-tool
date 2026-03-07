@@ -810,7 +810,7 @@ export default function CreateListing() {
             isDragging 
               ? "border-primary bg-primary/5 scale-[1.02]" 
               : "border-border bg-card hover:border-muted-foreground/50",
-            images.length === 0 ? "p-12" : "p-4"
+            images.length === 0 ? "p-6 md:p-12" : "p-3 md:p-4"
           )}
         >
           {images.length === 0 ? (
