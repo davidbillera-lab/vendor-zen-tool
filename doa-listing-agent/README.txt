@@ -42,7 +42,10 @@ Step 5: Create your .env file
   - SUPABASE_PASSWORD (your Supabase login password)
   - DOA_EMAIL (your Denver Online Auctions login)
   - DOA_PASSWORD (your Denver Online Auctions password)
-  - DOA_AUCTION_SLUG (the slug from your auction URL, e.g. 175-oz-silver-exgle-vintage-collectibles-china)
+  - DOA_FIRST_LOT_URL (the full URL of the FIRST lot to fill, e.g.
+      https://denveronlineauctions.com/sub-admin/EditAuction?id=1678303&PartyId=115
+    Open your auction in DOA sub-admin, click the first lot's Edit button,
+    and copy the URL from your browser address bar.)
 
 Step 6: Make sure your Supabase table has a "status" column
   In Supabase, go to your denver_batch_rows table.
@@ -80,11 +83,10 @@ WHAT YOU'LL SEE WHEN IT RUNS
 3. Type y and press Enter
 4. A Chrome browser window opens — you'll watch it:
    - Log into DOA sub-admin
-   - Navigate to your auction edit page
-   - Click Add Lot for each item
-   - Fill in title and description
+   - Navigate to your first lot's EditAuction page
+   - For each lot: fill Title, Starting Bid, Description (TinyMCE)
    - Upload photos
-   - Click Save
+   - Click "Save & Edit Next" to advance to the next lot automatically
 5. As each lot completes, the terminal shows ✅ or ❌
 6. At the end, a summary prints with counts and timing
 
@@ -99,10 +101,12 @@ IF SOMETHING GOES WRONG
 • Completed lots have status "completed" and are skipped automatically
 
 Common problems:
-  "Could not find email input" → DOA login page changed, screenshot shows what it sees
-  "Authentication failed" → Check DOA_EMAIL and DOA_PASSWORD in .env
-  "No pending lots found" → All lots may be marked 'completed' in Supabase
-  "SUPABASE_ANON_KEY not set" → Check your .env file exists and is filled in
+  "Could not find email input"  → DOA login page changed, screenshot shows what it sees
+  "Authentication failed"       → Check DOA_EMAIL and DOA_PASSWORD in .env
+  "No pending lots found"       → All lots may be marked 'completed' in Supabase
+  "SUPABASE_ANON_KEY not set"   → Check your .env file exists and is filled in
+  "DOA_FIRST_LOT_URL not set"   → Add DOA_FIRST_LOT_URL to your .env file (see Step 5)
+  "Could not find title input"  → DOA may have changed its form layout; check the screenshot
 
 
 FILE GUIDE

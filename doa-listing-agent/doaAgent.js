@@ -1,18 +1,19 @@
 /**
  * doaAgent.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Controls the Chromium browser using Playwright to list lots on DOA.
+ * Controls the Chromium browser using Playwright to fill lots on DOA.
  *
  * What it does:
  *   1. Opens a real, visible Chrome browser window (headed mode)
  *   2. Logs into denveronlineauctions.com/sub-admin/
- *   3. Navigates to your auction's edit page
- *   4. For each lot: clicks Add Lot, fills title + description, uploads images, saves
- *   5. Skips lots that already appear to be listed (by matching title)
- *   6. Takes a screenshot on any error so you can see exactly what went wrong
- *   7. Never deletes or modifies existing lots — only adds new ones
+ *   3. Navigates to the first lot's EditAuction page (DOA_FIRST_LOT_URL)
+ *   4. For each lot: fills Title, Starting Bid, Description (TinyMCE),
+ *      uploads images, then clicks "Save & Edit Next" to advance
+ *   5. Takes a screenshot on any error so you can see what went wrong
+ *   6. Never modifies lots that have already been filled — only fills
+ *      ones that still show the default "Lot #N" title
  *
- * The main export is runDoaAgent(lots, options).
+ * The main export is runDoaAgent(lots, options, callbacks).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -27,13 +28,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
 // ── Read config from .env ─────────────────────────────────────────────────────
-const DOA_BASE_URL   = process.env.DOA_BASE_URL || 'https://denveronlineauctions.com';
-const DOA_EMAIL      = process.env.DOA_EMAIL;
-const DOA_PASSWORD   = process.env.DOA_PASSWORD;
-const DOA_AUCTION_ID = process.env.DOA_AUCTION_ID;
+const DOA_BASE_URL      = process.env.DOA_BASE_URL || 'https://denveronlineauctions.com';
+const DOA_EMAIL         = process.env.DOA_EMAIL;
+const DOA_PASSWORD      = process.env.DOA_PASSWORD;
+const DOA_FIRST_LOT_URL = process.env.DOA_FIRST_LOT_URL;  // e.g. https://denveronlineauctions.com/sub-admin/EditAuction?id=1678303&PartyId=115
 
-const LOGIN_URL   = `${DOA_BASE_URL}/sub-admin/`;
-const AUCTION_URL = `${DOA_BASE_URL}/auction-details?id=${DOA_AUCTION_ID}`;
+const LOGIN_URL = `${DOA_BASE_URL}/sub-admin/`;
 
 // ── Screenshot helper ─────────────────────────────────────────────────────────
 
@@ -56,13 +56,11 @@ async function takeErrorScreenshot(page, label) {
 /**
  * doLogin(page)
  * Fills in DOA sub-admin credentials and submits the login form.
- * Waits until navigation confirms a successful login.
  */
 async function doLogin(page) {
   log.info('Navigating to DOA sub-admin login page…');
   await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
 
-  // Try common selectors for email and password fields
   const emailSelectors = [
     'input[name="email"]',
     'input[type="email"]',
@@ -77,7 +75,7 @@ async function doLogin(page) {
     'input[placeholder*="password" i]',
   ];
 
-  // Find and fill email
+  // Fill email
   let emailFilled = false;
   for (const sel of emailSelectors) {
     if (await page.locator(sel).count() > 0) {
@@ -92,7 +90,7 @@ async function doLogin(page) {
     throw new Error('Could not find email input on DOA login page');
   }
 
-  // Find and fill password
+  // Fill password
   let passFilled = false;
   for (const sel of passwordSelectors) {
     if (await page.locator(sel).count() > 0) {
@@ -107,7 +105,7 @@ async function doLogin(page) {
     throw new Error('Could not find password input on DOA login page');
   }
 
-  // Click the submit/login button
+  // Click submit
   const submitSelectors = [
     'button[type="submit"]',
     'input[type="submit"]',
@@ -127,19 +125,18 @@ async function doLogin(page) {
     }
   }
   if (!submitted) {
-    // Last resort: press Enter in the password field
     await page.keyboard.press('Enter');
     log.warn('  Could not find login button — pressed Enter instead');
   }
 
-  // Wait for navigation after login (either redirect or dashboard element appearing)
+  // Wait for successful login
   try {
     await page.waitForURL(url => !url.includes('login') && !url.includes('Login'), {
       timeout: 15_000,
     });
     log.success('Logged into DOA sub-admin successfully');
   } catch {
-    // URL might not change if using a SPA; check for a dashboard element instead
+    // SPA — URL might not change; look for a dashboard element
     const dashboardSelectors = [
       'a:has-text("Auction")',
       '[class*="dashboard"]',
@@ -156,182 +153,161 @@ async function doLogin(page) {
     }
     if (!dashboardFound) {
       await takeErrorScreenshot(page, 'login-failed');
-      throw new Error('Login did not succeed — screenshot saved. Check your DOA_EMAIL / DOA_PASSWORD in .env');
+      throw new Error('Login did not succeed — check DOA_EMAIL / DOA_PASSWORD in .env');
     }
     log.success('Logged into DOA sub-admin (SPA — no URL change detected)');
   }
 }
 
-// ── Navigate to Auction Edit Page ─────────────────────────────────────────────
-
-async function goToAuctionPage(page) {
-  log.info(`Navigating to auction page… (${DOA_AUCTION_SLUG})`);
-  await page.goto(AUCTION_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.waitForTimeout(2000); // Let dynamic content settle
-  log.success(`On auction edit page: ${AUCTION_URL}`);
-}
-
-// ── Scan for existing lot titles ──────────────────────────────────────────────
+// ── Fill TinyMCE description ──────────────────────────────────────────────────
 
 /**
- * getExistingTitles(page)
- * Reads all visible lot titles from the page to detect duplicates.
- * Returns a Set of title strings (lowercased for comparison).
+ * fillTinyMce(page, htmlContent)
+ * Injects content into the TinyMCE rich-text editor on the page.
+ * Tries JS API first (most reliable), then falls back to iframe body editing.
  */
-async function getExistingTitles(page) {
-  const titleSelectors = [
-    '.lot-title',
-    '.item-title',
-    '[class*="lot"] [class*="title"]',
-    'td.title',
-    '.lot-name',
-    'h3.lot',
-  ];
-
-  const titles = new Set();
-  for (const sel of titleSelectors) {
-    const elements = await page.locator(sel).allTextContents();
-    for (const t of elements) {
-      if (t.trim()) titles.add(t.trim().toLowerCase());
+async function fillTinyMce(page, htmlContent) {
+  // Method 1: use the tinyMCE JS API (fastest and most reliable)
+  const injected = await page.evaluate((content) => {
+    if (window.tinymce && window.tinymce.activeEditor) {
+      window.tinymce.activeEditor.setContent(content);
+      window.tinymce.activeEditor.fire('change');
+      return true;
     }
+    // Try the first editor if activeEditor is null
+    if (window.tinymce && window.tinymce.editors && window.tinymce.editors.length > 0) {
+      window.tinymce.editors[0].setContent(content);
+      window.tinymce.editors[0].fire('change');
+      return true;
+    }
+    return false;
+  }, htmlContent || '');
+
+  if (injected) {
+    log.info(`  Filled description via TinyMCE JS API (${(htmlContent || '').length} chars)`);
+    return;
   }
 
-  log.info(`Found ${titles.size} existing lot title(s) on the page`);
-  return titles;
+  // Method 2: write directly into the TinyMCE iframe body
+  const iframeLocator = page.frameLocator('iframe[id$="_ifr"]');
+  try {
+    const body = iframeLocator.locator('body');
+    await body.waitFor({ state: 'visible', timeout: 5_000 });
+    await body.fill('');
+    await body.type(htmlContent || '', { delay: 5 });
+    log.info(`  Filled description via TinyMCE iframe body`);
+    return;
+  } catch {
+    // fall through
+  }
+
+  log.warn('  Could not find TinyMCE editor — description skipped');
 }
 
-// ── Add a single lot ──────────────────────────────────────────────────────────
+// ── Fill a single lot form ────────────────────────────────────────────────────
 
 /**
- * addLot(page, lot, localImagePaths, existingTitles)
- * Clicks the Add Lot button, fills the form, uploads images, and saves.
- * Returns 'skipped' if the title already exists, 'success' on success, throws on failure.
+ * fillCurrentLotForm(page, lot, localImagePaths)
+ *
+ * The browser is already on the EditAuction page for this lot.
+ * Fills in Title, Starting Bid, Description, uploads images,
+ * then clicks "Save & Edit Next".
+ *
+ * Returns 'success' on success, throws on failure.
  */
-async function addLot(page, lot, localImagePaths, existingTitles) {
-  const titleLower = (lot.title || '').trim().toLowerCase();
+async function fillCurrentLotForm(page, lot, localImagePaths) {
+  // Wait for the page form to be ready
+  await page.waitForSelector('input', { state: 'visible', timeout: 15_000 });
 
-  // Duplicate check
-  if (existingTitles.has(titleLower)) {
-    log.warn(`Lot #${lot.lot_number} "${lot.title}" already exists on page — skipping`);
-    return 'skipped';
-  }
-
-  // ── Click "Add Lot" / "New Lot" / "+" button ──────────────────────────────
-  const addButtonSelectors = [
-    'button:has-text("Add Lot")',
-    'button:has-text("New Lot")',
-    'button:has-text("Add Item")',
-    'a:has-text("Add Lot")',
-    'a:has-text("New Lot")',
-    'button[title*="Add"]',
-    'button.add-lot',
-    '#addLot',
-    '#newLot',
-    'button:has-text("+")',
-    '[data-action="add-lot"]',
-  ];
-
-  let addClicked = false;
-  for (const sel of addButtonSelectors) {
-    const btn = page.locator(sel).first();
-    if (await btn.count() > 0) {
-      await btn.click();
-      log.info(`  Clicked add-lot button: ${sel}`);
-      addClicked = true;
-      break;
-    }
-  }
-
-  if (!addClicked) {
-    await takeErrorScreenshot(page, `lot${lot.lot_number}-no-add-button`);
-    throw new Error(`Could not find an "Add Lot" button for lot #${lot.lot_number}`);
-  }
-
-  // Wait for the lot form to appear
-  const formSelectors = [
-    'form',
-    '[class*="modal"]',
-    '[class*="dialog"]',
-    '[role="dialog"]',
-    '.lot-form',
-    '#lotForm',
-  ];
-  let formFound = false;
-  for (const sel of formSelectors) {
-    try {
-      await page.locator(sel).first().waitFor({ state: 'visible', timeout: 10_000 });
-      log.info(`  Lot form appeared: ${sel}`);
-      formFound = true;
-      break;
-    } catch {
-      // Try next selector
-    }
-  }
-  if (!formFound) {
-    // Maybe the form is inline — just continue and try to find the fields
-    log.warn(`  Could not confirm form appeared — proceeding anyway`);
-  }
-
-  // ── Fill Title ────────────────────────────────────────────────────────────
+  // ── Fill Title ─────────────────────────────────────────────────────────────
+  // The title input is pre-filled with "Lot #N" — we clear and overwrite it
   const titleSelectors = [
     'input[name="title"]',
     'input[name="lot_title"]',
-    'input[name="name"]',
+    'input[name="Title"]',
     'input[placeholder*="title" i]',
-    'input[placeholder*="name" i]',
-    'input[id*="title"]',
-    'input[id*="lot"]',
-    '.lot-form input[type="text"]:first-of-type',
+    'input[id*="title" i]',
   ];
 
   let titleFilled = false;
   for (const sel of titleSelectors) {
     const el = page.locator(sel).first();
     if (await el.count() > 0) {
+      await el.clear();
       await el.fill(lot.title || '');
       log.info(`  Filled title: "${lot.title}"`);
       titleFilled = true;
       break;
     }
   }
+
+  // Fallback: the first visible text input on the form is usually Title
+  if (!titleFilled) {
+    const inputs = page.locator('form input[type="text"], form input:not([type])');
+    if (await inputs.count() > 0) {
+      await inputs.first().clear();
+      await inputs.first().fill(lot.title || '');
+      log.warn(`  Filled title via fallback (first text input): "${lot.title}"`);
+      titleFilled = true;
+    }
+  }
+
   if (!titleFilled) {
     await takeErrorScreenshot(page, `lot${lot.lot_number}-no-title-field`);
     throw new Error(`Could not find title input for lot #${lot.lot_number}`);
   }
 
-  // ── Fill Description ──────────────────────────────────────────────────────
-  const descSelectors = [
-    'textarea[name="description"]',
-    'textarea[name="desc"]',
-    'textarea[name="body"]',
-    'textarea[id*="description"]',
-    'textarea[placeholder*="description" i]',
-    '.lot-form textarea',
-    'textarea',
+  // ── Fill Starting Bid ──────────────────────────────────────────────────────
+  // Default starting bid is 5 (matches DOA's pre-filled default)
+  const startingBid = String(lot.starting_bid ?? lot.raw?.starting_bid ?? 5);
+  const bidSelectors = [
+    'input[name="starting_bid"]',
+    'input[name="startingBid"]',
+    'input[name="start_bid"]',
+    'input[name="startBid"]',
+    'input[name="bid"]',
+    'input[placeholder*="bid" i]',
+    'input[id*="bid" i]',
+    'input[id*="starting" i]',
   ];
 
-  let descFilled = false;
-  for (const sel of descSelectors) {
+  let bidFilled = false;
+  for (const sel of bidSelectors) {
     const el = page.locator(sel).first();
     if (await el.count() > 0) {
-      await el.fill(lot.description || '');
-      log.info(`  Filled description (${(lot.description || '').length} chars)`);
-      descFilled = true;
+      await el.clear();
+      await el.fill(startingBid);
+      log.info(`  Filled starting bid: ${startingBid}`);
+      bidFilled = true;
       break;
     }
   }
-  if (!descFilled) {
-    log.warn(`  No description field found for lot #${lot.lot_number} — continuing`);
+
+  if (!bidFilled) {
+    // Fallback: look for the second numeric input after the title input
+    const numericInputs = page.locator('input[type="number"], input[inputmode="numeric"]');
+    if (await numericInputs.count() > 0) {
+      await numericInputs.first().clear();
+      await numericInputs.first().fill(startingBid);
+      log.warn(`  Filled starting bid via fallback (first numeric input): ${startingBid}`);
+      bidFilled = true;
+    }
   }
 
-  // ── Upload Images ─────────────────────────────────────────────────────────
+  if (!bidFilled) {
+    log.warn(`  Could not find starting bid input for lot #${lot.lot_number} — continuing`);
+  }
+
+  // ── Fill Description (TinyMCE) ─────────────────────────────────────────────
+  await fillTinyMce(page, lot.description || '');
+
+  // ── Upload Images ──────────────────────────────────────────────────────────
   if (localImagePaths && localImagePaths.length > 0) {
     const uploadSelectors = [
       'input[type="file"]',
       'input[name*="image"]',
       'input[name*="photo"]',
       'input[accept*="image"]',
-      '[data-upload]',
     ];
 
     let uploaded = false;
@@ -340,9 +316,9 @@ async function addLot(page, lot, localImagePaths, existingTitles) {
       if (await el.count() > 0) {
         try {
           await el.setInputFiles(localImagePaths);
-          log.info(`  Uploaded ${localImagePaths.length} image(s)`);
+          log.info(`  Uploading ${localImagePaths.length} image(s)…`);
 
-          // Wait up to 30s for upload confirmation (spinner disappear, preview appear, etc.)
+          // Wait for upload confirmation (preview thumbnails, spinner gone, etc.)
           const confirmSelectors = [
             '.upload-success',
             '.image-preview',
@@ -358,18 +334,18 @@ async function addLot(page, lot, localImagePaths, existingTitles) {
               confirmed = true;
               break;
             } catch {
-              // Try next
+              // try next
             }
           }
           if (!confirmed) {
-            log.warn('  Could not confirm image upload — waiting 5s before saving');
+            log.warn('  Upload confirmation not detected — waiting 5s before saving');
             await page.waitForTimeout(5000);
           }
 
           uploaded = true;
           break;
         } catch (uploadErr) {
-          log.warn(`  Image upload attempt failed with ${sel}: ${uploadErr.message}`);
+          log.warn(`  Image upload attempt failed (${sel}): ${uploadErr.message}`);
         }
       }
     }
@@ -381,42 +357,32 @@ async function addLot(page, lot, localImagePaths, existingTitles) {
     log.info(`  No images for lot #${lot.lot_number}`);
   }
 
-  // ── Click Save / Next / Submit ────────────────────────────────────────────
-  const saveSelectors = [
-    'button[type="submit"]',
-    'button:has-text("Save")',
-    'button:has-text("Next")',
-    'button:has-text("Submit")',
-    'button:has-text("Add")',
-    'input[type="submit"]',
-    '[data-action="save"]',
-    '.btn-save',
-    '.btn-primary',
-    '#saveBtn',
-    '#submitBtn',
-  ];
+  // ── Click "Save & Edit Next" ───────────────────────────────────────────────
+  // This advances us to the next lot's EditAuction page automatically.
+  // For the very last lot there may be no "next", but clicking it still saves.
+  const saveNextBtn = page.locator('button:has-text("Save & Edit Next")');
+  const saveBtn     = page.locator('button:has-text("Save")').first();
 
-  let saved = false;
-  for (const sel of saveSelectors) {
-    const btn = page.locator(sel).first();
-    if (await btn.count() > 0 && await btn.isEnabled()) {
-      await btn.click();
-      log.info(`  Clicked save button: ${sel}`);
-      saved = true;
-      break;
+  if (await saveNextBtn.count() > 0) {
+    // Wait for the URL to change to the next EditAuction page, or fall back on timeout
+    try {
+      await Promise.all([
+        page.waitForURL(/EditAuction\?id=/, { timeout: 20_000 }),
+        saveNextBtn.click(),
+      ]);
+      log.success(`  Clicked "Save & Edit Next" — on next lot page`);
+    } catch {
+      // If URL didn't change (e.g. last lot), that's fine — the lot was still saved
+      log.info(`  Clicked "Save & Edit Next" (no further lot to navigate to)`);
     }
-  }
-
-  if (!saved) {
+  } else if (await saveBtn.count() > 0) {
+    await saveBtn.click();
+    await page.waitForTimeout(3000);
+    log.info(`  Clicked "Save" (Save & Edit Next not found)`);
+  } else {
     await takeErrorScreenshot(page, `lot${lot.lot_number}-no-save-button`);
-    throw new Error(`Could not find a Save/Next button for lot #${lot.lot_number}`);
+    throw new Error(`Could not find Save button for lot #${lot.lot_number}`);
   }
-
-  // Wait for the form to close or page to update
-  await page.waitForTimeout(3000);
-
-  // Add the title to our known set so we don't double-check DOA on next lot
-  existingTitles.add(titleLower);
 
   return 'success';
 }
@@ -429,18 +395,22 @@ async function addLot(page, lot, localImagePaths, existingTitles) {
  * @param {Object[]} lots       - Array of normalized lot objects from Supabase
  * @param {Object}   options    - { dryRun: false, testMode: false }
  * @param {Object}   callbacks  - { onStart, onSuccess, onFailure, onSkip }
- *   onStart(lot)    - called before processing a lot (use to set status=in_progress)
- *   onSuccess(lot)  - called after successful listing
- *   onFailure(lot, err) - called on error
- *   onSkip(lot)     - called when lot is skipped (duplicate)
  *
  * @returns {{ succeeded: number, failed: number, skipped: number }}
  */
 export async function runDoaAgent(lots, options = {}, callbacks = {}) {
-  const { onStart, onSuccess, onFailure, onSkip } = callbacks;
+  const { onStart, onSuccess, onFailure } = callbacks;
 
-  let browser = null;
-  let page    = null;
+  if (!DOA_FIRST_LOT_URL) {
+    throw new Error(
+      'DOA_FIRST_LOT_URL is not set in your .env file.\n' +
+      'Set it to the URL of the first lot to fill, e.g.:\n' +
+      '  DOA_FIRST_LOT_URL=https://denveronlineauctions.com/sub-admin/EditAuction?id=1678303&PartyId=115'
+    );
+  }
+
+  let browser   = null;
+  let page      = null;
   let succeeded = 0;
   let failed    = 0;
   let skipped   = 0;
@@ -449,13 +419,13 @@ export async function runDoaAgent(lots, options = {}, callbacks = {}) {
     // ── Launch browser ──────────────────────────────────────────────────────
     log.section('Launching Chromium Browser (headed mode)');
     browser = await chromium.launch({
-      headless: false,        // ← You will see the browser window
-      slowMo:   100,          // Slight delay between actions — easier to watch
+      headless: false,
+      slowMo:   80,
       args: ['--start-maximized'],
     });
 
     const context = await browser.newContext({
-      viewport: null,         // Use the full window size
+      viewport: null,
       acceptDownloads: true,
     });
     page = await context.newPage();
@@ -463,39 +433,35 @@ export async function runDoaAgent(lots, options = {}, callbacks = {}) {
     // ── Login ───────────────────────────────────────────────────────────────
     await doLogin(page);
 
-    // ── Go to auction edit page ─────────────────────────────────────────────
-    await goToAuctionPage(page);
+    // ── Navigate to first lot ───────────────────────────────────────────────
+    log.info(`Navigating to first lot: ${DOA_FIRST_LOT_URL}`);
+    await page.goto(DOA_FIRST_LOT_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.waitForTimeout(2000); // let TinyMCE initialize
+    log.success('On first lot EditAuction page');
 
-    // ── Scan for existing lots (to skip duplicates) ─────────────────────────
-    const existingTitles = await getExistingTitles(page);
-
-    // ── Process each lot ────────────────────────────────────────────────────
+    // ── Process each lot in order ───────────────────────────────────────────
     log.section(`Processing ${lots.length} lot(s)`);
 
     for (const lot of lots) {
       log.info(`\nProcessing Lot #${lot.lot_number}: "${lot.title}"`);
 
-      // Notify caller (used to update Supabase status to in_progress)
       if (onStart) await onStart(lot);
 
       let localImagePaths = [];
       try {
-        // Download images first
+        // Download images locally so Playwright can upload them
         if (lot.images && lot.images.length > 0) {
           localImagePaths = await downloadImages(lot.images, lot.lot_number);
         }
 
-        // Add the lot to DOA
-        const result = await addLot(page, lot, localImagePaths, existingTitles);
+        await fillCurrentLotForm(page, lot, localImagePaths);
 
-        if (result === 'skipped') {
-          skipped++;
-          if (onSkip) await onSkip(lot);
-        } else {
-          succeeded++;
-          log.success(`Lot #${lot.lot_number} "${lot.title}" listed successfully`);
-          if (onSuccess) await onSuccess(lot);
-        }
+        succeeded++;
+        log.success(`Lot #${lot.lot_number} "${lot.title}" saved successfully`);
+        if (onSuccess) await onSuccess(lot);
+
+        // Brief pause between lots so the page can settle
+        await page.waitForTimeout(1500);
 
       } catch (err) {
         failed++;
@@ -503,8 +469,15 @@ export async function runDoaAgent(lots, options = {}, callbacks = {}) {
         await takeErrorScreenshot(page, `lot${lot.lot_number}`);
         if (onFailure) await onFailure(lot, err);
 
+        // Try to get back to a valid EditAuction page for the next lot
+        // (in case the error left us on an unexpected page)
+        try {
+          await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10_000 });
+        } catch {
+          // Ignore — the next lot's navigation will sort it out
+        }
+
       } finally {
-        // Always clean up temp images for this lot
         if (localImagePaths.length > 0) {
           await cleanupImages(localImagePaths);
         }
@@ -514,7 +487,6 @@ export async function runDoaAgent(lots, options = {}, callbacks = {}) {
   } catch (fatalErr) {
     log.error('Fatal browser error — agent stopping early', fatalErr);
     if (page) await takeErrorScreenshot(page, 'fatal');
-    // Re-throw so the caller can handle it in the summary
     throw fatalErr;
 
   } finally {
