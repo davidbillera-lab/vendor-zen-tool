@@ -571,7 +571,6 @@ export default function CreateListing() {
           
           if (!error && data) {
             setDenverLots(prev => [...prev, data]);
-            setSelectedDenverLot(denverLotNumber);
             setDenverLotNumber(prev => prev + 1);
           }
         }
