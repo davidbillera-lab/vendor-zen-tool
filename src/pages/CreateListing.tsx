@@ -1296,17 +1296,9 @@ export default function CreateListing() {
             <div className="space-y-4">
               {activePlatform === "denver" && (
                 <div className="rounded-xl border border-border bg-card p-6">
-                  <h3 className="font-semibold mb-4">Quick Copy for DOA</h3>
-                  <Button 
-                    variant="gold" 
-                    className="w-full"
-                    onClick={() => handleCopy(`${generatedListing.title}\n\n${generatedListing.description}`, "All")}
-                  >
-                    <Copy className="h-4 w-4 mr-2" />
-                    {copied === "All" ? "Copied!" : "Copy Title + Description"}
-                  </Button>
-                  <p className="text-xs text-muted-foreground mt-2 text-center">
-                    Paste directly into Denver Online Auctions lot box
+                  <h3 className="font-semibold mb-2">Lot #{denverLotNumber - 1} Saved</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Click the lot in the Denver Auctions batch list above to edit any field.
                   </p>
                 </div>
               )}
