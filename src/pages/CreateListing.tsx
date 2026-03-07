@@ -141,7 +141,7 @@ export default function CreateListing() {
   // Denver Auctions specific - now also cloud-based
   const [denverLotNumber, setDenverLotNumber] = useState(1);
   const [denverLots, setDenverLots] = useState<any[]>([]);
-  const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
+  const [editingDenverLot, setEditingDenverLot] = useState<any | null>(null);
   const [loadingDenver, setLoadingDenver] = useState(false);
 
   // eBay batch mode
