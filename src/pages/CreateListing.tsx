@@ -917,7 +917,7 @@ export default function CreateListing() {
         )}
         
         <div className={cn(
-          "grid gap-4 sm:grid-cols-2 lg:grid-cols-4",
+          "grid gap-3 grid-cols-2 lg:grid-cols-4",
           !selectedProject && "opacity-50 pointer-events-none"
         )}>
           {platforms.map((platform) => (
