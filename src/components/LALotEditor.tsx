@@ -356,13 +356,13 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-border flex justify-between gap-2">
-          <Button variant="destructive" onClick={handleDelete}>
+        <div className="p-3 md:p-4 border-t border-border flex flex-col sm:flex-row sm:justify-between gap-2">
+          <Button variant="destructive" size="sm" onClick={handleDelete} className="w-full sm:w-auto">
             <Trash2 className="h-4 w-4 mr-2" />
             Delete Lot
           </Button>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button variant="outline" size="sm" onClick={onClose} className="flex-1 sm:flex-none">Cancel</Button>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
