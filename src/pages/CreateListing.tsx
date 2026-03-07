@@ -35,6 +35,7 @@ import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
 import { ProjectManager, type Project } from "@/components/BatchManager";
 import { LALotEditor } from "@/components/LALotEditor";
+import { DenverLotEditor } from "@/components/DenverLotEditor";
 import { supabase } from "@/integrations/supabase/client";
 
 import { saveAs } from "file-saver";
