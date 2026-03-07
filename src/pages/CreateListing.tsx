@@ -927,7 +927,7 @@ export default function CreateListing() {
               disabled={processing !== null || images.length === 0 || !selectedProject}
               variant="outline"
               className={cn(
-                "h-auto py-6 flex flex-col gap-2 relative overflow-hidden group",
+                "h-auto py-4 md:py-6 flex flex-col gap-1 md:gap-2 relative overflow-hidden group",
                 processing === platform.id && "border-primary"
               )}
             >
