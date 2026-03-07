@@ -865,7 +865,7 @@ export default function CreateListing() {
                   Clear All
                 </Button>
               </div>
-              <div className="grid gap-3 grid-cols-4 sm:grid-cols-6 md:grid-cols-8">
+              <div className="grid gap-2 grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
                 {images.map((img, index) => (
                   <div key={index} className="relative aspect-square rounded-lg overflow-hidden border border-border group">
                     <img src={img.preview} alt="" className="w-full h-full object-cover" />
