@@ -1404,6 +1404,20 @@ export default function CreateListing() {
           }}
         />
       )}
+
+      {/* Denver Lot Editor Modal */}
+      {editingDenverLot && (
+        <DenverLotEditor
+          lot={editingDenverLot}
+          onClose={() => setEditingDenverLot(null)}
+          onUpdate={(updatedLot) => {
+            setDenverLots(prev => prev.map(r => r.id === updatedLot.id ? updatedLot : r));
+          }}
+          onDelete={(lotId) => {
+            setDenverLots(prev => prev.filter(r => r.id !== lotId));
+          }}
+        />
+      )}
     </MainLayout>
   );
 }
