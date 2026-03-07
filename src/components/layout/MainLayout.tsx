@@ -27,7 +27,7 @@ export function MainLayout({ children, title, subtitle }: MainLayoutProps) {
           onMenuClick={() => setSidebarOpen(true)}
           showMenuButton={isMobile}
         />
-        <main className="p-4 md:p-6">{children}</main>
+        <main className="p-3 md:p-6">{children}</main>
       </div>
     </div>
   );

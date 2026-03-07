@@ -810,7 +810,7 @@ export default function CreateListing() {
             isDragging 
               ? "border-primary bg-primary/5 scale-[1.02]" 
               : "border-border bg-card hover:border-muted-foreground/50",
-            images.length === 0 ? "p-12" : "p-4"
+            images.length === 0 ? "p-6 md:p-12" : "p-3 md:p-4"
           )}
         >
           {images.length === 0 ? (
@@ -865,7 +865,7 @@ export default function CreateListing() {
                   Clear All
                 </Button>
               </div>
-              <div className="grid gap-3 grid-cols-4 sm:grid-cols-6 md:grid-cols-8">
+              <div className="grid gap-2 grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
                 {images.map((img, index) => (
                   <div key={index} className="relative aspect-square rounded-lg overflow-hidden border border-border group">
                     <img src={img.preview} alt="" className="w-full h-full object-cover" />
@@ -917,7 +917,7 @@ export default function CreateListing() {
         )}
         
         <div className={cn(
-          "grid gap-4 sm:grid-cols-2 lg:grid-cols-4",
+          "grid gap-3 grid-cols-2 lg:grid-cols-4",
           !selectedProject && "opacity-50 pointer-events-none"
         )}>
           {platforms.map((platform) => (
@@ -927,7 +927,7 @@ export default function CreateListing() {
               disabled={processing !== null || images.length === 0 || !selectedProject}
               variant="outline"
               className={cn(
-                "h-auto py-6 flex flex-col gap-2 relative overflow-hidden group",
+                "h-auto py-4 md:py-6 flex flex-col gap-1 md:gap-2 relative overflow-hidden group",
                 processing === platform.id && "border-primary"
               )}
             >
@@ -938,10 +938,10 @@ export default function CreateListing() {
               {processing === platform.id ? (
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
               ) : (
-                <platform.icon className="h-8 w-8" />
+                <platform.icon className="h-6 w-6 md:h-8 md:w-8" />
               )}
-              <span className="font-semibold">{platform.name}</span>
-              <span className="text-xs text-muted-foreground">{platform.description}</span>
+              <span className="font-semibold text-xs md:text-sm">{platform.name}</span>
+              <span className="text-[10px] md:text-xs text-muted-foreground hidden sm:block">{platform.description}</span>
             </Button>
           ))}
         </div>
