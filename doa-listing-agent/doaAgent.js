@@ -27,13 +27,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
 // ── Read config from .env ─────────────────────────────────────────────────────
-const DOA_BASE_URL    = process.env.DOA_BASE_URL    || 'https://denveronlineauctions.com';
-const DOA_EMAIL       = process.env.DOA_EMAIL;
-const DOA_PASSWORD    = process.env.DOA_PASSWORD;
-const DOA_AUCTION_SLUG = process.env.DOA_AUCTION_SLUG || '175-oz-silver-exgle-vintage-collectibles-china';
+const DOA_BASE_URL   = process.env.DOA_BASE_URL || 'https://denveronlineauctions.com';
+const DOA_EMAIL      = process.env.DOA_EMAIL;
+const DOA_PASSWORD   = process.env.DOA_PASSWORD;
+const DOA_AUCTION_ID = process.env.DOA_AUCTION_ID;
 
 const LOGIN_URL   = `${DOA_BASE_URL}/sub-admin/`;
-const AUCTION_URL = `${DOA_BASE_URL}/auction/${DOA_AUCTION_SLUG}`;
+const AUCTION_URL = `${DOA_BASE_URL}/auction-details?id=${DOA_AUCTION_ID}`;
 
 // ── Screenshot helper ─────────────────────────────────────────────────────────
 
