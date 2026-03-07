@@ -1211,14 +1211,16 @@ export default function CreateListing() {
           </div>
         )}
 
-        {/* eBay Batch Panel */}
-        <EbayBatchPanel
-          projectId={selectedProject?.id || null}
-          rows={ebayRows}
-          onRowsChange={setEbayRows}
-          nextLotNumber={ebayLotNumber}
-          onLotNumberChange={setEbayLotNumber}
-        />
+        {/* eBay Batch Panel - only show when eBay is the active platform */}
+        {activePlatform === 'ebay' && (
+          <EbayBatchPanel
+            projectId={selectedProject?.id || null}
+            rows={ebayRows}
+            onRowsChange={setEbayRows}
+            nextLotNumber={ebayLotNumber}
+            onLotNumberChange={setEbayLotNumber}
+          />
+        )}
 
         {/* Generated Listing Preview */}
         {generatedListing && activePlatform && (
