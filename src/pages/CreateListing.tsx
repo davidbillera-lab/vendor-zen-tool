@@ -940,8 +940,8 @@ export default function CreateListing() {
               ) : (
                 <platform.icon className="h-6 w-6 md:h-8 md:w-8" />
               )}
-              <span className="font-semibold">{platform.name}</span>
-              <span className="text-xs text-muted-foreground">{platform.description}</span>
+              <span className="font-semibold text-xs md:text-sm">{platform.name}</span>
+              <span className="text-[10px] md:text-xs text-muted-foreground hidden sm:block">{platform.description}</span>
             </Button>
           ))}
         </div>

@@ -363,7 +363,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
           </Button>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={onClose} className="flex-1 sm:flex-none">Cancel</Button>
-            <Button onClick={handleSave} disabled={saving}>
+            <Button size="sm" onClick={handleSave} disabled={saving} className="flex-1 sm:flex-none">
               {saving ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : (
