@@ -938,7 +938,7 @@ export default function CreateListing() {
               {processing === platform.id ? (
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
               ) : (
-                <platform.icon className="h-8 w-8" />
+                <platform.icon className="h-6 w-6 md:h-8 md:w-8" />
               )}
               <span className="font-semibold">{platform.name}</span>
               <span className="text-xs text-muted-foreground">{platform.description}</span>
