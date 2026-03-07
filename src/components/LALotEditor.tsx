@@ -294,7 +294,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
           </div>
 
           {/* Dimensions */}
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <div>
               <Label className="text-xs text-muted-foreground uppercase">Height</Label>
               <Input
