@@ -1237,47 +1237,24 @@ export function EbayBatchPanel({
               <span className="text-sm font-medium">{rows.length} listings ready for export</span>
             </div>
             
-            <div className="max-h-48 overflow-y-auto space-y-1">
+            <div className="max-h-60 overflow-y-auto space-y-1">
               {rows.map((row) => (
                 <div 
                   key={row.id} 
-                  className="text-xs flex justify-between items-center py-2 px-3 bg-background/50 rounded hover:bg-background/80 transition-colors"
+                  onClick={() => setEditingRow(row)}
+                  className="text-xs flex justify-between items-center py-2 px-3 bg-background/50 rounded cursor-pointer hover:bg-primary/10 hover:border-primary/30 border border-transparent transition-colors group"
                 >
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <span className="font-mono text-muted-foreground">#{row.lot_number}</span>
-                    <span className="truncate font-medium">{row.title}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-primary font-semibold">${row.price || 0}</span>
-                    <span className="text-muted-foreground capitalize">{row.condition || "—"}</span>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="h-7 w-7 p-0"
-                      onClick={() => setViewingRow(row)}
-                    >
-                      <Eye className="h-3 w-3" />
-                    </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="h-7 w-7 p-0"
-                      onClick={() => setEditingRow(row)}
-                    >
-                      <Edit2 className="h-3 w-3" />
-                    </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                      onClick={() => handleDelete(row.id)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
+                  <span className="font-mono font-semibold">#{row.lot_number}</span>
+                  <span className="truncate flex-1 mx-3">{row.title}</span>
+                  <span className="text-primary font-semibold">${row.price || 0}</span>
+                  <span className="text-muted-foreground capitalize ml-2">{row.condition || "—"}</span>
+                  <Edit2 className="h-3 w-3 ml-2 opacity-0 group-hover:opacity-100 text-primary transition-opacity" />
                 </div>
               ))}
             </div>
+            <p className="text-xs text-muted-foreground text-center mt-2">
+              Click any lot to edit • All fields editable
+            </p>
           </div>
         )}
       </div>
