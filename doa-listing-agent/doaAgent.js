@@ -31,7 +31,8 @@ const __dirname  = path.dirname(__filename);
 const DOA_BASE_URL      = process.env.DOA_BASE_URL || 'https://denveronlineauctions.com';
 const DOA_EMAIL         = process.env.DOA_EMAIL;
 const DOA_PASSWORD      = process.env.DOA_PASSWORD;
-const DOA_FIRST_LOT_URL = process.env.DOA_FIRST_LOT_URL;  // e.g. https://denveronlineauctions.com/sub-admin/EditAuction?id=1678303&PartyId=115
+// DOA_FIRST_LOT_URL from .env is used as a fallback; per-batch URL takes priority
+const DOA_FIRST_LOT_URL_ENV = process.env.DOA_FIRST_LOT_URL;
 
 const LOGIN_URL = `${DOA_BASE_URL}/sub-admin/`;
 
@@ -393,7 +394,7 @@ async function fillCurrentLotForm(page, lot, localImagePaths) {
  * runDoaAgent(lots, options, callbacks)
  *
  * @param {Object[]} lots       - Array of normalized lot objects from Supabase
- * @param {Object}   options    - { dryRun: false, testMode: false }
+ * @param {Object}   options    - { dryRun: false, testMode: false, firstLotUrl: string|null }
  * @param {Object}   callbacks  - { onStart, onSuccess, onFailure, onSkip }
  *
  * @returns {{ succeeded: number, failed: number, skipped: number }}
@@ -401,13 +402,18 @@ async function fillCurrentLotForm(page, lot, localImagePaths) {
 export async function runDoaAgent(lots, options = {}, callbacks = {}) {
   const { onStart, onSuccess, onFailure } = callbacks;
 
+  // Per-batch URL (from Supabase la_batches.doa_first_lot_url) takes priority over .env
+  const DOA_FIRST_LOT_URL = options.firstLotUrl || DOA_FIRST_LOT_URL_ENV;
+
   if (!DOA_FIRST_LOT_URL) {
     throw new Error(
-      'DOA_FIRST_LOT_URL is not set in your .env file.\n' +
-      'Set it to the URL of the first lot to fill, e.g.:\n' +
-      '  DOA_FIRST_LOT_URL=https://denveronlineauctions.com/sub-admin/EditAuction?id=1678303&PartyId=115'
+      'No first lot URL found.\n' +
+      'Either set doa_first_lot_url on the batch in Supabase, or set DOA_FIRST_LOT_URL in your .env file.\n' +
+      '  Example: https://denveronlineauctions.com/sub-admin/EditAuction?id=1678303&PartyId=115'
     );
   }
+
+  log.info(`First lot URL: ${DOA_FIRST_LOT_URL}`);
 
   let browser   = null;
   let page      = null;

@@ -256,4 +256,28 @@ export async function markFailed(id, errorMessage) {
   }
 }
 
+// ── Batch config ──────────────────────────────────────────────────────────────
+
+/**
+ * getFirstLotUrl(batchId)
+ * Reads doa_first_lot_url from the la_batches row for this batch.
+ * Returns the URL string, or null if not set.
+ */
+export async function getFirstLotUrl(batchId) {
+  if (!batchId) return null;
+
+  const { data, error } = await supabase
+    .from('la_batches')
+    .select('doa_first_lot_url')
+    .eq('id', batchId)
+    .single();
+
+  if (error) {
+    log.warn(`Could not read doa_first_lot_url for batch ${batchId}: ${error.message}`);
+    return null;
+  }
+
+  return data?.doa_first_lot_url || null;
+}
+
 export default supabase;

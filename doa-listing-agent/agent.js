@@ -26,7 +26,7 @@ import 'dotenv/config';
 import readline from 'readline';
 import chalk from 'chalk';
 import log from './logger.js';
-import { authenticate, getLots, updateLotStatus, markFailed } from './supabaseClient.js';
+import { authenticate, getLots, updateLotStatus, markFailed, getFirstLotUrl } from './supabaseClient.js';
 import { runDoaAgent } from './doaAgent.js';
 import { cleanupAllTemp } from './imageHandler.js';
 
@@ -163,7 +163,16 @@ async function main() {
   // ── Step 7: Clean up any stale temp files from a previous crashed run ─────
   cleanupAllTemp();
 
-  // ── Step 8: Run the DOA agent ─────────────────────────────────────────────
+  // ── Step 8: Resolve first lot URL (batch DB > .env fallback) ─────────────
+  const batchId = lots[0]?.raw?.batch_id || null;
+  const firstLotUrl = await getFirstLotUrl(batchId);
+  if (firstLotUrl) {
+    log.success(`Using per-batch first lot URL from Supabase`);
+  } else {
+    log.info('No per-batch first lot URL set — will use DOA_FIRST_LOT_URL from .env');
+  }
+
+  // ── Step 9: Run the DOA agent ─────────────────────────────────────────────
   log.section('Starting Browser Automation');
 
   // Track results for the final summary
@@ -174,7 +183,7 @@ async function main() {
   try {
     agentResult = await runDoaAgent(
       lots,
-      { dryRun: false, testMode: flags.test },
+      { dryRun: false, testMode: flags.test, firstLotUrl },
       {
         // Called before processing each lot — set status to in_progress
         onStart: async (lot) => {
@@ -216,7 +225,7 @@ async function main() {
     }
   }
 
-  // ── Step 9: Print final summary ───────────────────────────────────────────
+  // ── Step 10: Print final summary ──────────────────────────────────────────
   const durationMs  = Date.now() - startTime;
   const durationStr = formatDuration(durationMs);
   const logPath     = log.getRunLogPath();
