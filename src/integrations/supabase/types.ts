@@ -54,6 +54,7 @@ export type Database = {
           image_urls: string[] | null
           lot_number: number
           starting_bid: number | null
+          status: string
           title: string
         }
         Insert: {
@@ -65,6 +66,7 @@ export type Database = {
           image_urls?: string[] | null
           lot_number: number
           starting_bid?: number | null
+          status?: string
           title: string
         }
         Update: {
@@ -76,6 +78,7 @@ export type Database = {
           image_urls?: string[] | null
           lot_number?: number
           starting_bid?: number | null
+          status?: string
           title?: string
         }
         Relationships: [

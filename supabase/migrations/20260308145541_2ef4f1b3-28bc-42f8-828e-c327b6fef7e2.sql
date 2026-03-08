@@ -1,0 +1,1 @@
+ALTER TABLE public.denver_batch_rows ADD COLUMN status text NOT NULL DEFAULT 'pending';
