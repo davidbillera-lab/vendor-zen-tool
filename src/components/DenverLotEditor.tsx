@@ -122,7 +122,7 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
       setFormData(prev => ({
         ...prev,
         title: (refined.title || prev.title).substring(0, 100),
-        description: (refined.description || prev.description).substring(0, 100),
+        description: refined.description || prev.description,
         starting_bid: refined.startingBid ?? prev.starting_bid,
       }));
       
