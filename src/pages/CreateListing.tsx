@@ -1140,19 +1140,22 @@ export default function CreateListing() {
                           toast({ title: "No Data", description: "No Denver lots to export", variant: "destructive" });
                           return;
                         }
-                        // Generate Denver CSV
-                        const headers = ["LotNumber", "Title", "Description", "StartingBid", "ImageURL"];
+                        // Generate Denver CSV matching denver_batch_rows Supabase import format
+                        const headers = ["lot_number", "title", "description", "images", "status"];
                         const csvRows = denverLots
                           .sort((a: any, b: any) => a.lot_number - b.lot_number)
                           .map((lot: any) => {
                             const escape = (val: string) => `"${(val || '').replace(/"/g, '""')}"`;
-                            const imgUrl = (lot.image_urls && lot.image_urls.length > 0) ? lot.image_urls[0] : '';
+                            // Format images as a JSON array string, with escaped inner quotes for CSV
+                            const urls = (lot.image_urls || []).filter(Boolean);
+                            const jsonArray = `[${urls.map((u: string) => `""${u}""`).join(',')}]`;
+                            const imagesCell = `"${jsonArray}"`;
                             return [
                               lot.lot_number,
                               escape(lot.title || ''),
                               escape(lot.description || ''),
-                              lot.starting_bid ?? 5,
-                              escape(imgUrl),
+                              imagesCell,
+                              'pending',
                             ].join(',');
                           });
                         const csvContent = [headers.join(','), ...csvRows].join('\r\n');
