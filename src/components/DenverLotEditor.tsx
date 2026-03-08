@@ -45,7 +45,7 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
         .from('denver_batch_rows')
         .update({
           title: formData.title.substring(0, 100),
-          description: formData.description.substring(0, 100),
+          description: formData.description,
           starting_bid: formData.starting_bid,
           image_urls: imageUrls,
         })
