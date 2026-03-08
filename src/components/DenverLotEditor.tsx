@@ -196,14 +196,13 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
 
           {/* Description */}
           <div>
-            <Label className="text-xs text-muted-foreground uppercase">Description (max 100 chars)</Label>
+            <Label className="text-xs text-muted-foreground uppercase">Description</Label>
             <textarea
               value={formData.description}
               onChange={(e) => handleChange('description', e.target.value)}
-              maxLength={100}
               className="w-full min-h-[80px] px-3 py-2 bg-background border border-input rounded-md text-sm"
             />
-            <p className="text-xs text-muted-foreground mt-1">{formData.description.length}/100</p>
+            <p className="text-xs text-muted-foreground mt-1">{formData.description.length} chars</p>
           </div>
 
           {/* Starting Bid */}

@@ -1140,8 +1140,8 @@ export default function CreateListing() {
                           toast({ title: "No Data", description: "No Denver lots to export", variant: "destructive" });
                           return;
                         }
-                        // Generate Denver CSV matching denver_batch_rows Supabase import format
-                        const headers = ["lot_number", "title", "description", "images", "status"];
+                        // Generate Denver CSV matching denver_batch_rows import format
+                        const headers = ["lot_number", "title", "description", "image_urls", "status"];
                         const csvRows = denverLots
                           .sort((a: any, b: any) => a.lot_number - b.lot_number)
                           .map((lot: any) => {
