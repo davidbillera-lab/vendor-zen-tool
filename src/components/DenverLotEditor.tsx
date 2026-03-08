@@ -45,7 +45,7 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
         .from('denver_batch_rows')
         .update({
           title: formData.title.substring(0, 100),
-          description: formData.description.substring(0, 100),
+          description: formData.description,
           starting_bid: formData.starting_bid,
           image_urls: imageUrls,
         })
@@ -122,7 +122,7 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
       setFormData(prev => ({
         ...prev,
         title: (refined.title || prev.title).substring(0, 100),
-        description: (refined.description || prev.description).substring(0, 100),
+        description: refined.description || prev.description,
         starting_bid: refined.startingBid ?? prev.starting_bid,
       }));
       
@@ -196,14 +196,13 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
 
           {/* Description */}
           <div>
-            <Label className="text-xs text-muted-foreground uppercase">Description (max 100 chars)</Label>
+            <Label className="text-xs text-muted-foreground uppercase">Description</Label>
             <textarea
               value={formData.description}
               onChange={(e) => handleChange('description', e.target.value)}
-              maxLength={100}
               className="w-full min-h-[80px] px-3 py-2 bg-background border border-input rounded-md text-sm"
             />
-            <p className="text-xs text-muted-foreground mt-1">{formData.description.length}/100</p>
+            <p className="text-xs text-muted-foreground mt-1">{formData.description.length} chars</p>
           </div>
 
           {/* Starting Bid */}
