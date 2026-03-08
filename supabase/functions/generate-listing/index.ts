@@ -357,17 +357,11 @@ GOOD EXAMPLES:
 - "Henredon Campaign Style Mahogany Nightstand Brass Hardware Mid Century" (70 chars)
 - "Waterford Crystal Lismore Wine Glasses Set of 6 Cut Glass Stemware" (66 chars)
 
-=== DESCRIPTION (HARD LIMIT: 100 CHARACTERS — SEO KEYWORD RICH) ===
-- MUST be 100 characters or fewer including spaces — COUNT CAREFULLY
-- Pack with secondary keywords and key details that didn't fit in the title
-- Include: condition, dimensions, notable features, materials, era
-- Use keyword variations (if title says "chair" also use "seating" or "armchair")
-- Make every character count — this is a short-form SEO blurb, not a long description
-- NO fluff — only searchable, informative terms
-
-GOOD EXAMPLES:
-- "Solid walnut construction, original brass pulls, dovetail drawers. 24x16x28in. Good vintage cond" (96 chars)
-- "Hand-cut Irish crystal, acid-etched mark, no chips or cracks. 7in tall. Set of 6 red wine stems" (95 chars)
+=== DESCRIPTION (FULL, COMPLETE TEXT — NO TRUNCATION) ===
+- Write a complete description in natural language (2-4 sentences)
+- Include condition, notable features, materials, dimensions (if known), and any defects
+- Do NOT cut off words or sentences
+- Keep it buyer-friendly and keyword-rich without sounding robotic
 
 === STARTING BID ===
 - Suggest a conservative starting bid in dollars (integer, no decimals)
@@ -376,7 +370,7 @@ GOOD EXAMPLES:
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (MUST be ≤100 chars, keyword-rich SEO title)",
-  "description": "string (MUST be ≤100 chars, keyword-rich SEO description)",
+  "description": "string (full complete description, no truncation)",
   "startingBid": number
 }`
 };
