@@ -1214,8 +1214,8 @@ export default function CreateListing() {
           </div>
         )}
 
-        {/* eBay Batch Panel - only show when eBay is the active platform */}
-        {activePlatform === 'ebay' && (
+        {/* eBay Batch Panel - show when there are eBay rows or project is selected */}
+        {(ebayRows.length > 0 || selectedProject) && (
           <EbayBatchPanel
             projectId={selectedProject?.id || null}
             rows={ebayRows}
