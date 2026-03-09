@@ -1141,7 +1141,7 @@ export default function CreateListing() {
                           return;
                         }
                         // Generate Denver CSV matching denver_batch_rows import format
-                        const headers = ["lot_number", "title", "description", "image_urls", "status"];
+                        const headers = ["lot_number", "title", "description", "images", "starting_bid"];
                         const csvRows = denverLots
                           .sort((a: any, b: any) => a.lot_number - b.lot_number)
                           .map((lot: any) => {
@@ -1155,7 +1155,7 @@ export default function CreateListing() {
                               escape(lot.title || ''),
                               escape(lot.description || ''),
                               imagesCell,
-                              'pending',
+                              lot.starting_bid ?? 5,
                             ].join(',');
                           });
                         const csvContent = [headers.join(','), ...csvRows].join('\r\n');
