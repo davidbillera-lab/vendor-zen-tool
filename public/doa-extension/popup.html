@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 360px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
+    .header { background: linear-gradient(135deg, #1e40af, #7c3aed); padding: 16px; text-align: center; }
+    .header h1 { font-size: 16px; font-weight: 700; color: white; }
+    .header p { font-size: 11px; color: rgba(255,255,255,0.7); margin-top: 4px; }
+    .content { padding: 16px; }
+    .status { padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+    .status.connected { background: #064e3b; border: 1px solid #059669; }
+    .status.disconnected { background: #7f1d1d; border: 1px solid #dc2626; }
+    .status.info { background: #1e3a5f; border: 1px solid #3b82f6; }
+    label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; margin-top: 12px; }
+    input, select { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; font-size: 13px; }
+    input:focus, select:focus { outline: none; border-color: #7c3aed; }
+    button { width: 100%; padding: 10px; border-radius: 8px; border: none; font-weight: 600; font-size: 13px; cursor: pointer; margin-top: 12px; transition: all 0.2s; }
+    .btn-primary { background: linear-gradient(135deg, #7c3aed, #2563eb); color: white; }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-danger { background: #991b1b; color: white; }
+    .lot-info { background: #1e293b; border-radius: 8px; padding: 12px; margin-top: 12px; }
+    .lot-info h3 { font-size: 13px; color: #7c3aed; margin-bottom: 8px; }
+    .lot-info .row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; }
+    .lot-info .row .label { color: #94a3b8; }
+    .lot-info .row .value { color: #e2e8f0; font-weight: 500; }
+    .progress { margin-top: 12px; }
+    .progress-bar { height: 6px; background: #334155; border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #7c3aed, #2563eb); transition: width 0.3s; }
+    .progress-text { font-size: 11px; color: #94a3b8; margin-top: 4px; text-align: center; }
+    #login-section, #batch-section, #fill-section { display: none; }
+    .show { display: block !important; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🏔️ DOA Lot Filler</h1>
+    <p>ResaleHub → Denver Online Auctions</p>
+  </div>
+  <div class="content">
+    <!-- Login Section -->
+    <div id="login-section">
+      <div class="status disconnected">Not connected to ResaleHub</div>
+      <label>Email</label>
+      <input type="email" id="email" placeholder="your@email.com">
+      <label>Password</label>
+      <input type="password" id="password" placeholder="ResaleHub password">
+      <button class="btn-primary" id="login-btn">Connect to ResaleHub</button>
+    </div>
+
+    <!-- Batch Selection -->
+    <div id="batch-section">
+      <div class="status connected" id="connected-status">✓ Connected</div>
+      <label>Select Denver Batch</label>
+      <select id="batch-select"><option value="">Loading batches...</option></select>
+      <button class="btn-primary" id="load-batch-btn">Load Batch</button>
+      <button class="btn-secondary" id="logout-btn" style="margin-top:8px">Disconnect</button>
+    </div>
+
+    <!-- Fill Section -->
+    <div id="fill-section">
+      <div class="status info" id="fill-status">Ready to fill</div>
+      <div class="lot-info" id="lot-info">
+        <h3>Current Lot</h3>
+        <div class="row"><span class="label">Lot #</span><span class="value" id="lot-num">—</span></div>
+        <div class="row"><span class="label">Title</span><span class="value" id="lot-title">—</span></div>
+        <div class="row"><span class="label">Bid</span><span class="value" id="lot-bid">—</span></div>
+        <div class="row"><span class="label">Images</span><span class="value" id="lot-images">—</span></div>
+      </div>
+      <div class="progress">
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+        <div class="progress-text" id="progress-text">0 / 0 lots</div>
+      </div>
+      <button class="btn-primary" id="fill-btn">⚡ Fill This Lot</button>
+      <button class="btn-secondary" id="skip-btn" style="margin-top:8px">Skip Lot →</button>
+      <button class="btn-danger" id="back-btn" style="margin-top:8px">← Back to Batches</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "DOA Lot Filler - ResaleHub",
+  "version": "1.0.0",
+  "description": "Auto-fill Denver Online Auctions lot forms from ResaleHub database",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": [
+    "https://denveronlineauctions.com/*",
+    "https://mwspcagajlkanpfdbuqc.supabase.co/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://denveronlineauctions.com/sub-admin/EditAuction*"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
