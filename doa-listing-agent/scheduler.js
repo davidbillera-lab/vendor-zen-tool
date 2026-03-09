@@ -22,13 +22,16 @@
  */
 
 import 'dotenv/config';
-import cron from 'node-cron';
+import cron  from 'node-cron';
 import chalk from 'chalk';
-import log from './logger.js';
+import log   from './logger.js';
 import { runAgent } from './agent.js';
 
 // Read schedule from .env, default to 8am daily
 const SCHEDULE_TIME = process.env.SCHEDULE_TIME || '0 8 * * *';
+
+// SCHEDULE_CSV must be set in .env when using the scheduler
+const SCHEDULE_CSV  = process.env.SCHEDULE_CSV;
 
 /**
  * startScheduler()
@@ -36,6 +39,12 @@ const SCHEDULE_TIME = process.env.SCHEDULE_TIME || '0 8 * * *';
  * Called from agent.js when --schedule flag is used, or directly from this file.
  */
 export function startScheduler() {
+  if (!SCHEDULE_CSV) {
+    log.error('SCHEDULE_CSV is not set in your .env file');
+    log.error('  Add: SCHEDULE_CSV=C:\\path\\to\\your\\lots.csv');
+    process.exit(1);
+  }
+
   // Validate the cron expression before starting
   if (!cron.validate(SCHEDULE_TIME)) {
     log.error(`Invalid SCHEDULE_TIME in .env: "${SCHEDULE_TIME}"`);
@@ -59,11 +68,8 @@ export function startScheduler() {
     log.schedule('━'.repeat(50));
 
     try {
-      // runAgent() is the same function that --run uses
-      // It handles its own Supabase auth, lot fetching, and DOA automation
-      // Note: scheduled runs use --force mode (no y/n prompt) since no human is watching
-      process.argv = ['node', 'agent.js', '--run', '--force'];
-      await runAgent();
+      // Scheduled runs use force mode (no y/n prompt) since no human is watching
+      await runAgent(SCHEDULE_CSV, { force: true });
       log.schedule(`Scheduled run completed at ${new Date().toLocaleString()}`);
     } catch (err) {
       log.error('Scheduled run failed with an uncaught error', err);
