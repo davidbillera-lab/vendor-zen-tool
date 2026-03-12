@@ -65,6 +65,9 @@ CSV format (first row = headers):
   process.exit(0);
 }
 
+// Pre-flight: check .env is complete before doing anything else
+checkEnv();
+
 // Run
 await runAgent(csvFile, { ...flags, lotFlag });
 
@@ -229,6 +232,32 @@ export async function runAgent(csvPath, options = {}) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * checkEnv()
+ * Validates that all required environment variables are set before the agent
+ * opens a browser. Prints a clear, human-readable error if anything is missing.
+ * This prevents confusing errors mid-run that are actually just missing config.
+ */
+function checkEnv() {
+  const required = {
+    DOA_EMAIL:         'Your DOA login email address',
+    DOA_PASSWORD:      'Your DOA login password',
+    DOA_FIRST_LOT_URL: 'URL of the first lot to edit, e.g. https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXX&PartyId=XXX',
+  };
+
+  const missing = Object.entries(required)
+    .filter(([key]) => !process.env[key] || process.env[key].trim() === '')
+    .map(([key, description]) => `  ${key}\n    → ${description}`);
+
+  if (missing.length > 0) {
+    console.error(chalk.red('\n❌  Missing required .env variables:\n'));
+    missing.forEach(m => console.error(chalk.red(m)));
+    console.error(chalk.yellow('\n  Open the .env file in your doa-listing-agent folder and fill in the missing values.'));
+    console.error(chalk.yellow('  If you don\'t have a .env file, copy .env.example and rename it to .env\n'));
+    process.exit(1);
+  }
+}
 
 function ask(prompt) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
