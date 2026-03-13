@@ -135,28 +135,20 @@ export async function loadFromSupabase(batchId = null) {
 /**
  * getFirstLotUrlForBatch(batchId)
  *
- * Reads doa_first_lot_url from la_batches.
- * This is stored in Vendor-Zen-Tool when a batch is linked to a DOA auction.
+ * Tries to read doa_first_lot_url from la_batches.
+ * This column is added by a migration — if not applied yet, returns null
+ * and agent.js falls back to DOA_FIRST_LOT_URL in .env.
  *
  * @param {string} batchId  Batch UUID
  * @returns {string|null}   The URL, or null if not set
  */
 export async function getFirstLotUrlForBatch(batchId) {
   if (!batchId) return null;
-  try {
-    const rows = await sbFetch(
-      `/la_batches?id=eq.${encodeURIComponent(batchId)}&select=id,name,doa_first_lot_url`,
-      { method: 'GET' }
-    );
-    const url = rows?.[0]?.doa_first_lot_url || null;
-    if (url) {
-      log.info(`  Batch first lot URL from Supabase: ${url}`);
-    }
-    return url;
-  } catch (err) {
-    log.warn(`  Could not fetch first lot URL for batch ${batchId}: ${err.message}`);
-    return null;
+  const url = await tryGetFirstLotUrl(batchId);
+  if (url) {
+    log.info(`  Batch first lot URL from Supabase: ${url}`);
   }
+  return url;
 }
 
 // ── List all batches that have DOA lots ───────────────────────────────────────
@@ -164,39 +156,76 @@ export async function getFirstLotUrlForBatch(batchId) {
 /**
  * listBatches()
  *
- * Returns recent batches from la_batches that have at least one denver_batch_row.
- * Used by --list-batches to let the user pick which batch to run.
+ * Discovers batches by reading denver_batch_rows grouped by batch_id, then
+ * optionally enriches with batch names from la_batches (if accessible).
+ * Works even if la_batches is not accessible or missing the doa_first_lot_url column.
  */
 export async function listBatches() {
   checkSupabaseEnv();
 
-  // Fetch recent batches (la_batches stores the batch metadata)
-  const batches = await sbFetch(
-    '/la_batches?select=id,name,lot_count,doa_first_lot_url,created_at&order=created_at.desc&limit=20',
+  // Pull all denver_batch_rows to find distinct batch IDs and their statuses
+  const rows = await sbFetch(
+    '/denver_batch_rows?select=id,batch_id,lot_number,title,status&order=lot_number',
     { method: 'GET' }
   );
 
-  if (!batches || batches.length === 0) return [];
+  if (!rows || rows.length === 0) return [];
 
-  // For each batch, get the DOA lot count (pending vs completed)
-  const enriched = await Promise.all(
-    batches.map(async (b) => {
-      try {
-        const counts = await sbFetch(
-          `/denver_batch_rows?batch_id=eq.${b.id}&select=status`,
-          { method: 'GET', headers: { 'Prefer': 'count=exact' } }
-        );
-        const rows = counts || [];
-        const pending   = rows.filter(r => r.status !== 'completed').length;
-        const completed = rows.filter(r => r.status === 'completed').length;
-        return { ...b, doa_pending: pending, doa_completed: completed, doa_total: rows.length };
-      } catch {
-        return { ...b, doa_pending: '?', doa_completed: '?', doa_total: '?' };
+  // Group by batch_id
+  const batchMap = new Map();
+  for (const row of rows) {
+    const key = row.batch_id || '(no batch)';
+    if (!batchMap.has(key)) {
+      batchMap.set(key, { id: key, name: null, doa_pending: 0, doa_completed: 0, doa_failed: 0, doa_total: 0, doa_first_lot_url: null });
+    }
+    const b = batchMap.get(key);
+    b.doa_total++;
+    if (row.status === 'completed')   b.doa_completed++;
+    else if (row.status === 'failed') b.doa_failed++;
+    else                              b.doa_pending++;
+  }
+
+  const batches = Array.from(batchMap.values());
+
+  // Try to enrich with batch names from la_batches — non-fatal if it fails
+  try {
+    const batchIds = batches.map(b => b.id).filter(id => id !== '(no batch)');
+    if (batchIds.length > 0) {
+      // Only select columns that definitely exist (no doa_first_lot_url until migration runs)
+      const laBatches = await sbFetch(
+        `/la_batches?id=in.(${batchIds.map(id => encodeURIComponent(id)).join(',')})&select=id,name,created_at`,
+        { method: 'GET' }
+      );
+      if (laBatches) {
+        const nameMap = new Map(laBatches.map(b => [b.id, b.name]));
+        for (const b of batches) {
+          b.name = nameMap.get(b.id) || null;
+        }
       }
-    })
-  );
+    }
+  } catch (err) {
+    log.warn(`Could not fetch batch names from la_batches: ${err.message}`);
+    log.warn('Showing batch IDs only — lots will still process correctly');
+  }
 
-  return enriched;
+  return batches;
+}
+
+// ── Try to get doa_first_lot_url from la_batches (only if migration was applied) ──
+
+async function tryGetFirstLotUrl(batchId) {
+  // Try the column that's added by migration 20260308
+  // If the column doesn't exist yet, this returns null gracefully
+  try {
+    const rows = await sbFetch(
+      `/la_batches?id=eq.${encodeURIComponent(batchId)}&select=id,doa_first_lot_url`,
+      { method: 'GET' }
+    );
+    return rows?.[0]?.doa_first_lot_url || null;
+  } catch {
+    // Column doesn't exist yet — migration not applied
+    return null;
+  }
 }
 
 // ── Write status back to Supabase ─────────────────────────────────────────────

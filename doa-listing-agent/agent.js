@@ -157,23 +157,26 @@ async function showBatchList() {
   }
 
   console.log(chalk.cyan('\n' + '─'.repeat(90)));
-  console.log(chalk.bold(`  ${'Batch Name'.padEnd(30)} ${'ID (first 8)'.padEnd(12)} ${'Pending'.padEnd(10)} ${'Done'.padEnd(8)} ${'Has URL'}`));
+  console.log(chalk.bold(`  ${'Batch Name / ID'.padEnd(42)} ${'Pending'.padEnd(10)} ${'Done'.padEnd(8)} ${'Failed'}`));
   console.log('  ' + '─'.repeat(82));
 
   for (const b of batches) {
-    const name      = (b.name || '(unnamed)').slice(0, 28).padEnd(30);
-    const id        = b.id.slice(0, 8).padEnd(12);
-    const pending   = String(b.doa_pending ?? '?').padEnd(10);
+    const label     = (b.name || b.id).slice(0, 40).padEnd(42);
+    const pending   = String(b.doa_pending  ?? '?').padEnd(10);
     const done      = String(b.doa_completed ?? '?').padEnd(8);
-    const hasUrl    = b.doa_first_lot_url ? chalk.green('✓') : chalk.red('✗');
+    const failed    = String(b.doa_failed   ?? '?');
     const pendingFmt = (b.doa_pending > 0) ? chalk.yellow(pending) : chalk.gray(pending);
-    console.log(`  ${name} ${id} ${pendingFmt} ${done} ${hasUrl}`);
+    const failedFmt  = (b.doa_failed  > 0) ? chalk.red(failed)    : chalk.gray(failed);
+    console.log(`  ${label} ${pendingFmt} ${done} ${failedFmt}`);
+    // Show full ID on second line for easy copy-paste
+    if (b.name) {
+      console.log(chalk.gray(`    ID: ${b.id}`));
+    }
   }
 
   console.log(chalk.cyan('─'.repeat(90)));
   console.log(chalk.white(`\n  To run a batch:`));
-  console.log(chalk.white(`    node agent.js --supabase --batch <full-batch-id>\n`));
-  console.log(chalk.white(`  Get the full batch ID from Supabase Dashboard → Table Editor → la_batches\n`));
+  console.log(chalk.white(`    node agent.js --supabase --batch <batch-id>\n`));
 
   process.exit(0);
 }
