@@ -29,7 +29,12 @@ const SUPABASE_KEY = (SUPABASE_SERVICE_KEY && SUPABASE_SERVICE_KEY.trim())
   ? SUPABASE_ANON_KEY.trim()
   : null;
 
-const USING_ANON_KEY = SUPABASE_KEY && SUPABASE_KEY === (SUPABASE_ANON_KEY || '').trim();
+// Detect if we're using the publishable/anon key instead of the secret key.
+// Old format: eyJ... JWT  |  New Supabase format: sb_publishable_... / sb_secret_...
+const USING_ANON_KEY = SUPABASE_KEY && (
+  SUPABASE_KEY === (SUPABASE_ANON_KEY || '').trim() ||
+  SUPABASE_KEY.startsWith('sb_publishable_')
+);
 
 // ── Internal fetch wrapper ────────────────────────────────────────────────────
 
@@ -83,10 +88,10 @@ export function checkSupabaseEnv() {
 
   if (USING_ANON_KEY) {
     log.warn('─────────────────────────────────────────────────────────');
-    log.warn('⚠️  WARNING: Using SUPABASE_ANON_KEY instead of SUPABASE_SERVICE_ROLE_KEY');
+    log.warn('⚠️  WARNING: Using the publishable key instead of the secret key');
     log.warn('   Row-Level Security will block reads — the agent will find 0 lots.');
-    log.warn('   Fix: add SUPABASE_SERVICE_ROLE_KEY to doa-listing-agent/.env');
-    log.warn('   Get it: Supabase Dashboard → Settings → API → service_role');
+    log.warn('   Fix: in Supabase Dashboard → Secret keys → reveal & copy sb_secret_...');
+    log.warn('   Then add to doa-listing-agent/.env: SUPABASE_SERVICE_ROLE_KEY=sb_secret_...');
     log.warn('─────────────────────────────────────────────────────────');
   }
 }
