@@ -85,8 +85,10 @@ async function processCsv(csvPath, dirs, firstLotUrl) {
 
   log.section(`Watch Mode: Processing ${filename}`);
 
-  const { lots: allLots } = loadCsv(procPath);
+  const { lots: allLots, firstLotUrl: csvFirstLotUrl } = loadCsv(procPath);
   const lots = allLots.filter(l => l.status !== 'completed');
+  // URL priority: from CSV column → from watch mode option → from .env (handled in runDoaAgent)
+  const resolvedFirstLotUrl = csvFirstLotUrl || firstLotUrl;
 
   if (lots.length === 0) {
     log.info(`  All lots in ${filename} already completed — moving to done/`);
@@ -103,9 +105,13 @@ async function processCsv(csvPath, dirs, firstLotUrl) {
   let failed = 0;
 
   try {
+    if (resolvedFirstLotUrl) {
+      log.info(`  DOA URL: ${resolvedFirstLotUrl}`);
+    }
+
     const agentResult = await runDoaAgent(
       lots,
-      { firstLotUrl },
+      { firstLotUrl: resolvedFirstLotUrl },
       {
         onStart: async (lot) => {
           results.push({ lot, status: 'in_progress' });

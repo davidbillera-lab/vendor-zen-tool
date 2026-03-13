@@ -309,7 +309,7 @@ export async function runAgent(csvPath, options = {}) {
   log.info(`Mode: ${dryRun ? 'DRY RUN' : test ? 'TEST (3 lots)' : lotFlag ? `Single lot #${lotFlag}` : 'FULL RUN'}`);
 
   // Load CSV
-  const { lots: allLots, totalRows } = loadCsv(csvPath);
+  const { lots: allLots, totalRows, firstLotUrl: csvFirstLotUrl } = loadCsv(csvPath);
 
   const completed = allLots.filter(l => l.status === 'completed');
   let   lots      = allLots.filter(l => l.status !== 'completed');
@@ -358,11 +358,13 @@ export async function runAgent(csvPath, options = {}) {
 
   cleanupAllTemp();
 
-  // Validate DOA_FIRST_LOT_URL
-  const firstLotUrl = process.env.DOA_FIRST_LOT_URL;
+  // Resolve first lot URL: CSV column → .env fallback
+  const firstLotUrl = csvFirstLotUrl || process.env.DOA_FIRST_LOT_URL;
+  if (csvFirstLotUrl) {
+    log.info(`  DOA URL from CSV: ${csvFirstLotUrl}`);
+  }
   if (!firstLotUrl) {
-    log.error('DOA_FIRST_LOT_URL is not set in your .env file');
-    log.error('  Add: DOA_FIRST_LOT_URL=https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXX&PartyId=XXX');
+    log.error('DOA_FIRST_LOT_URL not found. Add it to your .env OR include a doa_first_lot_url column in your CSV.');
     process.exit(1);
   }
 

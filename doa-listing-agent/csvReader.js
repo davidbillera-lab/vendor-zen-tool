@@ -96,7 +96,12 @@ function normalizeLot(row, status) {
     images = rawImages.split(/[|]/).map(s => s.trim()).filter(Boolean);
   }
 
-  return { lot_number: lotNum, title, description, images, starting_bid: startingBid, status };
+  // doa_first_lot_url — optional, only needed on first row, overrides .env
+  const doaUrl = (
+    row.doa_first_lot_url ?? row.doa_url ?? row.first_lot_url ?? ''
+  ).trim() || null;
+
+  return { lot_number: lotNum, title, description, images, starting_bid: startingBid, doa_first_lot_url: doaUrl, status };
 }
 
 // ── Progress sidecar ──────────────────────────────────────────────────────────
@@ -166,5 +171,8 @@ export function loadCsv(csvPath) {
   // Sort by lot_number numerically
   lots.sort((a, b) => (parseInt(a.lot_number, 10) || 0) - (parseInt(b.lot_number, 10) || 0));
 
-  return { lots, totalRows: rows.length };
+  // Extract DOA first lot URL from whichever row has it (usually row 1)
+  const firstLotUrl = lots.find(l => l.doa_first_lot_url)?.doa_first_lot_url || null;
+
+  return { lots, totalRows: rows.length, firstLotUrl };
 }
