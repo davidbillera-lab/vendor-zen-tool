@@ -18,8 +18,18 @@
 
 import log from './logger.js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+const SUPABASE_URL         = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_ANON_KEY    = process.env.SUPABASE_ANON_KEY;
+// Service role key bypasses RLS — required for the agent to read all rows.
+// Anon key is subject to Row-Level Security and will return 0 rows.
+const SUPABASE_KEY = (SUPABASE_SERVICE_KEY && SUPABASE_SERVICE_KEY.trim())
+  ? SUPABASE_SERVICE_KEY.trim()
+  : (SUPABASE_ANON_KEY && SUPABASE_ANON_KEY.trim())
+  ? SUPABASE_ANON_KEY.trim()
+  : null;
+
+const USING_ANON_KEY = SUPABASE_KEY && SUPABASE_KEY === (SUPABASE_ANON_KEY || '').trim();
 
 // ── Internal fetch wrapper ────────────────────────────────────────────────────
 
@@ -51,19 +61,33 @@ async function sbFetch(path, options = {}) {
 // ── Env validation ────────────────────────────────────────────────────────────
 
 export function checkSupabaseEnv() {
-  const missing = [];
-  if (!SUPABASE_URL)  missing.push('SUPABASE_URL');
-  if (!SUPABASE_KEY)  missing.push('SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)');
-
-  if (missing.length > 0) {
+  if (!SUPABASE_URL) {
     throw new Error(
-      `Missing Supabase credentials in .env:\n` +
-      missing.map(m => `  ${m}`).join('\n') + '\n\n' +
-      `  Get your service role key:\n` +
-      `    Supabase Dashboard → Settings → API → service_role\n` +
-      `  Then add to doa-listing-agent/.env:\n` +
-      `    SUPABASE_SERVICE_ROLE_KEY=eyJ...`
+      `SUPABASE_URL is not set in doa-listing-agent/.env\n` +
+      `  Add: SUPABASE_URL=https://mwspcagajlkanpfdbuqc.supabase.co`
     );
+  }
+
+  if (!SUPABASE_KEY) {
+    throw new Error(
+      `No Supabase key found in doa-listing-agent/.env\n\n` +
+      `  Add your service role key (required to bypass Row-Level Security):\n\n` +
+      `  1. Go to: https://supabase.com/dashboard/project/mwspcagajlkanpfdbuqc/settings/api\n` +
+      `  2. Copy the "service_role" key (the secret one)\n` +
+      `  3. Add to doa-listing-agent/.env:\n` +
+      `       SUPABASE_SERVICE_ROLE_KEY=eyJ...\n\n` +
+      `  ⚠️  Do NOT use the anon/publishable key — RLS will block all reads and\n` +
+      `      the agent will silently find 0 lots regardless of what's in the database.`
+    );
+  }
+
+  if (USING_ANON_KEY) {
+    log.warn('─────────────────────────────────────────────────────────');
+    log.warn('⚠️  WARNING: Using SUPABASE_ANON_KEY instead of SUPABASE_SERVICE_ROLE_KEY');
+    log.warn('   Row-Level Security will block reads — the agent will find 0 lots.');
+    log.warn('   Fix: add SUPABASE_SERVICE_ROLE_KEY to doa-listing-agent/.env');
+    log.warn('   Get it: Supabase Dashboard → Settings → API → service_role');
+    log.warn('─────────────────────────────────────────────────────────');
   }
 }
 
@@ -169,7 +193,19 @@ export async function listBatches() {
     { method: 'GET' }
   );
 
-  if (!rows || rows.length === 0) return [];
+  if (!rows || rows.length === 0) {
+    if (USING_ANON_KEY) {
+      throw new Error(
+        `Supabase returned 0 rows — this is caused by Row-Level Security blocking the anon key.\n\n` +
+        `  You must use the SERVICE ROLE KEY, not the anon key.\n\n` +
+        `  1. Go to: https://supabase.com/dashboard/project/mwspcagajlkanpfdbuqc/settings/api\n` +
+        `  2. Copy the "service_role" key\n` +
+        `  3. Add to doa-listing-agent/.env:\n` +
+        `       SUPABASE_SERVICE_ROLE_KEY=eyJ...`
+      );
+    }
+    return [];
+  }
 
   // Group by batch_id
   const batchMap = new Map();
