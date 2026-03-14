@@ -1,0 +1,37 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  DOA LISTING AGENT — DROP FOLDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  HOW TO USE:
+  ──────────────────────────────────────────────────────────────
+  1. Export your auction lots as a CSV from Vendor-Zen-Tool
+  2. Drop the CSV file INTO THIS FOLDER
+  3. The agent picks it up within 30 seconds
+  4. Walk away — it handles everything automatically
+
+  WHAT HAPPENS NEXT:
+  ──────────────────────────────────────────────────────────────
+  → CSV moves to:  incoming\processing\  (agent is working on it)
+  → On success:    incoming\done\YYYY-MM-DD\  (archived by date)
+  → On failure:    incoming\failed\  (with error notes for retry)
+
+  CSV FORMAT:
+  ──────────────────────────────────────────────────────────────
+  Required columns (in any order):
+    lot_number   - The lot number
+    title        - Listing title
+    description  - HTML or plain text description
+    images       - Pipe-separated image URLs: url1|url2|url3
+    starting_bid - Starting price (default: $5 if omitted)
+
+  Optional column for per-auction URL:
+    doa_first_lot_url  - Put this in the first data row only
+
+  REQUIREMENTS:
+  ──────────────────────────────────────────────────────────────
+  ✓ watch.bat must be running (double-click it to start)
+  ✓ .env must have DOA_EMAIL, DOA_PASSWORD, DOA_FIRST_LOT_URL
+  ✓ The empty auction must already exist in DOA sub-admin
+  ✓ Lot count in CSV must match lot slots in the DOA auction
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
