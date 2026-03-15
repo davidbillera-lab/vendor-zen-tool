@@ -5,14 +5,15 @@
   "type": "module",
   "main": "agent.js",
   "scripts": {
-    "start":   "node agent.js",
+    "start": "node agent.js",
     "dry-run": "node agent.js --dry-run"
   },
   "dependencies": {
-    "axios":      "^1.6.0",
-    "chalk":      "^5.3.0",
-    "dotenv":     "^16.3.0",
-    "node-cron":  "^3.0.3",
+    "axios": "^1.6.0",
+    "chalk": "^5.3.0",
+    "dotenv": "^16.3.0",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.10.1",
     "playwright": "^1.41.0"
   }
 }

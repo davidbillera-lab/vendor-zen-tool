@@ -52,6 +52,7 @@ import {
   checkSupabaseEnv,
 }                                               from './supabaseReader.js';
 import { startWatchMode }                       from './watchMode.js';
+import { sendCompletionEmail }                  from './notifier.js';
 
 // ── Parse CLI flags ───────────────────────────────────────────────────────────
 
@@ -291,6 +292,18 @@ async function runSupabaseAgent(batchId, options = {}) {
   }
 
   printSummary(results, agentResult, startTime, log.getRunLogPath());
+
+  // Send email notification — non-blocking, never crashes the agent
+  await sendCompletionEmail({
+    batchName: batchId || 'Supabase Batch',
+    succeeded: agentResult.succeeded,
+    failed:    agentResult.failed,
+    skipped:   agentResult.skipped,
+    duration:  formatDuration(Date.now() - startTime),
+    logPath:   log.getRunLogPath(),
+    results,
+  });
+
   process.exit(agentResult.failed > 0 ? 1 : 0);
 }
 
@@ -405,6 +418,18 @@ export async function runAgent(csvPath, options = {}) {
   }
 
   printSummary(results, agentResult, startTime, log.getRunLogPath());
+
+  // Send email notification — non-blocking, never crashes the agent
+  await sendCompletionEmail({
+    batchName: csvPath,
+    succeeded: agentResult.succeeded,
+    failed:    agentResult.failed,
+    skipped:   agentResult.skipped,
+    duration:  formatDuration(Date.now() - startTime),
+    logPath:   log.getRunLogPath(),
+    results,
+  });
+
   process.exit(agentResult.failed > 0 ? 1 : 0);
 }
 

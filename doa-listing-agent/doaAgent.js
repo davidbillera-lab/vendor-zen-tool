@@ -391,9 +391,14 @@ async function fillCurrentLotForm(page, lot, localImagePaths, currentPageUrl) {
     // Fallback: use the first visible text input (usually Title on DOA forms)
     const inputs = page.locator('form input[type="text"], form input:not([type])');
     if (await inputs.count() > 0) {
-      await inputs.first().clear();
-      await inputs.first().fill(lot.title || '');
-      log.warn(`  Title filled via fallback (first text input): "${lot.title}"`);
+      // DOA pre-fills the title field with the lot number (e.g. "Lot # 1").
+      // Read the existing value and APPEND our title after it — never clear it.
+      const existingFallback = (await inputs.first().inputValue()).trim();
+      const appendedFallback = existingFallback
+        ? `${existingFallback} ${(lot.title || '').trim()}`
+        : (lot.title || '').trim();
+      await inputs.first().fill(appendedFallback);
+      log.warn(`  Title filled via fallback: "${appendedFallback}"`);
     } else {
       await takeScreenshot(page, `lot${lot.lot_number}-no-title-field`);
       throw new Error(
@@ -402,30 +407,21 @@ async function fillCurrentLotForm(page, lot, localImagePaths, currentPageUrl) {
       );
     }
   } else {
-    await titleEl.locator.clear();
-    await titleEl.locator.fill(lot.title || '');
-    log.info(`  Title filled: "${lot.title}" (selector: ${titleEl.selector})`);
+    // DOA pre-fills the title field with the lot number (e.g. "Lot # 1").
+    // Read the existing value and APPEND our title after it — never clear it.
+    const existingTitle = (await titleEl.locator.inputValue()).trim();
+    const appendedTitle = existingTitle
+      ? `${existingTitle} ${(lot.title || '').trim()}`
+      : (lot.title || '').trim();
+    await titleEl.locator.fill(appendedTitle);
+    log.info(`  Title: "${appendedTitle}"  [preserved lot#: "${existingTitle}"]`);
   }
 
   // ── Starting Bid ────────────────────────────────────────────────────────────
-  const startingBid = String(lot.starting_bid ?? 5);
-  const bidEl = await findFirst(page, SELECTORS.lotStartingBid);
+  // SKIPPED — DOA already has the starting bid pre-configured on each lot.
+  // Overwriting it is unnecessary and risks changing values the auctioneer set.
+  log.info(`  Starting bid: skipped (DOA default preserved)`);
 
-  if (!bidEl) {
-    // Fallback: first numeric input
-    const numInputs = page.locator('input[type="number"], input[inputmode="numeric"]');
-    if (await numInputs.count() > 0) {
-      await numInputs.first().clear();
-      await numInputs.first().fill(startingBid);
-      log.warn(`  Starting bid filled via fallback (first numeric input): $${startingBid}`);
-    } else {
-      log.warn(`  Starting bid input not found for lot #${lot.lot_number} — using DOA default`);
-    }
-  } else {
-    await bidEl.locator.clear();
-    await bidEl.locator.fill(startingBid);
-    log.info(`  Starting bid: $${startingBid}`);
-  }
 
   // ── Description (TinyMCE) ───────────────────────────────────────────────────
   await fillTinyMce(page, lot.description || '');
