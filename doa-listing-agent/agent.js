@@ -52,6 +52,7 @@ import {
   checkSupabaseEnv,
 }                                               from './supabaseReader.js';
 import { startWatchMode }                       from './watchMode.js';
+import { startSupabaseWatchMode }               from './supabaseWatcher.js';
 import { sendCompletionEmail }                  from './notifier.js';
 
 // ── Parse CLI flags ───────────────────────────────────────────────────────────
@@ -70,8 +71,9 @@ const batchId     = batchIdx !== -1 ? args[batchIdx + 1] : null;
 const dirIdx      = args.indexOf('--dir');
 const watchDir    = dirIdx !== -1 ? args[dirIdx + 1] : './incoming';
 
-const isSupabase  = args.includes('--supabase');
-const isWatch     = args.includes('--watch');
+const isSupabase      = args.includes('--supabase');
+const isWatch         = args.includes('--watch');
+const isSupabaseWatch = args.includes('--supabase-watch');
 const listBatchesFlag = args.includes('--list-batches');
 
 const flags = {
@@ -92,6 +94,10 @@ SUPABASE MODE (pulls from Vendor-Zen-Tool automatically):
   node agent.js --supabase --batch <id> --test  First 3 lots only (safe test)
   node agent.js --supabase --force              Skip confirmation prompt
 
+SUPABASE WATCH MODE (zero-terminal — runs as a background service):
+  node agent.js --supabase-watch                Poll Supabase every 30s; picks up
+                                                batches triggered from the dashboard
+
 WATCH MODE (auto-process CSV files dropped in a folder):
   node agent.js --watch                         Watch ./incoming/ folder
   node agent.js --watch --dir ./drop-folder     Watch a custom folder
@@ -110,14 +116,18 @@ CSV format: lot_number, title, description, images, starting_bid
 
 // ── Route to the right mode ───────────────────────────────────────────────────
 
-if (!csvFile && !isSupabase && !isWatch) {
+if (!csvFile && !isSupabase && !isWatch && !isSupabaseWatch) {
   console.log(HELP);
   process.exit(0);
 }
 
 checkDOAEnv();  // Always need DOA credentials
 
-if (isWatch) {
+if (isSupabaseWatch) {
+  // ── Supabase watch mode (background service / pm2) ───────────────────────
+  await startSupabaseWatchMode();
+
+} else if (isWatch) {
   // ── Watch mode ──────────────────────────────────────────────────────────────
   const firstLotUrl = process.env.DOA_FIRST_LOT_URL;
   if (!firstLotUrl) {

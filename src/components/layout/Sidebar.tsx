@@ -21,6 +21,7 @@ const navItems = [
   { icon: ListPlus, label: "Create Listing", path: "/create-listing" },
   { icon: Package, label: "Inventory", path: "/inventory" },
   { icon: ShoppingCart, label: "Orders", path: "/orders" },
+  { icon: Gavel, label: "Denver Batches", path: "/denver-batches" },
   { icon: Link2, label: "Platforms", path: "/platforms" },
   { icon: Settings, label: "Settings", path: "/settings" },
 ];

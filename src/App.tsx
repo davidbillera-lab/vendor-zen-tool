@@ -12,6 +12,7 @@ import CreateListing from "./pages/CreateListing";
 import Orders from "./pages/Orders";
 import Platforms from "./pages/Platforms";
 import Settings from "./pages/Settings";
+import DenverBatches from "./pages/DenverBatches";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import { AIChatPanel } from "@/components/AIChatPanel";
@@ -33,6 +34,7 @@ const App = () => (
             <Route path="/create-listing" element={<ProtectedRoute><CreateListing /></ProtectedRoute>} />
             <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
             <Route path="/platforms" element={<ProtectedRoute><Platforms /></ProtectedRoute>} />
+            <Route path="/denver-batches" element={<ProtectedRoute><DenverBatches /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
