@@ -5,7 +5,7 @@
  * (denver_batch_rows table) and writes status updates back after each lot.
  *
  * Required .env variables:
- *   SUPABASE_URL=https://mwspcagajlkanpfdbuqc.supabase.co
+ *   SUPABASE_URL=https://atgrxqfxysvppqoyvjdd.supabase.co
  *   SUPABASE_SERVICE_ROLE_KEY=eyJ...  ← from Supabase Dashboard → Settings → API
  *
  * Why service role key?
@@ -69,7 +69,7 @@ export function checkSupabaseEnv() {
   if (!SUPABASE_URL) {
     throw new Error(
       `SUPABASE_URL is not set in doa-listing-agent/.env\n` +
-      `  Add: SUPABASE_URL=https://mwspcagajlkanpfdbuqc.supabase.co`
+      `  Add: SUPABASE_URL=https://atgrxqfxysvppqoyvjdd.supabase.co`
     );
   }
 
@@ -77,7 +77,7 @@ export function checkSupabaseEnv() {
     throw new Error(
       `No Supabase key found in doa-listing-agent/.env\n\n` +
       `  Add your service role key (required to bypass Row-Level Security):\n\n` +
-      `  1. Go to: https://supabase.com/dashboard/project/mwspcagajlkanpfdbuqc/settings/api\n` +
+      `  1. Go to: https://supabase.com/dashboard/project/atgrxqfxysvppqoyvjdd/settings/api\n` +
       `  2. Copy the "service_role" key (the secret one)\n` +
       `  3. Add to doa-listing-agent/.env:\n` +
       `       SUPABASE_SERVICE_ROLE_KEY=eyJ...\n\n` +
@@ -203,7 +203,7 @@ export async function listBatches() {
       throw new Error(
         `Supabase returned 0 rows — this is caused by Row-Level Security blocking the anon key.\n\n` +
         `  You must use the SERVICE ROLE KEY, not the anon key.\n\n` +
-        `  1. Go to: https://supabase.com/dashboard/project/mwspcagajlkanpfdbuqc/settings/api\n` +
+        `  1. Go to: https://supabase.com/dashboard/project/atgrxqfxysvppqoyvjdd/settings/api\n` +
         `  2. Copy the "service_role" key\n` +
         `  3. Add to doa-listing-agent/.env:\n` +
         `       SUPABASE_SERVICE_ROLE_KEY=eyJ...`

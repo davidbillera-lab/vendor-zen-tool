@@ -28,7 +28,7 @@
  *   DOA_PASSWORD=your-doa-password
  *
  * REQUIRED .env (supabase + watch modes):
- *   SUPABASE_URL=https://mwspcagajlkanpfdbuqc.supabase.co
+ *   SUPABASE_URL=https://atgrxqfxysvppqoyvjdd.supabase.co
  *   SUPABASE_SERVICE_ROLE_KEY=eyJ...  (Supabase Dashboard → Settings → API)
  *
  * OPTIONAL .env:
