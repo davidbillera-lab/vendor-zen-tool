@@ -262,6 +262,7 @@ export function EbayBatchPanel({
       .replace(/\r\n/g, ' ')  // Windows newlines
       .replace(/\n/g, ' ')     // Unix newlines
       .replace(/\r/g, ' ')     // Old Mac newlines
+      .replace(/"/g, '')       // eBay prohibits quotation marks in titles/text
       .replace(/\s+/g, ' ')    // Collapse multiple spaces
       .trim();
   };
@@ -513,7 +514,7 @@ export function EbayBatchPanel({
         row.best_offer_enabled !== false ? "1" : "0",                    // Best Offer Enabled
         row.best_offer_auto_accept?.toString() || "",                    // Best Offer Auto Accept Price
         row.minimum_best_offer?.toString() || "",                        // Minimum Best Offer Price
-        "",                                                              // Immediate pay required
+        "1",                                                             // Immediate pay required (mandatory for Managed Payments)
         savedLocation,                                                   // Location
         getShippingService(row.shipping_type),                           // Shipping service 1 option
         shippingCost,                                                    // Shipping service 1 cost
