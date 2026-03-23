@@ -511,10 +511,10 @@ export function EbayBatchPanel({
         "FixedPrice",                                                    // Format
         "GTC",                                                           // Duration
         "",                                                              // Buy It Now price
-        row.best_offer_enabled !== false ? "1" : "0",                    // Best Offer Enabled
+        row.best_offer_enabled === true ? "1" : "0",                      // Best Offer Enabled (must be 0 when immediate pay = 1)
         row.best_offer_auto_accept?.toString() || "",                    // Best Offer Auto Accept Price
         row.minimum_best_offer?.toString() || "",                        // Minimum Best Offer Price
-        "1",                                                             // Immediate pay required (mandatory for Managed Payments)
+        row.best_offer_enabled === true ? "0" : "1",                     // Immediate pay required (0 when Best Offer on, 1 otherwise)
         savedLocation,                                                   // Location
         getShippingService(row.shipping_type),                           // Shipping service 1 option
         shippingCost,                                                    // Shipping service 1 cost
