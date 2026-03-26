@@ -83,9 +83,9 @@ export async function runQueue() {
   // Catch-up: anything stuck in processing/ from a previous crashed run
   const stuck = scanProcessing(QUEUE_DIR);
   if (stuck.length > 0) {
-    log.warn(`Found ${stuck.length} file(s) stuck in processing/ (previous crash?) — marking as failed`);
+    log.warn(`Found ${stuck.length} PROCESSING file(s) from a previous crash — marking as failed`);
     for (const f of stuck) {
-      markFailed(f, QUEUE_DIR, 'Found stuck in processing/ on agent startup — assumed failed');
+      markFailed(f, QUEUE_DIR, 'Found as PROCESSING on agent startup — previous run likely crashed');
     }
   }
 
