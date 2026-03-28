@@ -88,7 +88,7 @@ export default function DenverBatches() {
               counts.failed++;
               failedLots.push({
                 id: lot.id,
-                lot_number: lot.lot_number,
+                lot_number: String(lot.lot_number),
                 title: lot.title,
                 error_message: null,
               });
