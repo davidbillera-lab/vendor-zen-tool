@@ -63,7 +63,7 @@ export default function DenverBatches() {
     try {
       const { data: batchRows, error } = await supabase
         .from("la_batches")
-        .select("id, name, created_at, doa_auction_url, platforms")
+        .select("id, name, created_at, platforms")
         .contains("platforms", ["denver"])
         .eq("is_active", true)
         .order("created_at", { ascending: false });
@@ -74,7 +74,7 @@ export default function DenverBatches() {
         (batchRows || []).map(async (b) => {
           const { data: lots } = await supabase
             .from("denver_batch_rows")
-            .select("id, status, lot_number, title, error_message")
+            .select("id, status, lot_number, title")
             .eq("batch_id", b.id);
 
           const counts: LotCounts = { pending: 0, completed: 0, failed: 0, total: 0 };
@@ -90,12 +90,12 @@ export default function DenverBatches() {
                 id: lot.id,
                 lot_number: lot.lot_number,
                 title: lot.title,
-                error_message: lot.error_message,
+                error_message: null,
               });
             }
           }
 
-          return { ...b, counts, failedLots };
+          return { ...b, doa_auction_url: null, counts, failedLots } as Batch;
         })
       );
 
