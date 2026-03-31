@@ -145,6 +145,7 @@ export default function CreateListing() {
   const [denverLots, setDenverLots] = useState<any[]>([]);
   const [editingDenverLot, setEditingDenverLot] = useState<any | null>(null);
   const [loadingDenver, setLoadingDenver] = useState(false);
+  const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
 
   // eBay batch mode
   const [ebayLotNumber, setEbayLotNumber] = useState(1);
@@ -1338,7 +1339,7 @@ export default function CreateListing() {
                 </div>
                 <div className="max-h-60 overflow-y-auto space-y-1">
                   {denverLots.map((lot: any) => (
-                    <div
+                    <Button
                       key={lot.id}
                       variant={selectedDenverLot === lot.lot_number ? "default" : "outline"}
                       size="sm"
@@ -1416,7 +1417,7 @@ export default function CreateListing() {
                     ))}
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         )}
