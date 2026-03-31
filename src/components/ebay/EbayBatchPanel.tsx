@@ -100,6 +100,10 @@ export function EbayBatchPanel({
   const [sendingToZapier, setSendingToZapier] = useState(false);
   const [showZapierConfig, setShowZapierConfig] = useState(false);
   const [enriching, setEnriching] = useState(false);
+  const [shippingProfileName, setShippingProfileName] = useState<string>("");
+  const [returnProfileName, setReturnProfileName] = useState<string>("");
+  const [paymentProfileName, setPaymentProfileName] = useState<string>("");
+  const [fullCsvContent, setFullCsvContent] = useState<string>("");
 
   // Persist default category and location per project
   useEffect(() => {
@@ -111,6 +115,12 @@ export function EbayBatchPanel({
       if (savedLocation) setItemLocation(savedLocation);
       const savedWebhook = localStorage.getItem(`ebay_zapier_webhook`);
       if (savedWebhook) setZapierWebhookUrl(savedWebhook);
+      const savedShippingProfile = localStorage.getItem(`ebay_shipping_profile_${projectId}`);
+      if (savedShippingProfile) setShippingProfileName(savedShippingProfile);
+      const savedReturnProfile = localStorage.getItem(`ebay_return_profile_${projectId}`);
+      if (savedReturnProfile) setReturnProfileName(savedReturnProfile);
+      const savedPaymentProfile = localStorage.getItem(`ebay_payment_profile_${projectId}`);
+      if (savedPaymentProfile) setPaymentProfileName(savedPaymentProfile);
     } catch {
       // ignore
     }
@@ -144,6 +154,21 @@ export function EbayBatchPanel({
       // ignore
     }
   }, [itemLocation, projectId]);
+
+  // Persist eBay Business Policy profile names
+  useEffect(() => {
+    if (!projectId) return;
+    try {
+      if (shippingProfileName.trim()) localStorage.setItem(`ebay_shipping_profile_${projectId}`, shippingProfileName.trim());
+      else localStorage.removeItem(`ebay_shipping_profile_${projectId}`);
+      if (returnProfileName.trim()) localStorage.setItem(`ebay_return_profile_${projectId}`, returnProfileName.trim());
+      else localStorage.removeItem(`ebay_return_profile_${projectId}`);
+      if (paymentProfileName.trim()) localStorage.setItem(`ebay_payment_profile_${projectId}`, paymentProfileName.trim());
+      else localStorage.removeItem(`ebay_payment_profile_${projectId}`);
+    } catch {
+      // ignore
+    }
+  }, [shippingProfileName, returnProfileName, paymentProfileName, projectId]);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this listing?")) return;
@@ -237,6 +262,7 @@ export function EbayBatchPanel({
       .replace(/\r\n/g, ' ')  // Windows newlines
       .replace(/\n/g, ' ')     // Unix newlines
       .replace(/\r/g, ' ')     // Old Mac newlines
+      .replace(/"/g, '')       // eBay prohibits quotation marks in titles/text
       .replace(/\s+/g, ' ')    // Collapse multiple spaces
       .trim();
   };
@@ -486,10 +512,10 @@ export function EbayBatchPanel({
         "FixedPrice",                                                    // Format
         "GTC",                                                           // Duration
         "",                                                              // Buy It Now price
-        row.best_offer_enabled !== false ? "1" : "0",                    // Best Offer Enabled
+        row.best_offer_enabled === true ? "1" : "0",                      // Best Offer Enabled (must be 0 when immediate pay = 1)
         row.best_offer_auto_accept?.toString() || "",                    // Best Offer Auto Accept Price
         row.minimum_best_offer?.toString() || "",                        // Minimum Best Offer Price
-        "",                                                              // Immediate pay required
+        row.best_offer_enabled === true ? "0" : "1",                     // Immediate pay required (0 when Best Offer on, 1 otherwise)
         savedLocation,                                                   // Location
         getShippingService(row.shipping_type),                           // Shipping service 1 option
         shippingCost,                                                    // Shipping service 1 cost
@@ -502,9 +528,9 @@ export function EbayBatchPanel({
         row.return_period ? `Days_${row.return_period}` : "Days_30",     // Returns within option
         "MoneyBack",                                                     // Refund option
         row.return_shipping === "buyer" ? "Buyer" : "Seller",           // Return shipping cost paid by
-        "",                                                              // Shipping profile name
-        "",                                                              // Return profile name
-        "",                                                              // Payment profile name
+        shippingProfileName.trim(),                                      // Shipping profile name
+        returnProfileName.trim(),                                        // Return profile name
+        paymentProfileName.trim(),                                       // Payment profile name
       ];
 
       // Add item specifics values in header order
@@ -517,7 +543,7 @@ export function EbayBatchPanel({
 
     // #INFO rows required by eBay's category template format
     const infoRows = [
-      `#INFO,Created=${Date.now()},,Template=fx_multi_category_template_EBAY_US`,
+      `#INFO,Created=${new Date().toISOString().split('T')[0]},,Template=fx_multi_category_template_EBAY_US`,
       `#INFO,Version=1.0`,
       `#INFO`,
     ];
@@ -850,8 +876,17 @@ export function EbayBatchPanel({
       return;
     }
 
+    // Soft warning: remind about Business Policies profile names
+    if (!shippingProfileName.trim() && !returnProfileName.trim() && !paymentProfileName.trim()) {
+      toast({
+        title: "Tip: Add Business Policy profile names",
+        description: "If your eBay account uses Business Policies, add your Shipping, Return, and Payment profile names in the fields above — otherwise eBay may reject all rows.",
+      });
+    }
+
     // All validations passed - generate CSV and show preview
     const csvContent = generateCSVContent(excludeImages);
+    setFullCsvContent(csvContent);
 
     // Build preview: show #INFO rows + header + first 3 data rows
     const allLines = csvContent.split("\r\n");
@@ -879,6 +914,7 @@ export function EbayBatchPanel({
     setShowCSVPreview(false);
     setPendingCSVBlob(null);
     setCsvPreviewContent("");
+    setFullCsvContent("");
     setShowUploadInstructions(true);
   };
   // eBay condition name → numeric ID for Zapier
@@ -1065,6 +1101,39 @@ export function EbayBatchPanel({
               />
             </div>
 
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Shipping Profile</Label>
+              <Input
+                placeholder="e.g. Standard Shipping"
+                value={shippingProfileName}
+                onChange={(e) => setShippingProfileName(e.target.value)}
+                className="w-40"
+                title="eBay Business Policy: Shipping profile name (Seller Hub → Account → Business policies)"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Return Profile</Label>
+              <Input
+                placeholder="e.g. 30 Day Returns"
+                value={returnProfileName}
+                onChange={(e) => setReturnProfileName(e.target.value)}
+                className="w-36"
+                title="eBay Business Policy: Return profile name (Seller Hub → Account → Business policies)"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Payment Profile</Label>
+              <Input
+                placeholder="e.g. eBay Payments"
+                value={paymentProfileName}
+                onChange={(e) => setPaymentProfileName(e.target.value)}
+                className="w-36"
+                title="eBay Business Policy: Payment profile name (Seller Hub → Account → Business policies)"
+              />
+            </div>
+
             {rows.length > 0 && getMissingCategoryLots().length > 0 && (
               <Button
                 variant="outline"
@@ -1164,7 +1233,7 @@ export function EbayBatchPanel({
 
         <Dialog open={showCSVPreview} onOpenChange={(open) => {
           setShowCSVPreview(open);
-          if (!open) { setPendingCSVBlob(null); setCsvPreviewContent(""); }
+          if (!open) { setPendingCSVBlob(null); setCsvPreviewContent(""); setFullCsvContent(""); }
         }}>
           <DialogContent className="max-w-3xl max-h-[80vh]">
             <DialogHeader>
@@ -1182,8 +1251,15 @@ export function EbayBatchPanel({
               Verify the header row has <code className="bg-muted px-1 rounded">Category</code> (not "Category ID") and each data row has a numeric category value.
             </p>
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => { setShowCSVPreview(false); setPendingCSVBlob(null); setCsvPreviewContent(""); }}>
+              <Button variant="outline" onClick={() => { setShowCSVPreview(false); setPendingCSVBlob(null); setCsvPreviewContent(""); setFullCsvContent(""); }}>
                 Cancel
+              </Button>
+              <Button variant="outline" onClick={() => {
+                navigator.clipboard.writeText(fullCsvContent).then(() => {
+                  toast({ title: "CSV copied to clipboard", description: "Paste into a text editor to inspect the raw content." });
+                });
+              }}>
+                Copy Raw CSV
               </Button>
               <Button onClick={confirmDownloadCSV}>
                 <Download className="h-4 w-4 mr-2" />

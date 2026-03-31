@@ -26,7 +26,9 @@ import {
   Cloud,
   Edit,
   AlertTriangle,
-  CheckCircle
+  CheckCircle,
+  RefreshCw,
+  Clock
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -201,6 +203,49 @@ export default function CreateListing() {
     
     fetchDenverLots();
   }, [selectedProject?.id]);
+
+  // Real-time subscription: refresh Denver lot status when agent updates rows
+  useEffect(() => {
+    if (!selectedProject?.id) return;
+
+    const channel = supabase
+      .channel(`denver_status_${selectedProject.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'denver_batch_rows', filter: `batch_id=eq.${selectedProject.id}` },
+        (payload) => {
+          setDenverLots(prev =>
+            prev.map(lot => lot.id === payload.new.id ? { ...lot, ...payload.new } : lot)
+          );
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [selectedProject?.id]);
+
+  const requeueDenverLot = async (lotId: string) => {
+    const { error } = await supabase
+      .from('denver_batch_rows')
+      .update({ status: 'pending', error_log: null })
+      .eq('id', lotId);
+
+    if (!error) {
+      setDenverLots(prev =>
+        prev.map(l => l.id === lotId ? { ...l, status: 'pending', error_log: null } : l)
+      );
+      toast({ title: "Lot re-queued", description: "It will be picked up on the next agent run." });
+    }
+  };
+
+  const getDenverStatusBadge = (status: string | null) => {
+    switch (status) {
+      case 'completed':  return <span className="text-xs font-medium bg-green-500/20 text-green-600 px-1.5 py-0.5 rounded-full">done</span>;
+      case 'failed':     return <span className="text-xs font-medium bg-red-500/20 text-red-600 px-1.5 py-0.5 rounded-full">failed</span>;
+      case 'in_progress': return <span className="text-xs font-medium bg-blue-500/20 text-blue-600 px-1.5 py-0.5 rounded-full">running</span>;
+      default:           return <span className="text-xs font-medium bg-amber-500/20 text-amber-600 px-1.5 py-0.5 rounded-full">pending</span>;
+    }
+  };
 
   // Fetch eBay batch rows when project changes
   useEffect(() => {
@@ -707,6 +752,8 @@ export default function CreateListing() {
 
   const [downloadingImages, setDownloadingImages] = useState(false);
   const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
+  const [downloadingDenverImages, setDownloadingDenverImages] = useState(false);
+  const [denverZipProgress, setDenverZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
 
   const downloadImagesZip = async () => {
     if (dbBatchRows.length === 0) {
@@ -783,6 +830,72 @@ export default function CreateListing() {
     } finally {
       setDownloadingImages(false);
       setZipProgress({ current: 0, total: 0, failed: 0, phase: '' });
+    }
+  };
+
+  const downloadDenverImagesZip = async () => {
+    if (denverLots.length === 0) {
+      toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
+      return;
+    }
+    if (!selectedProject?.id) {
+      toast({ title: "No Project", description: "No batch selected", variant: "destructive" });
+      return;
+    }
+    setDownloadingDenverImages(true);
+    const totalImages = denverLots.reduce((sum: number, r: any) => sum + ((r.image_urls)?.length || 0), 0);
+    setDenverZipProgress({ current: 0, total: totalImages, failed: 0, phase: 'Building ZIP on server' });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: "Not authenticated", description: "Please log in again", variant: "destructive" });
+        return;
+      }
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-images-zip`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ batch_id: selectedProject.id, platform: 'denver' }),
+        }
+      );
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `Server error ${response.status}`);
+      }
+      const successCount = parseInt(response.headers.get('X-Success-Count') || '0');
+      const failedCount = parseInt(response.headers.get('X-Failed-Count') || '0');
+      const failedFiles = response.headers.get('X-Failed-Files') || '';
+      setDenverZipProgress({ current: totalImages, total: totalImages, failed: failedCount, phase: 'Complete' });
+      const blob = await response.blob();
+      const dateStr = new Date().toISOString().split('T')[0];
+      saveAs(blob, `doa-images-${dateStr}.zip`);
+      if (failedCount > 0) {
+        toast({
+          title: "Images Downloaded (with some failures)",
+          description: `ZIP contains ${successCount}/${totalImages} images. ${failedCount} failed: ${failedFiles} — upload to DOA Bulk Image Uploader`,
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "Images Downloaded!",
+          description: `All ${successCount} images included — upload to DOA Bulk Image Uploader`
+        });
+      }
+    } catch (error) {
+      console.error("Error creating Denver ZIP:", error);
+      toast({
+        title: "Download Failed",
+        description: error instanceof Error ? error.message : "Could not create image ZIP file",
+        variant: "destructive"
+      });
+    } finally {
+      setDownloadingDenverImages(false);
+      setDenverZipProgress({ current: 0, total: 0, failed: 0, phase: '' });
     }
   };
 
@@ -1170,6 +1283,20 @@ export default function CreateListing() {
                     <Button
                       variant="outline"
                       size="sm"
+                      className="gap-2"
+                      onClick={downloadDenverImagesZip}
+                      disabled={downloadingDenverImages}
+                    >
+                      {downloadingDenverImages ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <FolderArchive className="h-4 w-4" />
+                      )}
+                      Images ZIP
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={async () => {
                         if (!selectedProject?.id) return;
                         if (!confirm('Clear all Denver lots?')) return;
@@ -1183,6 +1310,23 @@ export default function CreateListing() {
                   </>
                 )}
               </div>
+              {downloadingDenverImages && denverZipProgress.total > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{denverZipProgress.phase}: {denverZipProgress.current}/{denverZipProgress.total}</span>
+                    {denverZipProgress.failed > 0 && (
+                      <span className="text-destructive">{denverZipProgress.failed} failed</span>
+                    )}
+                    <span>{Math.round((denverZipProgress.current / denverZipProgress.total) * 100)}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all duration-300"
+                      style={{ width: `${(denverZipProgress.current / denverZipProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Lot List - inline editable like LA */}
@@ -1196,20 +1340,83 @@ export default function CreateListing() {
                   {denverLots.map((lot: any) => (
                     <div
                       key={lot.id}
-                      onClick={() => setEditingDenverLot(lot)}
-                      className="text-xs flex justify-between items-center py-2 px-3 bg-background/50 rounded cursor-pointer hover:bg-primary/10 hover:border-primary/30 border border-transparent transition-colors group"
+                      variant={selectedDenverLot === lot.lot_number ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setSelectedDenverLot(lot.lot_number)}
+                      className="gap-1.5"
                     >
-                      <span className="font-mono font-semibold">#{lot.lot_number}</span>
-                      <span className="truncate flex-1 mx-3">{lot.title}</span>
-                      <span className="text-muted-foreground">${lot.starting_bid ?? 5}</span>
-                      <Edit className="h-3 w-3 ml-2 opacity-0 group-hover:opacity-100 text-primary transition-opacity" />
-                    </div>
+                      Lot #{lot.lot_number}
+                      {getDenverStatusBadge(lot.status)}
+                    </Button>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground text-center mt-2">
-                  Click any lot to edit • All fields editable
-                </p>
-              </div>
+
+                {/* Selected Lot Details */}
+                {selectedDenverLot && (
+                  <div className="border border-border rounded-lg p-4 bg-card space-y-3">
+                    {denverLots.filter(l => l.lot_number === selectedDenverLot).map((lot) => (
+                      <div key={lot.id} className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-semibold">Lot #{lot.lot_number}</h3>
+                          <div className="flex items-center gap-2">
+                            {getDenverStatusBadge(lot.status)}
+                            {lot.status === 'failed' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 text-xs gap-1"
+                                onClick={() => requeueDenverLot(lot.id)}
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                                Re-queue
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+
+                        {lot.error_log && (
+                          <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-600">
+                            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                            <span className="break-all">{lot.error_log}</span>
+                          </div>
+                        )}
+
+                        <div className="grid gap-3">
+                          <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                            <div className="flex-1 min-w-0">
+                              <Label className="text-xs text-muted-foreground">TITLE</Label>
+                              <p className="font-medium truncate">{lot.title}</p>
+                            </div>
+                            <Button variant="ghost" size="sm" onClick={() => handleCopy(lot.title, `denver-title-${lot.lot_number}`)}>
+                              {copied === `denver-title-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-2 bg-secondary/30 rounded">
+                            <div className="flex-1 min-w-0">
+                              <Label className="text-xs text-muted-foreground">STARTING BID</Label>
+                              <p className="font-semibold text-primary">${lot.starting_bid || 5}</p>
+                            </div>
+                            <Button variant="ghost" size="sm" onClick={() => handleCopy(String(lot.starting_bid || 5), `denver-bid-${lot.lot_number}`)}>
+                              {copied === `denver-bid-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                          </div>
+
+                          <div className="flex items-start justify-between p-2 bg-secondary/30 rounded">
+                            <div className="flex-1 min-w-0">
+                              <Label className="text-xs text-muted-foreground">DESCRIPTION</Label>
+                              <p className="text-sm text-muted-foreground whitespace-pre-wrap max-h-24 overflow-y-auto">{lot.description}</p>
+                            </div>
+                            <Button variant="ghost" size="sm" onClick={() => handleCopy(lot.description || '', `denver-desc-${lot.lot_number}`)}>
+                              {copied === `denver-desc-${lot.lot_number}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

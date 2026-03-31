@@ -352,7 +352,6 @@ async function publishRow(
         },
       },
       listingPolicies: {
-        // These will use eBay business policies if set, otherwise inline
         shippingCostOverrides: row.shipping_type === "free"
           ? [{ shippingCost: { value: "0.00", currency: "USD" }, shippingServiceType: "DOMESTIC", priority: 1 }]
           : row.shipping_cost

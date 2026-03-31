@@ -1,0 +1,10 @@
+# NEVER commit these — they contain your passwords
+.env
+
+# Auto-generated folders
+node_modules/
+logs/
+temp/
+
+# Mac junk
+.DS_Store
