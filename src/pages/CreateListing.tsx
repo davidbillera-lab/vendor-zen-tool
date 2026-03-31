@@ -1338,7 +1338,7 @@ export default function CreateListing() {
                 </div>
                 <div className="max-h-60 overflow-y-auto space-y-1">
                   {denverLots.map((lot: any) => (
-                    <div
+                    <Button
                       key={lot.id}
                       variant={selectedDenverLot === lot.lot_number ? "default" : "outline"}
                       size="sm"
