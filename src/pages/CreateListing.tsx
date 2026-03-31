@@ -1416,7 +1416,7 @@ export default function CreateListing() {
                     ))}
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         )}
