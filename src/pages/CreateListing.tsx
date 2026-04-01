@@ -1701,6 +1701,76 @@ export default function CreateListing() {
 
               {activePlatform === "ebay" && (
                 <div className="space-y-4">
+                  {/* AI Verify & Refine */}
+                  <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-semibold flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4 text-primary" />
+                        AI Verification & Refinement
+                      </h3>
+                      <Button
+                        variant="gold"
+                        size="sm"
+                        onClick={handleEbayVerify}
+                        disabled={ebayVerifying || ebayRefining || ebayRows.length === 0}
+                        className="gap-2"
+                      >
+                        {ebayVerifying ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="h-4 w-4" />
+                        )}
+                        {ebayVerifying ? 'Verifying...' : 'Verify with AI'}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Cross-check the identification with a second AI model, or tell the AI what to fix
+                    </p>
+
+                    {/* Verification result */}
+                    {ebayVerifyResult && (
+                      <div className={cn(
+                        "rounded-lg border p-3 text-sm",
+                        ebayVerifyResult.verified
+                          ? "border-green-500/50 bg-green-500/10 text-green-700"
+                          : "border-amber-500/50 bg-amber-500/10 text-amber-700"
+                      )}>
+                        <div className="flex items-center gap-2 font-medium mb-1">
+                          {ebayVerifyResult.verified ? (
+                            <><CheckCircle className="h-4 w-4" /> Verified ({ebayVerifyResult.confidence} confidence)</>
+                          ) : (
+                            <><RefreshCw className="h-4 w-4" /> Corrections Applied ({ebayVerifyResult.confidence} confidence)</>
+                          )}
+                        </div>
+                        <p className="text-xs">{ebayVerifyResult.notes}</p>
+                      </div>
+                    )}
+
+                    {/* Refinement prompt */}
+                    <div className="flex gap-2">
+                      <Textarea
+                        placeholder="Tell the AI what to fix... e.g. 'That's a Lionel O-gauge locomotive, not HO scale' or 'Add more detail about the patina'"
+                        value={ebayRefinePrompt}
+                        onChange={(e) => setEbayRefinePrompt(e.target.value)}
+                        className="min-h-[60px] text-sm"
+                        rows={2}
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={handleEbayRefine}
+                        disabled={!ebayRefinePrompt.trim() || ebayRefining || ebayVerifying || ebayRows.length === 0}
+                        className="shrink-0 self-end h-10 w-10"
+                      >
+                        {ebayRefining ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+
                   {/* Item Specifics */}
                   <div className="rounded-xl border border-border bg-card p-6">
                     <EbayItemSpecificsEditor
