@@ -144,7 +144,7 @@ serve(async (req) => {
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
         messages: [
-          { role: 'system', content: DENVER_PROMPT },
+          { role: 'system', content: masterPrompt ? `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${DENVER_PROMPT}` : DENVER_PROMPT },
           { role: 'user', content }
         ],
         max_tokens: 2500,

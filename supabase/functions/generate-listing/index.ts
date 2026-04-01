@@ -445,19 +445,25 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
-    const { platform, imageUrls, additionalContext } = await req.json() as GenerateRequest;
+    const { platform, imageUrls, additionalContext, masterPrompt } = await req.json() as GenerateRequest;
     
     console.log(`Generating listing for platform: ${platform}`);
     console.log(`Image URLs: ${imageUrls.length}`);
+    if (masterPrompt) console.log(`Master prompt active (${masterPrompt.length} chars)`);
 
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
       throw new Error('LOVABLE_API_KEY is not configured');
     }
 
-    const systemPrompt = PLATFORM_PROMPTS[platform];
+    let systemPrompt = PLATFORM_PROMPTS[platform];
     if (!systemPrompt) {
       throw new Error(`Unknown platform: ${platform}`);
+    }
+
+    // Inject master prompt as a guardrail if provided
+    if (masterPrompt) {
+      systemPrompt = `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY — OVERRIDE DEFAULTS) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${systemPrompt}`;
     }
 
     // Build content array with images - limit to 4 for speed (AI gets diminishing returns beyond that)
