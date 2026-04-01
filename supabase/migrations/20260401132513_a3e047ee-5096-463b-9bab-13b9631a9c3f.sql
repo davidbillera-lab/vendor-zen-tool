@@ -1,0 +1,1 @@
+ALTER TABLE public.la_batches ADD COLUMN master_prompt text DEFAULT NULL;
