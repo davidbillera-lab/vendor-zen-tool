@@ -177,6 +177,23 @@ export default function CreateListing() {
   const [ebayVerifyResult, setEbayVerifyResult] = useState<{ verified: boolean; confidence: string; notes: string } | null>(null);
   const [ebayRefinePrompt, setEbayRefinePrompt] = useState("");
 
+  // Master prompt for AI guardrails
+  const [masterPrompt, setMasterPrompt] = useState("");
+  const [masterPromptDraft, setMasterPromptDraft] = useState("");
+  const [masterPromptOpen, setMasterPromptOpen] = useState(false);
+  const [savingMasterPrompt, setSavingMasterPrompt] = useState(false);
+
+  // Load master prompt when project changes
+  useEffect(() => {
+    if (selectedProject?.master_prompt) {
+      setMasterPrompt(selectedProject.master_prompt);
+      setMasterPromptDraft(selectedProject.master_prompt);
+    } else {
+      setMasterPrompt("");
+      setMasterPromptDraft("");
+    }
+  }, [selectedProject?.id]);
+
   // Fetch Denver lots when project changes
   useEffect(() => {
     const fetchDenverLots = async () => {
@@ -510,7 +527,7 @@ export default function CreateListing() {
       const imageUrls = uploadedImages.map(img => img.url!);
 
       // Generate listing
-      const listing = await generateListing(platform, imageUrls, additionalContext);
+      const listing = await generateListing(platform, imageUrls, additionalContext, masterPrompt || undefined);
       setGeneratedListing(listing);
 
       // Auto-save eBay to batch for bulk export
@@ -722,7 +739,8 @@ export default function CreateListing() {
           correctionPrompt: ebayRefinePrompt || '',
           imageUrls: lastEbayRow.image_urls || [],
           platform: 'ebay',
-          mode: 'verify'
+          mode: 'verify',
+          masterPrompt: masterPrompt || undefined
         }
       });
 
@@ -800,7 +818,8 @@ export default function CreateListing() {
           correctionPrompt: ebayRefinePrompt,
           imageUrls: lastEbayRow.image_urls || [],
           platform: 'ebay',
-          mode: 'refine'
+          mode: 'refine',
+          masterPrompt: masterPrompt || undefined
         }
       });
 
@@ -1223,6 +1242,7 @@ export default function CreateListing() {
             lotNumber={lotNumber}
             onLotComplete={handleLaQuickCaptureLot}
             onClose={() => setLaQuickCaptureOpen(false)}
+            masterPrompt={masterPrompt}
           />
         )}
 
@@ -1279,6 +1299,79 @@ export default function CreateListing() {
               />
             </div>
           </div>
+
+          {/* Master Prompt / AI Guardrails */}
+          {selectedProject && (
+            <div className="border-t border-border pt-3">
+              <button
+                onClick={() => setMasterPromptOpen(!masterPromptOpen)}
+                className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                AI Guardrail Prompt
+                {masterPrompt && <span className="text-xs text-primary">(active)</span>}
+              </button>
+              {masterPromptOpen && (
+                <div className="mt-3 space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Custom instructions injected into every AI call for this project. Use this to keep the AI on track — e.g. "These are all model trains, HO scale, from the 1960s-80s."
+                  </p>
+                  <Textarea
+                    value={masterPromptDraft}
+                    onChange={(e) => setMasterPromptDraft(e.target.value)}
+                    placeholder="e.g. All items in this project are vintage HO scale model trains. Focus on brand identification (Athearn, Bachmann, Tyco, etc), catalog numbers, and era accuracy."
+                    className="min-h-[80px] text-sm"
+                  />
+                  <div className="flex gap-2 justify-end">
+                    {masterPrompt && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          setSavingMasterPrompt(true);
+                          try {
+                            await supabase.from('la_batches').update({ master_prompt: null }).eq('id', selectedProject.id);
+                            setMasterPrompt("");
+                            setMasterPromptDraft("");
+                            setSelectedProject(prev => prev ? { ...prev, master_prompt: null } : prev);
+                            toast({ title: "Guardrail prompt cleared" });
+                          } catch (e) {
+                            toast({ title: "Failed to clear", variant: "destructive" });
+                          } finally {
+                            setSavingMasterPrompt(false);
+                          }
+                        }}
+                        disabled={savingMasterPrompt}
+                      >
+                        Clear
+                      </Button>
+                    )}
+                    <Button
+                      variant="gold"
+                      size="sm"
+                      onClick={async () => {
+                        if (!masterPromptDraft.trim()) return;
+                        setSavingMasterPrompt(true);
+                        try {
+                          await supabase.from('la_batches').update({ master_prompt: masterPromptDraft.trim() }).eq('id', selectedProject.id);
+                          setMasterPrompt(masterPromptDraft.trim());
+                          setSelectedProject(prev => prev ? { ...prev, master_prompt: masterPromptDraft.trim() } : prev);
+                          toast({ title: "✅ Guardrail prompt saved", description: "All AI calls for this project will use this prompt" });
+                        } catch (e) {
+                          toast({ title: "Failed to save", variant: "destructive" });
+                        } finally {
+                          setSavingMasterPrompt(false);
+                        }
+                      }}
+                      disabled={savingMasterPrompt || !masterPromptDraft.trim()}
+                    >
+                      {savingMasterPrompt ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save Guardrail"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Saved batch rows */}
           {dbBatchRows.length > 0 && (
@@ -1851,6 +1944,7 @@ export default function CreateListing() {
           onDelete={(lotId) => {
             setDbBatchRows(prev => prev.filter(r => r.id !== lotId));
           }}
+          masterPrompt={masterPrompt}
         />
       )}
 
@@ -1865,6 +1959,7 @@ export default function CreateListing() {
           onDelete={(lotId) => {
             setDenverLots(prev => prev.filter(r => r.id !== lotId));
           }}
+          masterPrompt={masterPrompt}
         />
       )}
     </MainLayout>

@@ -9,6 +9,7 @@ const corsHeaders = {
 interface GenerateRequest {
   imageUrls: string[];
   additionalContext?: string;
+  masterPrompt?: string;
 }
 
 const DENVER_PROMPT = `You are an expert auction catalog writer, SEO/GEO specialist, and antiques appraiser for Denver Online Auctions.
@@ -113,8 +114,9 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
-    const { imageUrls, additionalContext } = await req.json() as GenerateRequest;
+    const { imageUrls, additionalContext, masterPrompt } = await req.json() as GenerateRequest;
     console.log(`Generating Denver listing, images: ${imageUrls.length}`);
+    if (masterPrompt) console.log(`Master prompt active (${masterPrompt.length} chars)`);
 
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
@@ -142,7 +144,7 @@ serve(async (req) => {
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
         messages: [
-          { role: 'system', content: DENVER_PROMPT },
+          { role: 'system', content: masterPrompt ? `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${DENVER_PROMPT}` : DENVER_PROMPT },
           { role: 'user', content }
         ],
         max_tokens: 2500,

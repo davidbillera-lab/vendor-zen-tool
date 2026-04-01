@@ -11,7 +11,8 @@ interface RefineRequest {
   correctionPrompt: string;
   imageUrls: string[];
   platform?: string;
-  mode?: 'refine' | 'verify'; // verify = cross-check with second LLM
+  mode?: 'refine' | 'verify';
+  masterPrompt?: string;
 }
 
 serve(async (req) => {
@@ -44,10 +45,10 @@ serve(async (req) => {
       );
     }
 
-    const { currentListing, correctionPrompt, imageUrls, platform, mode } = await req.json() as RefineRequest;
+    const { currentListing, correctionPrompt, imageUrls, platform, mode, masterPrompt } = await req.json() as RefineRequest;
     
     console.log(`Refine mode=${mode || 'refine'}, platform=${platform || 'liveauctioneers'}, prompt=${correctionPrompt || '(verify)'}`);
-
+    if (masterPrompt) console.log(`Master prompt active (${masterPrompt.length} chars)`);
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
       throw new Error('LOVABLE_API_KEY is not configured');
@@ -145,6 +146,11 @@ Please update the listing based on the user's request and return the complete up
       });
     }
 
+    // Inject master prompt as guardrail if provided
+    const finalSystemPrompt = masterPrompt 
+      ? `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${systemPrompt}`
+      : systemPrompt;
+
     console.log(`Calling Lovable AI (${model})...`);
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -156,7 +162,7 @@ Please update the listing based on the user's request and return the complete up
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: systemPrompt },
+          { role: 'system', content: finalSystemPrompt },
           { role: 'user', content }
         ],
         ...(model.startsWith('openai/') ? { max_completion_tokens: 2500 } : { max_tokens: 2500 }),

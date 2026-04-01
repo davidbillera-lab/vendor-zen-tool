@@ -297,6 +297,7 @@ export type Database = {
           id: string
           is_active: boolean
           lot_count: number
+          master_prompt: string | null
           name: string
           platforms: string[] | null
           updated_at: string
@@ -307,6 +308,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           lot_count?: number
+          master_prompt?: string | null
           name: string
           platforms?: string[] | null
           updated_at?: string
@@ -317,6 +319,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           lot_count?: number
+          master_prompt?: string | null
           name?: string
           platforms?: string[] | null
           updated_at?: string

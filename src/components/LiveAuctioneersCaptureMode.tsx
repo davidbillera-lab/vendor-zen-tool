@@ -17,6 +17,7 @@ interface LiveAuctioneersCaptureProps {
     lotNumber: number;
   }) => void;
   onClose: () => void;
+  masterPrompt?: string | null;
 }
 
 type CaptureStep = 'capture' | 'review' | 'processing' | 'confirm';
@@ -24,7 +25,8 @@ type CaptureStep = 'capture' | 'review' | 'processing' | 'confirm';
 export function LiveAuctioneersCaptureMode({ 
   lotNumber, 
   onLotComplete, 
-  onClose 
+  onClose,
+  masterPrompt
 }: LiveAuctioneersCaptureProps) {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
@@ -177,7 +179,7 @@ export function LiveAuctioneersCaptureMode({
 
       // Step 2: Generate listing with AI (including special instructions)
       setProcessingStatus("AI analyzing item...");
-      const listing = await generateListing('liveauctioneers', urls, specialInstructions || undefined);
+      const listing = await generateListing('liveauctioneers', urls, specialInstructions || undefined, masterPrompt || undefined);
       setGeneratedListing(listing);
 
       // Step 3: Go to confirm step

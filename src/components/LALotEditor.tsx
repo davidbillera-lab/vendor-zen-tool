@@ -32,9 +32,10 @@ interface LALotEditorProps {
   onClose: () => void;
   onUpdate: (updatedLot: any) => void;
   onDelete: (lotId: string) => void;
+  masterPrompt?: string | null;
 }
 
-export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorProps) {
+export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: LALotEditorProps) {
   const [formData, setFormData] = useState({
     title: lot.title || '',
     description: lot.description || '',
@@ -146,6 +147,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
           },
           correctionPrompt: correctionPrompt.trim(),
           imageUrls: lot.image_urls || [],
+          masterPrompt: masterPrompt || undefined,
         }),
       });
 
