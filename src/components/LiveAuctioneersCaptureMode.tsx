@@ -179,7 +179,7 @@ export function LiveAuctioneersCaptureMode({
 
       // Step 2: Generate listing with AI (including special instructions)
       setProcessingStatus("AI analyzing item...");
-      const listing = await generateListing('liveauctioneers', urls, specialInstructions || undefined);
+      const listing = await generateListing('liveauctioneers', urls, specialInstructions || undefined, masterPrompt || undefined);
       setGeneratedListing(listing);
 
       // Step 3: Go to confirm step
