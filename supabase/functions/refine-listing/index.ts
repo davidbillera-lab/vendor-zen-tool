@@ -45,10 +45,10 @@ serve(async (req) => {
       );
     }
 
-    const { currentListing, correctionPrompt, imageUrls, platform, mode } = await req.json() as RefineRequest;
+    const { currentListing, correctionPrompt, imageUrls, platform, mode, masterPrompt } = await req.json() as RefineRequest;
     
     console.log(`Refine mode=${mode || 'refine'}, platform=${platform || 'liveauctioneers'}, prompt=${correctionPrompt || '(verify)'}`);
-
+    if (masterPrompt) console.log(`Master prompt active (${masterPrompt.length} chars)`);
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
       throw new Error('LOVABLE_API_KEY is not configured');
