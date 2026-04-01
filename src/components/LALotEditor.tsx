@@ -384,10 +384,27 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
         </div>
 
         {/* AI Chat Bar */}
-        <div className="p-4 border-t border-border bg-secondary/30">
-          <div className="flex items-center gap-2 mb-2">
-            <Sparkles className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium">Ask AI to make changes</span>
+        <div className="p-4 border-t border-border bg-secondary/30 space-y-3">
+          {verifyResult && (
+            <div className={cn("text-xs p-2 rounded-md", verifyResult.verified ? "bg-green-500/10 text-green-400" : "bg-yellow-500/10 text-yellow-400")}>
+              <strong>{verifyResult.verified ? '✅ Verified' : '🔄 Corrected'}</strong> ({verifyResult.confidence}) — {verifyResult.notes}
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">Ask AI to make changes</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleVerify}
+              disabled={isVerifying || isRefining || imageUrls.length === 0}
+              className="gap-1.5 text-xs"
+            >
+              {isVerifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+              {isVerifying ? 'Verifying...' : 'Verify with AI'}
+            </Button>
           </div>
           <div className="flex gap-2">
             <Input
@@ -403,11 +420,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
               disabled={!correctionPrompt.trim() || isRefining}
               size="icon"
             >
-              {isRefining ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
+              {isRefining ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
         </div>
