@@ -1518,7 +1518,8 @@ export default function CreateListing() {
                     />
                   </div>
                 </div>
-              )}
+            )}
+            </div>
             {/* AI Guardrail for Denver */}
             {selectedProject && (
               <AIGuardrailPrompt
