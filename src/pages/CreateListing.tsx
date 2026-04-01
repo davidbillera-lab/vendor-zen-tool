@@ -1633,6 +1633,19 @@ export default function CreateListing() {
           </div>
         )}
 
+        {/* AI Guardrail for eBay */}
+        {selectedProject && (loadingEbay || ebayRows.length > 0 || activePlatform === 'ebay') && (
+          <AIGuardrailPrompt
+            projectId={selectedProject.id}
+            masterPrompt={masterPrompt}
+            onMasterPromptChange={(prompt) => {
+              setMasterPrompt(prompt);
+              setMasterPromptDraft(prompt);
+              setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+            }}
+          />
+        )}
+
         {/* eBay Batch Panel - keep visible for saved project rows, not only new generation in this session */}
         {selectedProject && (loadingEbay || ebayRows.length > 0 || activePlatform === 'ebay') && (
           <EbayBatchPanel
