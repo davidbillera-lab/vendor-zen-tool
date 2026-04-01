@@ -489,12 +489,10 @@ serve(async (req) => {
     }
     content.push({ type: "text", text: textPrompt });
 
-    // Select model: eBay gets Pro for best visual ID; others use Flash/Flash-Lite
-    const primaryModel = platform === 'ebay' 
-      ? 'google/gemini-2.5-pro' 
-      : (platform === 'liveauctioneers' || platform === 'denver') 
-        ? 'google/gemini-2.5-flash' 
-        : 'google/gemini-2.5-flash-lite';
+    // All platforms use Flash for speed; use Verify with AI button for accuracy when needed
+    const primaryModel = (platform === 'ebay' || platform === 'liveauctioneers' || platform === 'denver') 
+      ? 'google/gemini-2.5-flash' 
+      : 'google/gemini-2.5-flash-lite';
 
     console.log(`Calling Lovable AI (${primaryModel})...`);
     
