@@ -11,7 +11,8 @@ interface RefineRequest {
   correctionPrompt: string;
   imageUrls: string[];
   platform?: string;
-  mode?: 'refine' | 'verify'; // verify = cross-check with second LLM
+  mode?: 'refine' | 'verify';
+  masterPrompt?: string;
 }
 
 serve(async (req) => {
