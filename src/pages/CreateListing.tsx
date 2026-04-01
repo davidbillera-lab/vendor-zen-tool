@@ -28,7 +28,9 @@ import {
   AlertTriangle,
   CheckCircle,
   RefreshCw,
-  Clock
+  Clock,
+  Send,
+  ShieldCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -168,6 +170,12 @@ export default function CreateListing() {
   // LiveAuctioneers CSV validation state
   const [csvValidationIssues, setCsvValidationIssues] = useState<ValidationIssue[]>([]);
   const [csvValidated, setCsvValidated] = useState(false);
+
+  // eBay AI verify & refine state
+  const [ebayVerifying, setEbayVerifying] = useState(false);
+  const [ebayRefining, setEbayRefining] = useState(false);
+  const [ebayVerifyResult, setEbayVerifyResult] = useState<{ verified: boolean; confidence: string; notes: string } | null>(null);
+  const [ebayRefinePrompt, setEbayRefinePrompt] = useState("");
 
   // Fetch Denver lots when project changes
   useEffect(() => {
@@ -689,7 +697,156 @@ export default function CreateListing() {
     }
   };
 
-  // Validate CSV data for LiveAuctioneers
+  // eBay: Verify listing with second LLM
+  const handleEbayVerify = async () => {
+    if (!generatedListing || !activePlatform) return;
+    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    if (!lastEbayRow) return;
+
+    setEbayVerifying(true);
+    setEbayVerifyResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Session expired');
+
+      const { data, error } = await supabase.functions.invoke('refine-listing', {
+        body: {
+          currentListing: {
+            title: lastEbayRow.title,
+            description: lastEbayRow.description,
+            price: lastEbayRow.price,
+            categoryId: lastEbayRow.category,
+            condition: lastEbayRow.condition,
+            itemSpecifics: lastEbayRow.item_specifics,
+          },
+          correctionPrompt: ebayRefinePrompt || '',
+          imageUrls: lastEbayRow.image_urls || [],
+          platform: 'ebay',
+          mode: 'verify'
+        }
+      });
+
+      if (error) throw new Error(error.message);
+
+      const refined = data.listing;
+      setEbayVerifyResult({
+        verified: data.verified,
+        confidence: data.confidence,
+        notes: data.notes
+      });
+
+      // Update the DB row with verified/corrected data
+      const updates: any = {};
+      if (refined.title) updates.title = refined.title.substring(0, 80);
+      if (refined.description) updates.description = refined.description;
+      if (refined.price) updates.price = refined.price;
+      if (refined.categoryId) updates.category = String(refined.categoryId);
+      if (refined.condition) updates.condition = refined.condition;
+      if (refined.itemSpecifics) updates.item_specifics = refined.itemSpecifics;
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from('ebay_batch_rows')
+          .update(updates)
+          .eq('id', lastEbayRow.id);
+
+        if (!updateError) {
+          setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
+          // Update generatedListing for preview
+          setGeneratedListing(prev => prev ? {
+            ...prev,
+            title: updates.title || prev.title,
+            description: updates.description || prev.description,
+            price: updates.price || prev.price,
+            condition: updates.condition || prev.condition,
+            itemSpecifics: updates.item_specifics || prev.itemSpecifics,
+          } : prev);
+        }
+      }
+
+      toast({
+        title: data.verified ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
+        description: data.notes || (data.verified ? "AI confirmed the identification is correct" : "Listing updated with corrections"),
+      });
+    } catch (error) {
+      toast({
+        title: "Verification Failed",
+        description: error instanceof Error ? error.message : "Could not verify",
+        variant: "destructive"
+      });
+    } finally {
+      setEbayVerifying(false);
+    }
+  };
+
+  // eBay: Refine listing with prompt
+  const handleEbayRefine = async () => {
+    if (!ebayRefinePrompt.trim()) return;
+    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    if (!lastEbayRow) return;
+
+    setEbayRefining(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('refine-listing', {
+        body: {
+          currentListing: {
+            title: lastEbayRow.title,
+            description: lastEbayRow.description,
+            price: lastEbayRow.price,
+            categoryId: lastEbayRow.category,
+            condition: lastEbayRow.condition,
+            itemSpecifics: lastEbayRow.item_specifics,
+          },
+          correctionPrompt: ebayRefinePrompt,
+          imageUrls: lastEbayRow.image_urls || [],
+          platform: 'ebay',
+          mode: 'refine'
+        }
+      });
+
+      if (error) throw new Error(error.message);
+
+      const refined = data.listing;
+      const updates: any = {};
+      if (refined.title) updates.title = String(refined.title).substring(0, 80);
+      if (refined.description) updates.description = refined.description;
+      if (refined.price != null) updates.price = refined.price;
+      if (refined.categoryId) updates.category = String(refined.categoryId);
+      if (refined.condition) updates.condition = refined.condition;
+      if (refined.itemSpecifics) updates.item_specifics = refined.itemSpecifics;
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from('ebay_batch_rows')
+          .update(updates)
+          .eq('id', lastEbayRow.id);
+
+        if (!updateError) {
+          setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
+          setGeneratedListing(prev => prev ? {
+            ...prev,
+            title: updates.title || prev.title,
+            description: updates.description || prev.description,
+            price: updates.price ?? prev.price,
+            condition: updates.condition || prev.condition,
+            itemSpecifics: updates.item_specifics || prev.itemSpecifics,
+          } : prev);
+        }
+      }
+
+      setEbayRefinePrompt("");
+      toast({ title: "Listing Refined", description: "Updated based on your feedback" });
+    } catch (error) {
+      toast({
+        title: "Refinement Failed",
+        description: error instanceof Error ? error.message : "Could not refine",
+        variant: "destructive"
+      });
+    } finally {
+      setEbayRefining(false);
+    }
+  };
+
   const validateLACSV = useCallback(() => {
     if (dbBatchRows.length === 0) {
       toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
@@ -1544,6 +1701,76 @@ export default function CreateListing() {
 
               {activePlatform === "ebay" && (
                 <div className="space-y-4">
+                  {/* AI Verify & Refine */}
+                  <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-semibold flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4 text-primary" />
+                        AI Verification & Refinement
+                      </h3>
+                      <Button
+                        variant="gold"
+                        size="sm"
+                        onClick={handleEbayVerify}
+                        disabled={ebayVerifying || ebayRefining || ebayRows.length === 0}
+                        className="gap-2"
+                      >
+                        {ebayVerifying ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="h-4 w-4" />
+                        )}
+                        {ebayVerifying ? 'Verifying...' : 'Verify with AI'}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Cross-check the identification with a second AI model, or tell the AI what to fix
+                    </p>
+
+                    {/* Verification result */}
+                    {ebayVerifyResult && (
+                      <div className={cn(
+                        "rounded-lg border p-3 text-sm",
+                        ebayVerifyResult.verified
+                          ? "border-green-500/50 bg-green-500/10 text-green-700"
+                          : "border-amber-500/50 bg-amber-500/10 text-amber-700"
+                      )}>
+                        <div className="flex items-center gap-2 font-medium mb-1">
+                          {ebayVerifyResult.verified ? (
+                            <><CheckCircle className="h-4 w-4" /> Verified ({ebayVerifyResult.confidence} confidence)</>
+                          ) : (
+                            <><RefreshCw className="h-4 w-4" /> Corrections Applied ({ebayVerifyResult.confidence} confidence)</>
+                          )}
+                        </div>
+                        <p className="text-xs">{ebayVerifyResult.notes}</p>
+                      </div>
+                    )}
+
+                    {/* Refinement prompt */}
+                    <div className="flex gap-2">
+                      <Textarea
+                        placeholder="Tell the AI what to fix... e.g. 'That's a Lionel O-gauge locomotive, not HO scale' or 'Add more detail about the patina'"
+                        value={ebayRefinePrompt}
+                        onChange={(e) => setEbayRefinePrompt(e.target.value)}
+                        className="min-h-[60px] text-sm"
+                        rows={2}
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={handleEbayRefine}
+                        disabled={!ebayRefinePrompt.trim() || ebayRefining || ebayVerifying || ebayRows.length === 0}
+                        className="shrink-0 self-end h-10 w-10"
+                      >
+                        {ebayRefining ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+
                   {/* Item Specifics */}
                   <div className="rounded-xl border border-border bg-card p-6">
                     <EbayItemSpecificsEditor
