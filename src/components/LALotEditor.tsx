@@ -186,6 +186,59 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
     }
   };
 
+  const handleVerify = async () => {
+    setIsVerifying(true);
+    setVerifyResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const { data, error } = await supabase.functions.invoke('refine-listing', {
+        body: {
+          currentListing: {
+            title: formData.title,
+            description: formData.description,
+            lowEst: formData.low_est,
+            highEst: formData.high_est,
+            startPrice: formData.start_price,
+            condition: formData.condition,
+            category: formData.category,
+          },
+          correctionPrompt: '',
+          imageUrls: imageUrls,
+          platform: 'liveauctioneers',
+          mode: 'verify',
+          masterPrompt: masterPrompt || undefined
+        }
+      });
+
+      if (error) throw new Error(error.message);
+
+      const refined = data.listing;
+      setVerifyResult({ verified: data.verified, confidence: data.confidence, notes: data.notes });
+
+      setFormData(prev => ({
+        ...prev,
+        title: refined.title || prev.title,
+        description: refined.description || prev.description,
+        low_est: refined.lowEst ?? prev.low_est,
+        high_est: refined.highEst ?? prev.high_est,
+        start_price: refined.startPrice ?? prev.start_price,
+        condition: refined.condition || prev.condition,
+        category: refined.category || prev.category,
+      }));
+
+      toast({
+        title: data.verified ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
+        description: data.notes || (data.verified ? "AI confirmed the listing is correct" : "Listing updated with corrections"),
+      });
+    } catch (error) {
+      toast({ title: "Verification Failed", description: error instanceof Error ? error.message : "Could not verify", variant: "destructive" });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-card border border-border rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
