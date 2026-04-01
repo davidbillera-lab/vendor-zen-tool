@@ -1519,7 +1519,18 @@ export default function CreateListing() {
                   </div>
                 </div>
               )}
-            </div>
+            {/* AI Guardrail for Denver */}
+            {selectedProject && (
+              <AIGuardrailPrompt
+                projectId={selectedProject.id}
+                masterPrompt={masterPrompt}
+                onMasterPromptChange={(prompt) => {
+                  setMasterPrompt(prompt);
+                  setMasterPromptDraft(prompt);
+                  setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+                }}
+              />
+            )}
 
             {/* Lot List - inline editable like LA */}
             {denverLots.length > 0 && (
