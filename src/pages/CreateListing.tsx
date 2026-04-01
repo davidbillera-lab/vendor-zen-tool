@@ -1944,6 +1944,7 @@ export default function CreateListing() {
           onDelete={(lotId) => {
             setDbBatchRows(prev => prev.filter(r => r.id !== lotId));
           }}
+          masterPrompt={masterPrompt}
         />
       )}
 
