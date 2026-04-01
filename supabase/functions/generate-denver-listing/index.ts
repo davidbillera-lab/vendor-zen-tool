@@ -9,6 +9,7 @@ const corsHeaders = {
 interface GenerateRequest {
   imageUrls: string[];
   additionalContext?: string;
+  masterPrompt?: string;
 }
 
 const DENVER_PROMPT = `You are an expert auction catalog writer, SEO/GEO specialist, and antiques appraiser for Denver Online Auctions.
