@@ -697,7 +697,156 @@ export default function CreateListing() {
     }
   };
 
-  // Validate CSV data for LiveAuctioneers
+  // eBay: Verify listing with second LLM
+  const handleEbayVerify = async () => {
+    if (!generatedListing || !activePlatform) return;
+    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    if (!lastEbayRow) return;
+
+    setEbayVerifying(true);
+    setEbayVerifyResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Session expired');
+
+      const { data, error } = await supabase.functions.invoke('refine-listing', {
+        body: {
+          currentListing: {
+            title: lastEbayRow.title,
+            description: lastEbayRow.description,
+            price: lastEbayRow.price,
+            categoryId: lastEbayRow.category,
+            condition: lastEbayRow.condition,
+            itemSpecifics: lastEbayRow.item_specifics,
+          },
+          correctionPrompt: ebayRefinePrompt || '',
+          imageUrls: lastEbayRow.image_urls || [],
+          platform: 'ebay',
+          mode: 'verify'
+        }
+      });
+
+      if (error) throw new Error(error.message);
+
+      const refined = data.listing;
+      setEbayVerifyResult({
+        verified: data.verified,
+        confidence: data.confidence,
+        notes: data.notes
+      });
+
+      // Update the DB row with verified/corrected data
+      const updates: any = {};
+      if (refined.title) updates.title = refined.title.substring(0, 80);
+      if (refined.description) updates.description = refined.description;
+      if (refined.price) updates.price = refined.price;
+      if (refined.categoryId) updates.category = String(refined.categoryId);
+      if (refined.condition) updates.condition = refined.condition;
+      if (refined.itemSpecifics) updates.item_specifics = refined.itemSpecifics;
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from('ebay_batch_rows')
+          .update(updates)
+          .eq('id', lastEbayRow.id);
+
+        if (!updateError) {
+          setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
+          // Update generatedListing for preview
+          setGeneratedListing(prev => prev ? {
+            ...prev,
+            title: updates.title || prev.title,
+            description: updates.description || prev.description,
+            price: updates.price || prev.price,
+            condition: updates.condition || prev.condition,
+            itemSpecifics: updates.item_specifics || prev.itemSpecifics,
+          } : prev);
+        }
+      }
+
+      toast({
+        title: data.verified ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
+        description: data.notes || (data.verified ? "AI confirmed the identification is correct" : "Listing updated with corrections"),
+      });
+    } catch (error) {
+      toast({
+        title: "Verification Failed",
+        description: error instanceof Error ? error.message : "Could not verify",
+        variant: "destructive"
+      });
+    } finally {
+      setEbayVerifying(false);
+    }
+  };
+
+  // eBay: Refine listing with prompt
+  const handleEbayRefine = async () => {
+    if (!ebayRefinePrompt.trim()) return;
+    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    if (!lastEbayRow) return;
+
+    setEbayRefining(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('refine-listing', {
+        body: {
+          currentListing: {
+            title: lastEbayRow.title,
+            description: lastEbayRow.description,
+            price: lastEbayRow.price,
+            categoryId: lastEbayRow.category,
+            condition: lastEbayRow.condition,
+            itemSpecifics: lastEbayRow.item_specifics,
+          },
+          correctionPrompt: ebayRefinePrompt,
+          imageUrls: lastEbayRow.image_urls || [],
+          platform: 'ebay',
+          mode: 'refine'
+        }
+      });
+
+      if (error) throw new Error(error.message);
+
+      const refined = data.listing;
+      const updates: any = {};
+      if (refined.title) updates.title = String(refined.title).substring(0, 80);
+      if (refined.description) updates.description = refined.description;
+      if (refined.price != null) updates.price = refined.price;
+      if (refined.categoryId) updates.category = String(refined.categoryId);
+      if (refined.condition) updates.condition = refined.condition;
+      if (refined.itemSpecifics) updates.item_specifics = refined.itemSpecifics;
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from('ebay_batch_rows')
+          .update(updates)
+          .eq('id', lastEbayRow.id);
+
+        if (!updateError) {
+          setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
+          setGeneratedListing(prev => prev ? {
+            ...prev,
+            title: updates.title || prev.title,
+            description: updates.description || prev.description,
+            price: updates.price ?? prev.price,
+            condition: updates.condition || prev.condition,
+            itemSpecifics: updates.item_specifics || prev.itemSpecifics,
+          } : prev);
+        }
+      }
+
+      setEbayRefinePrompt("");
+      toast({ title: "Listing Refined", description: "Updated based on your feedback" });
+    } catch (error) {
+      toast({
+        title: "Refinement Failed",
+        description: error instanceof Error ? error.message : "Could not refine",
+        variant: "destructive"
+      });
+    } finally {
+      setEbayRefining(false);
+    }
+  };
+
   const validateLACSV = useCallback(() => {
     if (dbBatchRows.length === 0) {
       toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
