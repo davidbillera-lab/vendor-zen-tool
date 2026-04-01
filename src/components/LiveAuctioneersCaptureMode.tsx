@@ -25,7 +25,8 @@ type CaptureStep = 'capture' | 'review' | 'processing' | 'confirm';
 export function LiveAuctioneersCaptureMode({ 
   lotNumber, 
   onLotComplete, 
-  onClose 
+  onClose,
+  masterPrompt
 }: LiveAuctioneersCaptureProps) {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
