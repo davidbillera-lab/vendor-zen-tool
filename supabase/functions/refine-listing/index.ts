@@ -65,7 +65,7 @@ serve(async (req) => {
 
     if (mode === 'verify') {
       // ═══ VERIFICATION MODE: Cross-check with a different model ═══
-      model = 'openai/gpt-5-mini';
+      model = 'openai/gpt-5';
       const platformLabel = platform === 'ebay' ? 'eBay' : platform === 'liveauctioneers' ? 'LiveAuctioneers' : platform === 'denver' ? 'Denver Online Auctions' : 'auction';
       systemPrompt = `You are a specialist item authenticator and identifier for ${platformLabel} listings. A first-pass AI generated the listing below. Your job is to VERIFY and CORRECT any misidentifications.`;
 
