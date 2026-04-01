@@ -37,6 +37,7 @@ import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
 import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
+import { AIGuardrailPrompt } from "@/components/AIGuardrailPrompt";
 import { ProjectManager, type Project } from "@/components/BatchManager";
 import { LALotEditor } from "@/components/LALotEditor";
 import { DenverLotEditor } from "@/components/DenverLotEditor";
@@ -1302,75 +1303,15 @@ export default function CreateListing() {
 
           {/* Master Prompt / AI Guardrails */}
           {selectedProject && (
-            <div className="border-t border-border pt-3">
-              <button
-                onClick={() => setMasterPromptOpen(!masterPromptOpen)}
-                className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left"
-              >
-                <ShieldCheck className="h-4 w-4" />
-                AI Guardrail Prompt
-                {masterPrompt && <span className="text-xs text-primary">(active)</span>}
-              </button>
-              {masterPromptOpen && (
-                <div className="mt-3 space-y-2">
-                  <p className="text-xs text-muted-foreground">
-                    Custom instructions injected into every AI call for this project. Use this to keep the AI on track — e.g. "These are all model trains, HO scale, from the 1960s-80s."
-                  </p>
-                  <Textarea
-                    value={masterPromptDraft}
-                    onChange={(e) => setMasterPromptDraft(e.target.value)}
-                    placeholder="e.g. All items in this project are vintage HO scale model trains. Focus on brand identification (Athearn, Bachmann, Tyco, etc), catalog numbers, and era accuracy."
-                    className="min-h-[80px] text-sm"
-                  />
-                  <div className="flex gap-2 justify-end">
-                    {masterPrompt && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={async () => {
-                          setSavingMasterPrompt(true);
-                          try {
-                            await supabase.from('la_batches').update({ master_prompt: null }).eq('id', selectedProject.id);
-                            setMasterPrompt("");
-                            setMasterPromptDraft("");
-                            setSelectedProject(prev => prev ? { ...prev, master_prompt: null } : prev);
-                            toast({ title: "Guardrail prompt cleared" });
-                          } catch (e) {
-                            toast({ title: "Failed to clear", variant: "destructive" });
-                          } finally {
-                            setSavingMasterPrompt(false);
-                          }
-                        }}
-                        disabled={savingMasterPrompt}
-                      >
-                        Clear
-                      </Button>
-                    )}
-                    <Button
-                      variant="gold"
-                      size="sm"
-                      onClick={async () => {
-                        if (!masterPromptDraft.trim()) return;
-                        setSavingMasterPrompt(true);
-                        try {
-                          await supabase.from('la_batches').update({ master_prompt: masterPromptDraft.trim() }).eq('id', selectedProject.id);
-                          setMasterPrompt(masterPromptDraft.trim());
-                          setSelectedProject(prev => prev ? { ...prev, master_prompt: masterPromptDraft.trim() } : prev);
-                          toast({ title: "✅ Guardrail prompt saved", description: "All AI calls for this project will use this prompt" });
-                        } catch (e) {
-                          toast({ title: "Failed to save", variant: "destructive" });
-                        } finally {
-                          setSavingMasterPrompt(false);
-                        }
-                      }}
-                      disabled={savingMasterPrompt || !masterPromptDraft.trim()}
-                    >
-                      {savingMasterPrompt ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save Guardrail"}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <AIGuardrailPrompt
+              projectId={selectedProject.id}
+              masterPrompt={masterPrompt}
+              onMasterPromptChange={(prompt) => {
+                setMasterPrompt(prompt);
+                setMasterPromptDraft(prompt);
+                setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+              }}
+            />
           )}
 
           {/* Saved batch rows */}
@@ -1577,8 +1518,20 @@ export default function CreateListing() {
                     />
                   </div>
                 </div>
-              )}
+            )}
             </div>
+            {/* AI Guardrail for Denver */}
+            {selectedProject && (
+              <AIGuardrailPrompt
+                projectId={selectedProject.id}
+                masterPrompt={masterPrompt}
+                onMasterPromptChange={(prompt) => {
+                  setMasterPrompt(prompt);
+                  setMasterPromptDraft(prompt);
+                  setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+                }}
+              />
+            )}
 
             {/* Lot List - inline editable like LA */}
             {denverLots.length > 0 && (
@@ -1679,6 +1632,19 @@ export default function CreateListing() {
               </div>
             )}
           </div>
+        )}
+
+        {/* AI Guardrail for eBay */}
+        {selectedProject && (loadingEbay || ebayRows.length > 0 || activePlatform === 'ebay') && (
+          <AIGuardrailPrompt
+            projectId={selectedProject.id}
+            masterPrompt={masterPrompt}
+            onMasterPromptChange={(prompt) => {
+              setMasterPrompt(prompt);
+              setMasterPromptDraft(prompt);
+              setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+            }}
+          />
         )}
 
         {/* eBay Batch Panel - keep visible for saved project rows, not only new generation in this session */}
