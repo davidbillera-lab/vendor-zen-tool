@@ -20,9 +20,10 @@ interface DenverLotEditorProps {
   onClose: () => void;
   onUpdate: (updatedLot: any) => void;
   onDelete: (lotId: string) => void;
+  masterPrompt?: string | null;
 }
 
-export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotEditorProps) {
+export function DenverLotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: DenverLotEditorProps) {
   const [formData, setFormData] = useState({
     title: lot.title || '',
     description: lot.description || '',
