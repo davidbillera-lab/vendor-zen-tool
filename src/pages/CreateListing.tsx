@@ -1959,6 +1959,7 @@ export default function CreateListing() {
           onDelete={(lotId) => {
             setDenverLots(prev => prev.filter(r => r.id !== lotId));
           }}
+          masterPrompt={masterPrompt}
         />
       )}
     </MainLayout>
