@@ -37,6 +37,7 @@ import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
 import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
+import { AIGuardrailPrompt } from "@/components/AIGuardrailPrompt";
 import { ProjectManager, type Project } from "@/components/BatchManager";
 import { LALotEditor } from "@/components/LALotEditor";
 import { DenverLotEditor } from "@/components/DenverLotEditor";
