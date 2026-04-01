@@ -171,6 +171,12 @@ export default function CreateListing() {
   const [csvValidationIssues, setCsvValidationIssues] = useState<ValidationIssue[]>([]);
   const [csvValidated, setCsvValidated] = useState(false);
 
+  // eBay AI verify & refine state
+  const [ebayVerifying, setEbayVerifying] = useState(false);
+  const [ebayRefining, setEbayRefining] = useState(false);
+  const [ebayVerifyResult, setEbayVerifyResult] = useState<{ verified: boolean; confidence: string; notes: string } | null>(null);
+  const [ebayRefinePrompt, setEbayRefinePrompt] = useState("");
+
   // Fetch Denver lots when project changes
   useEffect(() => {
     const fetchDenverLots = async () => {
