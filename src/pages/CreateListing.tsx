@@ -1242,6 +1242,7 @@ export default function CreateListing() {
             lotNumber={lotNumber}
             onLotComplete={handleLaQuickCaptureLot}
             onClose={() => setLaQuickCaptureOpen(false)}
+            masterPrompt={masterPrompt}
           />
         )}
 
