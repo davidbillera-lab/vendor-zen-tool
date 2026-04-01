@@ -1431,10 +1431,10 @@ export default function CreateListing() {
           </div>
         )}
 
-        {/* eBay Batch Panel - only show when eBay is the active platform */}
-        {activePlatform === 'ebay' && (
+        {/* eBay Batch Panel - keep visible for saved project rows, not only new generation in this session */}
+        {selectedProject && (loadingEbay || ebayRows.length > 0 || activePlatform === 'ebay') && (
           <EbayBatchPanel
-            projectId={selectedProject?.id || null}
+            projectId={selectedProject.id}
             rows={ebayRows}
             onRowsChange={setEbayRows}
             nextLotNumber={ebayLotNumber}
