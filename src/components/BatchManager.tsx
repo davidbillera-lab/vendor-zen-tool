@@ -32,6 +32,7 @@ export interface Project {
   lot_count: number;
   is_active: boolean;
   platforms: string[];
+  master_prompt?: string | null;
 }
 
 interface ProjectManagerProps {
