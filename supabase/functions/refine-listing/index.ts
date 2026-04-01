@@ -168,7 +168,7 @@ Please update the listing based on the user's request and return the complete up
           { role: 'user', content }
         ],
         ...(model.startsWith('openai/') ? { max_completion_tokens: 2500 } : { max_tokens: 2500 }),
-        temperature: 0.2,
+        ...(model.startsWith('openai/') ? {} : { temperature: 0.2 }),
       }),
     });
 
