@@ -1367,7 +1367,7 @@ export default function CreateListing() {
                               className="h-6 text-xs gap-1"
                               onClick={() => setEditingDenverLot(lot)}
                             >
-                              <Pencil className="h-3 w-3" />
+                              <Edit className="h-3 w-3" />
                               Edit
                             </Button>
                             {lot.status === 'failed' && (
