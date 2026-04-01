@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { X, Check, Loader2, Sparkles, Send, Trash2, ImagePlus } from "lucide-react";
+import { X, Check, Loader2, Sparkles, Send, Trash2, ImagePlus, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
