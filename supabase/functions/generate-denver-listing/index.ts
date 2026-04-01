@@ -114,8 +114,9 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
-    const { imageUrls, additionalContext } = await req.json() as GenerateRequest;
+    const { imageUrls, additionalContext, masterPrompt } = await req.json() as GenerateRequest;
     console.log(`Generating Denver listing, images: ${imageUrls.length}`);
+    if (masterPrompt) console.log(`Master prompt active (${masterPrompt.length} chars)`);
 
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
