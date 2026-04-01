@@ -818,7 +818,8 @@ export default function CreateListing() {
           correctionPrompt: ebayRefinePrompt,
           imageUrls: lastEbayRow.image_urls || [],
           platform: 'ebay',
-          mode: 'refine'
+          mode: 'refine',
+          masterPrompt: masterPrompt || undefined
         }
       });
 
