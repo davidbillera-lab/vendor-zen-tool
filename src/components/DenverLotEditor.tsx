@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { DraggableImageGrid } from "./DraggableImageGrid";
 import { ImageEnhancer } from "./ImageEnhancer";
+import { cn } from "@/lib/utils";
 
 interface DenverLotEditorProps {
   lot: {
