@@ -56,6 +56,8 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
   const [saving, setSaving] = useState(false);
   const [correctionPrompt, setCorrectionPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<{ verified: boolean; confidence: string; notes: string } | null>(null);
   const correctionInputRef = useRef<HTMLInputElement>(null);
 
   const handleChange = (field: string, value: string | number) => {
