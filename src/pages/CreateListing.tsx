@@ -177,6 +177,23 @@ export default function CreateListing() {
   const [ebayVerifyResult, setEbayVerifyResult] = useState<{ verified: boolean; confidence: string; notes: string } | null>(null);
   const [ebayRefinePrompt, setEbayRefinePrompt] = useState("");
 
+  // Master prompt for AI guardrails
+  const [masterPrompt, setMasterPrompt] = useState("");
+  const [masterPromptDraft, setMasterPromptDraft] = useState("");
+  const [masterPromptOpen, setMasterPromptOpen] = useState(false);
+  const [savingMasterPrompt, setSavingMasterPrompt] = useState(false);
+
+  // Load master prompt when project changes
+  useEffect(() => {
+    if (selectedProject?.master_prompt) {
+      setMasterPrompt(selectedProject.master_prompt);
+      setMasterPromptDraft(selectedProject.master_prompt);
+    } else {
+      setMasterPrompt("");
+      setMasterPromptDraft("");
+    }
+  }, [selectedProject?.id]);
+
   // Fetch Denver lots when project changes
   useEffect(() => {
     const fetchDenverLots = async () => {
