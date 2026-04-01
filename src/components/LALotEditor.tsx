@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { X, Check, Loader2, Sparkles, Send, Trash2, ImagePlus } from "lucide-react";
+import { X, Check, Loader2, Sparkles, Send, Trash2, ImagePlus, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,6 +56,8 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
   const [saving, setSaving] = useState(false);
   const [correctionPrompt, setCorrectionPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<{ verified: boolean; confidence: string; notes: string } | null>(null);
   const correctionInputRef = useRef<HTMLInputElement>(null);
 
   const handleChange = (field: string, value: string | number) => {
@@ -181,6 +183,59 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
       });
     } finally {
       setIsRefining(false);
+    }
+  };
+
+  const handleVerify = async () => {
+    setIsVerifying(true);
+    setVerifyResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const { data, error } = await supabase.functions.invoke('refine-listing', {
+        body: {
+          currentListing: {
+            title: formData.title,
+            description: formData.description,
+            lowEst: formData.low_est,
+            highEst: formData.high_est,
+            startPrice: formData.start_price,
+            condition: formData.condition,
+            category: formData.category,
+          },
+          correctionPrompt: '',
+          imageUrls: imageUrls,
+          platform: 'liveauctioneers',
+          mode: 'verify',
+          masterPrompt: masterPrompt || undefined
+        }
+      });
+
+      if (error) throw new Error(error.message);
+
+      const refined = data.listing;
+      setVerifyResult({ verified: data.verified, confidence: data.confidence, notes: data.notes });
+
+      setFormData(prev => ({
+        ...prev,
+        title: refined.title || prev.title,
+        description: refined.description || prev.description,
+        low_est: refined.lowEst ?? prev.low_est,
+        high_est: refined.highEst ?? prev.high_est,
+        start_price: refined.startPrice ?? prev.start_price,
+        condition: refined.condition || prev.condition,
+        category: refined.category || prev.category,
+      }));
+
+      toast({
+        title: data.verified ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
+        description: data.notes || (data.verified ? "AI confirmed the listing is correct" : "Listing updated with corrections"),
+      });
+    } catch (error) {
+      toast({ title: "Verification Failed", description: error instanceof Error ? error.message : "Could not verify", variant: "destructive" });
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -329,10 +384,27 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
         </div>
 
         {/* AI Chat Bar */}
-        <div className="p-4 border-t border-border bg-secondary/30">
-          <div className="flex items-center gap-2 mb-2">
-            <Sparkles className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium">Ask AI to make changes</span>
+        <div className="p-4 border-t border-border bg-secondary/30 space-y-3">
+          {verifyResult && (
+            <div className={cn("text-xs p-2 rounded-md", verifyResult.verified ? "bg-green-500/10 text-green-400" : "bg-yellow-500/10 text-yellow-400")}>
+              <strong>{verifyResult.verified ? '✅ Verified' : '🔄 Corrected'}</strong> ({verifyResult.confidence}) — {verifyResult.notes}
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">Ask AI to make changes</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleVerify}
+              disabled={isVerifying || isRefining || imageUrls.length === 0}
+              className="gap-1.5 text-xs"
+            >
+              {isVerifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+              {isVerifying ? 'Verifying...' : 'Verify with AI'}
+            </Button>
           </div>
           <div className="flex gap-2">
             <Input
@@ -348,11 +420,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
               disabled={!correctionPrompt.trim() || isRefining}
               size="icon"
             >
-              {isRefining ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
+              {isRefining ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
         </div>

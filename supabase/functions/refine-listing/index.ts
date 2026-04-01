@@ -63,40 +63,42 @@ serve(async (req) => {
     let systemPrompt: string;
     let model: string;
 
-    if (mode === 'verify' && platform === 'ebay') {
+    if (mode === 'verify') {
       // ═══ VERIFICATION MODE: Cross-check with a different model ═══
       model = 'openai/gpt-5-mini';
-      systemPrompt = `You are a specialist item authenticator and identifier for eBay listings. A first-pass AI generated the listing below. Your job is to VERIFY and CORRECT any misidentifications.`;
+      const platformLabel = platform === 'ebay' ? 'eBay' : platform === 'liveauctioneers' ? 'LiveAuctioneers' : platform === 'denver' ? 'Denver Online Auctions' : 'auction';
+      systemPrompt = `You are a specialist item authenticator and identifier for ${platformLabel} listings. A first-pass AI generated the listing below. Your job is to VERIFY and CORRECT any misidentifications.`;
+
+      const listingFields = platform === 'ebay'
+        ? `Title: ${currentListing.title}\nCategory: ${currentListing.category} (ID: ${currentListing.categoryId || currentListing.category_id || ''})\nPrice: $${currentListing.price}\nCondition: ${currentListing.condition}\nItem Specifics: ${JSON.stringify(currentListing.itemSpecifics || currentListing.item_specifics || {})}\nDescription (first 300 chars): ${(currentListing.description || '').substring(0, 300)}...`
+        : platform === 'denver'
+        ? `Title: ${currentListing.title}\nStarting Bid: $${currentListing.startingBid || currentListing.starting_bid || ''}\nDescription (first 300 chars): ${(currentListing.description || '').substring(0, 300)}...`
+        : `Title: ${currentListing.title}\nLow Est: $${currentListing.lowEst || ''}\nHigh Est: $${currentListing.highEst || ''}\nStart Price: $${currentListing.startPrice || ''}\nCondition: ${currentListing.condition || ''}\nCategory: ${currentListing.category || ''}\nDescription (first 300 chars): ${(currentListing.description || '').substring(0, 300)}...`;
+
+      const responseFields = platform === 'ebay'
+        ? `"title", "description", "price", "categoryId", "category", "condition", "itemSpecifics"`
+        : platform === 'denver'
+        ? `"title", "description", "startingBid"`
+        : `"title", "description", "lowEst", "highEst", "startPrice", "condition", "category"`;
 
       content.push({
         type: "text",
         text: `CAREFULLY study the image(s) and compare against the generated listing. Focus especially on:
-1. Is the ITEM IDENTIFICATION correct? (e.g., is it really a model train vs a toy car? The right brand/maker? The right era?)
+1. Is the ITEM IDENTIFICATION correct?
 2. Is the CATEGORY correct for what's shown?
 3. Is the TITLE accurate and keyword-rich for what the item ACTUALLY is?
-4. Are the ITEM SPECIFICS accurate (brand, material, era, model)?
-5. Is the PRICE realistic for this specific item?
+4. Are the pricing fields realistic for this specific item?
+5. Is the DESCRIPTION accurate?
 
 ${correctionPrompt ? `Seller notes: ${correctionPrompt}` : ''}
 
 FIRST-PASS LISTING TO VERIFY:
-Title: ${currentListing.title}
-Category: ${currentListing.category} (ID: ${currentListing.categoryId || currentListing.category_id || ''})
-Price: $${currentListing.price}
-Condition: ${currentListing.condition}
-Item Specifics: ${JSON.stringify(currentListing.itemSpecifics || currentListing.item_specifics || {})}
-Description (first 300 chars): ${(currentListing.description || '').substring(0, 300)}...
+${listingFields}
 
 RESPOND WITH VALID JSON ONLY:
 {
   "verified": true/false,
-  "title": "corrected or original title (max 80 chars)",
-  "description": "corrected or original description (150+ words)",
-  "price": number,
-  "categoryId": number,
-  "category": "string",
-  "condition": "string",
-  "itemSpecifics": { ... },
+  ${responseFields},
   "confidence": "high/medium/low",
   "notes": "brief explanation of what was confirmed or corrected"
 }`
