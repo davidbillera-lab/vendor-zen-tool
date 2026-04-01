@@ -17,6 +17,7 @@ interface LiveAuctioneersCaptureProps {
     lotNumber: number;
   }) => void;
   onClose: () => void;
+  masterPrompt?: string | null;
 }
 
 type CaptureStep = 'capture' | 'review' | 'processing' | 'confirm';
