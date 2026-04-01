@@ -10,6 +10,7 @@ interface GenerateRequest {
   platform: 'ebay' | 'facebook' | 'liveauctioneers' | 'denver';
   imageUrls: string[];
   additionalContext?: string;
+  masterPrompt?: string;
 }
 
 const PLATFORM_PROMPTS = {
