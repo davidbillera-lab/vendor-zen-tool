@@ -147,6 +147,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
           },
           correctionPrompt: correctionPrompt.trim(),
           imageUrls: lot.image_urls || [],
+          masterPrompt: masterPrompt || undefined,
         }),
       });
 
