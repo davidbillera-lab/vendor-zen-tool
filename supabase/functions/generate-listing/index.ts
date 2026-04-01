@@ -491,12 +491,12 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: platform === 'ebay' ? 'google/gemini-2.5-flash' : 'google/gemini-2.5-flash-lite',
+        model: (platform === 'ebay' || platform === 'liveauctioneers' || platform === 'denver') ? 'google/gemini-2.5-flash' : 'google/gemini-2.5-flash-lite',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content }
         ],
-        max_tokens: platform === 'ebay' ? 2000 : 1500,
+        max_tokens: (platform === 'ebay' || platform === 'liveauctioneers' || platform === 'denver') ? 2500 : 1500,
         temperature: 0.3,
       }),
     });
