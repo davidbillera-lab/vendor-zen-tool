@@ -527,7 +527,7 @@ export default function CreateListing() {
       const imageUrls = uploadedImages.map(img => img.url!);
 
       // Generate listing
-      const listing = await generateListing(platform, imageUrls, additionalContext);
+      const listing = await generateListing(platform, imageUrls, additionalContext, masterPrompt || undefined);
       setGeneratedListing(listing);
 
       // Auto-save eBay to batch for bulk export
