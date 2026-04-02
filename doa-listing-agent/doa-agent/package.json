@@ -1,0 +1,24 @@
+{
+  "name": "doa-bulk-upload-agent",
+  "version": "1.0.0",
+  "description": "Watches Desktop/DOA bulk image loader for ZIP files, prepends barcodes, uploads to DOA, sends completion email",
+  "type": "module",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js",
+    "watch": "node agent.js --watch"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.12",
+    "bwip-js": "^3.4.0",
+    "chalk": "^5.3.0",
+    "chokidar": "^3.6.0",
+    "dotenv": "^16.4.5",
+    "jimp": "^0.22.12",
+    "nodemailer": "^6.9.13",
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "@zxing/library": "^0.21.3"
+  }
+}
