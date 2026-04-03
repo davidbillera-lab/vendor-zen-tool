@@ -86,9 +86,10 @@ const isWatch         = args.includes('--watch');
 const listBatchesFlag = args.includes('--list-batches');
 
 const flags = {
-  test:   args.includes('--test'),
-  dryRun: args.includes('--dry-run'),
-  force:  args.includes('--force'),
+  test:             args.includes('--test'),
+  dryRun:           args.includes('--dry-run'),
+  force:            args.includes('--force'),
+  descriptionsOnly: args.includes('--descriptions-only'),
 };
 
 // -- Help text ----------------------------------------------------------------
@@ -97,10 +98,11 @@ const HELP = `
 DOA Listing Agent
 ---------------------------------------------------------------------
 CSV + ZIP MODE (recommended -- titles from CSV, images from zip):
-  node agent.js --csv lots.csv --zip images.zip          Full run
-  node agent.js --csv lots.csv --zip images.zip --test   First 3 lots
-  node agent.js --csv lots.csv --zip images.zip --force  Skip confirm
-  node agent.js --csv lots.csv --zip images.zip --lot 5  Single lot
+  node agent.js --csv lots.csv --zip images.zip                      Full run
+  node agent.js --csv lots.csv --zip images.zip --test               First 3 lots
+  node agent.js --csv lots.csv --zip images.zip --force              Skip confirm
+  node agent.js --csv lots.csv --zip images.zip --lot 5              Single lot
+  node agent.js --csv lots.csv --zip images.zip --descriptions-only  Patch descriptions only
 
 ZIP-ONLY MODE (uses DOA AI dropdown for titles):
   node agent.js --zip images.zip                         Full run
@@ -169,19 +171,22 @@ if (isCsv && isZip) {
 // -- CSV + Zip mode (RECOMMENDED) ---------------------------------------------
 
 async function runCsvZipAgent(csvPath, zipPath, options = {}) {
-  const { firstLotUrl, dryRun = false, force = false, test = false, lotFlag = null } = options;
+  const { firstLotUrl, dryRun = false, force = false, test = false, lotFlag = null, descriptionsOnly = false } = options;
   const startTime = Date.now();
 
   log.section('DOA Listing Agent -- CSV + Zip Mode (Recommended)');
   log.info(`CSV:  ${csvPath}`);
   log.info(`Zip:  ${zipPath}`);
-  log.info(`Mode: ${dryRun ? 'DRY RUN' : test ? 'TEST (3 lots)' : lotFlag ? `Single lot #${lotFlag}` : 'FULL RUN'}`);
+  log.info(`Mode: ${dryRun ? 'DRY RUN' : test ? 'TEST (3 lots)' : lotFlag ? `Single lot #${lotFlag}` : descriptionsOnly ? 'DESCRIPTIONS-ONLY (patch pass)' : 'FULL RUN'}`);
 
   // Load CSV
   const { lots: allLots, totalRows, firstLotUrl: csvFirstLotUrl } = loadCsv(csvPath);
 
-  const completed = allLots.filter(l => l.status === 'completed');
-  let   lots      = allLots.filter(l => l.status !== 'completed');
+  // In --descriptions-only mode we process ALL lots (including previously
+  // completed ones) because the goal is to patch a field that was missed.
+  // In normal mode we skip already-completed lots.
+  const completed = descriptionsOnly ? [] : allLots.filter(l => l.status === 'completed');
+  let   lots      = descriptionsOnly ? allLots : allLots.filter(l => l.status !== 'completed');
 
   if (completed.length > 0) {
     log.info(`Skipping ${completed.length} already-completed lot(s)`);
@@ -275,7 +280,7 @@ async function runCsvZipAgent(csvPath, zipPath, options = {}) {
   try {
     agentResult = await runDoaAgent(
       lots,
-      { firstLotUrl: resolvedUrl },
+      { firstLotUrl: resolvedUrl, descriptionsOnly },
       {
         onStart:   async (lot) => { results.push({ lot, status: 'in_progress', error: null }); },
         onSuccess: async (lot) => {

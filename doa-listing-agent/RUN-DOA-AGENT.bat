@@ -13,6 +13,14 @@ title DOA Listing Agent
 ::       and save it (replace the placeholder line)
 ::    5. Double-click this file (or the desktop shortcut)
 ::
+::  DESCRIPTIONS-ONLY MODE (patch a previous run):
+::    1. Drop in the SAME CSV and ZIP used last time
+::    2. Update START-URL.txt with the first lot's URL again
+::    3. Create an empty file called DESCRIPTIONS-ONLY.txt
+::       in the DROP-HERE folder
+::    4. Double-click this file -- only descriptions are filled,
+::       titles and images are left untouched
+::
 ::  The agent finds everything automatically, runs all lots,
 ::  then moves your files to the archive folder when done.
 :: ============================================================
@@ -30,6 +38,15 @@ echo  ====================================================
 echo   DOA Listing Agent
 echo  ====================================================
 echo.
+
+:: -- Check for DESCRIPTIONS-ONLY mode flag -----------------
+set DESC_ONLY_FLAG=
+set DESC_ONLY_FILE=%DROP_DIR%\DESCRIPTIONS-ONLY.txt
+if exist "%DESC_ONLY_FILE%" (
+    set DESC_ONLY_FLAG=--descriptions-only
+    echo  MODE: DESCRIPTIONS-ONLY ^(patching descriptions only^)
+    echo.
+)
 
 :: -- Find the CSV file in DROP-HERE ------------------------
 set CSV_FILE=
@@ -117,6 +134,9 @@ if not exist "%AGENT_DIR%.env" (
 echo  Found CSV:  %CSV_FILE%
 echo  Found ZIP:  %ZIP_FILE%
 echo  Start URL:  %START_URL%
+if not "%DESC_ONLY_FLAG%"=="" (
+    echo  Mode:       DESCRIPTIONS-ONLY
+)
 echo.
 echo  Starting agent... Chrome will open automatically.
 echo  Do NOT click inside the browser window while it runs.
@@ -130,7 +150,7 @@ copy /Y "%ZIP_PATH%" "%AGENT_DIR%%ZIP_FILE%" >nul
 
 :: -- Run the agent -----------------------------------------
 cd /d "%AGENT_DIR%"
-node agent.js --csv "%CSV_FILE%" --zip "%ZIP_FILE%" --url "%START_URL%" --force
+node agent.js --csv "%CSV_FILE%" --zip "%ZIP_FILE%" --url "%START_URL%" --force %DESC_ONLY_FLAG%
 set AGENT_EXIT=%ERRORLEVEL%
 
 :: -- Clean up copied files from agent root -----------------
@@ -146,13 +166,16 @@ if %AGENT_EXIT% EQU 0 (
     echo.
     echo  Moving files to archive...
 
-    :: Create timestamped archive subfolder
-    for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set DT=%%I
-    set ARCHIVE_SUBDIR=%ARCHIVE_DIR%\%DT:~0,8%_%DT:~8,4%
+    :: Create timestamped archive subfolder using PowerShell (wmic removed in Win11)
+    for /f "delims=" %%T in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmm"') do set TIMESTAMP=%%T
+    set ARCHIVE_SUBDIR=%ARCHIVE_DIR%\%TIMESTAMP%
     mkdir "%ARCHIVE_SUBDIR%" >nul 2>&1
 
     move /Y "%CSV_PATH%"  "%ARCHIVE_SUBDIR%\" >nul
     move /Y "%ZIP_PATH%"  "%ARCHIVE_SUBDIR%\" >nul
+
+    :: Remove the DESCRIPTIONS-ONLY flag file if present
+    if exist "%DESC_ONLY_FILE%" del /f /q "%DESC_ONLY_FILE%" >nul 2>&1
 
     :: Reset START-URL.txt to template for next batch
     (
@@ -160,7 +183,7 @@ if %AGENT_EXIT% EQU 0 (
         echo https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXXXX^&PartyId=115
     ) > "%URL_PATH%"
 
-    echo  Archived to: archive\%DT:~0,8%_%DT:~8,4%\
+    echo  Archived to: archive\%TIMESTAMP%\
     echo.
     echo  DROP-HERE is reset and ready for the next batch.
     echo  Just drop in new files and update START-URL.txt.
