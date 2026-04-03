@@ -4,72 +4,119 @@ title DOA Listing Agent
 
 :: ============================================================
 ::  DOA Listing Agent -- Drop Folder Launcher
-::  
-::  HOW TO USE:
-::    1. Drop your CSV file into this folder
-::    2. Drop your image ZIP file into this folder
-::    3. Double-click this file
 ::
-::  That's it. The agent finds the files automatically.
+::  HOW TO USE EVERY TIME:
+::    1. Open the DROP-HERE folder
+::    2. Drop in your CSV (from Vendor-Zen-Tool)
+::    3. Drop in your image ZIP file
+::    4. Open START-URL.txt -- paste the first lot's URL
+::       and save it (replace the placeholder line)
+::    5. Double-click this file (or the desktop shortcut)
+::
+::  The agent finds everything automatically, runs all lots,
+::  then moves your files to the archive folder when done.
 :: ============================================================
 
-:: -- Find the CSV file in this folder -------------------------
-set CSV_FILE=
-for %%f in ("%~dp0*.csv") do (
-    if /i not "%%~nxf"==".env.example" (
-        set CSV_FILE=%%~nxf
-    )
-)
+set AGENT_DIR=%~dp0
+set DROP_DIR=%~dp0DROP-HERE
+set ARCHIVE_DIR=%~dp0archive
 
-:: -- Find the ZIP file in this folder -------------------------
-set ZIP_FILE=
-for %%f in ("%~dp0*.zip") do (
-    set ZIP_FILE=%%~nxf
-)
+:: -- Make sure DROP-HERE and archive folders exist ---------
+if not exist "%DROP_DIR%" mkdir "%DROP_DIR%"
+if not exist "%ARCHIVE_DIR%" mkdir "%ARCHIVE_DIR%"
 
-:: -- Check we found both files --------------------------------
 echo.
 echo  ====================================================
 echo   DOA Listing Agent
 echo  ====================================================
 echo.
 
+:: -- Find the CSV file in DROP-HERE ------------------------
+set CSV_FILE=
+set CSV_PATH=
+for %%f in ("%DROP_DIR%\*.csv") do (
+    set CSV_FILE=%%~nxf
+    set CSV_PATH=%%~f
+)
+
+:: -- Find the ZIP file in DROP-HERE ------------------------
+set ZIP_FILE=
+set ZIP_PATH=
+for %%f in ("%DROP_DIR%\*.zip") do (
+    set ZIP_FILE=%%~nxf
+    set ZIP_PATH=%%~f
+)
+
+:: -- Read the START URL from START-URL.txt -----------------
+set START_URL=
+set URL_PATH=%DROP_DIR%\START-URL.txt
+if exist "%URL_PATH%" (
+    for /f "usebackq tokens=* delims=" %%L in ("%URL_PATH%") do (
+        set LINE=%%L
+        :: Skip comment/instruction lines (those that don't start with http)
+        if "!LINE:~0,4!"=="http" (
+            set START_URL=!LINE!
+        )
+    )
+)
+
+:: -- Check we found all three required items ---------------
 if "%CSV_FILE%"=="" (
-    echo  ERROR: No CSV file found in this folder.
+    echo  ERROR: No CSV file found in DROP-HERE.
     echo.
-    echo  Please drop your CSV file ^(from Vendor-Zen-Tool^)
-    echo  into this folder and try again.
+    echo  Drop your CSV ^(from Vendor-Zen-Tool^) into:
+    echo  %DROP_DIR%
     echo.
+    echo  Opening DROP-HERE now...
+    explorer "%DROP_DIR%"
     pause
     exit /b 1
 )
 
 if "%ZIP_FILE%"=="" (
-    echo  ERROR: No ZIP file found in this folder.
+    echo  ERROR: No ZIP file found in DROP-HERE.
     echo.
-    echo  Please drop your image ZIP file into this folder
-    echo  and try again.
+    echo  Drop your image ZIP into:
+    echo  %DROP_DIR%
     echo.
+    echo  Opening DROP-HERE now...
+    explorer "%DROP_DIR%"
     pause
     exit /b 1
 )
 
-:: -- Check .env has credentials --------------------------------
-if not exist "%~dp0.env" (
+if "%START_URL%"=="" (
+    echo  ERROR: No start URL found in START-URL.txt.
+    echo.
+    echo  Open the START-URL.txt file in DROP-HERE,
+    echo  paste the first lot's URL ^(from DOA sub-admin^),
+    echo  and save it. Then run this again.
+    echo.
+    echo  Opening DROP-HERE now...
+    explorer "%DROP_DIR%"
+    pause
+    exit /b 1
+)
+
+:: -- Check .env has login credentials ----------------------
+if not exist "%AGENT_DIR%.env" (
     echo  ERROR: No .env file found.
     echo.
-    echo  Please create a .env file in this folder with:
+    echo  Create a .env file in the doa-listing-agent folder:
     echo    DOA_EMAIL=your-email@example.com
     echo    DOA_PASSWORD=your-password
-    echo    DOA_FIRST_LOT_URL=https://denveronlineauctions.com/sub-admin/EditAuction?id=...
+    echo.
+    echo  ^(DOA_FIRST_LOT_URL is no longer needed in .env --
+    echo   it is read from DROP-HERE\START-URL.txt instead^)
     echo.
     pause
     exit /b 1
 )
 
-:: -- Show what we found ----------------------------------------
+:: -- Show what we found ------------------------------------
 echo  Found CSV:  %CSV_FILE%
 echo  Found ZIP:  %ZIP_FILE%
+echo  Start URL:  %START_URL%
 echo.
 echo  Starting agent... Chrome will open automatically.
 echo  Do NOT click inside the browser window while it runs.
@@ -77,20 +124,51 @@ echo.
 echo  ====================================================
 echo.
 
-:: -- Run the agent --------------------------------------------
-cd /d "%~dp0"
-node agent.js --csv "%CSV_FILE%" --zip "%ZIP_FILE%" --force
+:: -- Copy files to agent root for processing ---------------
+copy /Y "%CSV_PATH%" "%AGENT_DIR%%CSV_FILE%" >nul
+copy /Y "%ZIP_PATH%" "%AGENT_DIR%%ZIP_FILE%" >nul
 
-:: -- Done -----------------------------------------------------
+:: -- Run the agent -----------------------------------------
+cd /d "%AGENT_DIR%"
+node agent.js --csv "%CSV_FILE%" --zip "%ZIP_FILE%" --url "%START_URL%" --force
+set AGENT_EXIT=%ERRORLEVEL%
+
+:: -- Clean up copied files from agent root -----------------
+del /f /q "%AGENT_DIR%%CSV_FILE%" >nul 2>&1
+del /f /q "%AGENT_DIR%%ZIP_FILE%" >nul 2>&1
+
+:: -- Archive or report -------------------------------------
 echo.
-if %ERRORLEVEL% EQU 0 (
+if %AGENT_EXIT% EQU 0 (
     echo  ====================================================
     echo   All lots completed successfully!
     echo  ====================================================
+    echo.
+    echo  Moving files to archive...
+
+    :: Create timestamped archive subfolder
+    for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set DT=%%I
+    set ARCHIVE_SUBDIR=%ARCHIVE_DIR%\%DT:~0,8%_%DT:~8,4%
+    mkdir "%ARCHIVE_SUBDIR%" >nul 2>&1
+
+    move /Y "%CSV_PATH%"  "%ARCHIVE_SUBDIR%\" >nul
+    move /Y "%ZIP_PATH%"  "%ARCHIVE_SUBDIR%\" >nul
+
+    :: Reset START-URL.txt to template for next batch
+    (
+        echo PASTE YOUR FIRST LOT URL BELOW THIS LINE -- DELETE THIS LINE FIRST
+        echo https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXXXX^&PartyId=115
+    ) > "%URL_PATH%"
+
+    echo  Archived to: archive\%DT:~0,8%_%DT:~8,4%\
+    echo.
+    echo  DROP-HERE is reset and ready for the next batch.
+    echo  Just drop in new files and update START-URL.txt.
 ) else (
     echo  ====================================================
     echo   Some lots failed. Check the output above.
-    echo   Re-run this file -- completed lots are skipped.
+    echo   Files left in DROP-HERE -- re-run to retry.
+    echo   Completed lots are skipped automatically.
     echo  ====================================================
 )
 echo.

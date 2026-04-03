@@ -6,5 +6,16 @@ node_modules/
 logs/
 temp/
 
+# Drop folder contents (user files -- never commit)
+DROP-HERE/*.csv
+DROP-HERE/*.zip
+DROP-HERE/*.ZIP
+archive/*
+!archive/.gitkeep
+
+# Stale CSVs in agent root (should always go in DROP-HERE)
+*.csv
+!sample-lots.csv
+
 # Mac junk
 .DS_Store
