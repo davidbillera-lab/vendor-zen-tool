@@ -97,10 +97,10 @@ const SELECTORS = {
   ],
 
   // ── Lot edit form ───────────────────────────────────────────────────────────
+  // Confirmed selectors from live DOA EditAuction page (April 2026).
   lotTitle: [
-    'input[name="title"]',
-    'input[name="lot_title"]',
-    'input[name="Title"]',
+    '#txtTitle',                        // confirmed — DOA lot title field
+    'input[name="ctl00$MainContent$txtTitle"]',
     'input[placeholder*="title" i]',
     'input[id*="title" i]',
   ],
@@ -116,13 +116,14 @@ const SELECTORS = {
   ],
 
   // ── Image upload widget ─────────────────────────────────────────────────────
-  // DOA uses a drag-and-drop uploader. Playwright's setInputFiles() works on
-  // the hidden <input type="file"> element even when it's not visible.
+  // DOA uses the Uppy drag-and-drop widget. The file input is intentionally
+  // hidden (class: uppy-Dashboard-input, name: files[]). Playwright's
+  // setInputFiles() works on hidden inputs — no visibility check needed.
   lotFileUpload: [
+    'input.uppy-Dashboard-input',       // confirmed — Uppy widget on DOA
+    'input[name="files[]"]',            // Uppy name attribute
+    'input[type="file"][accept="image/*"]', // generic fallback
     'input[type="file"]',
-    'input[name*="image"]',
-    'input[name*="photo"]',
-    'input[accept*="image"]',
   ],
 
   // Thumbnail elements that appear after a successful upload
@@ -284,15 +285,28 @@ async function uploadImages(page, imagePaths, lotNumber) {
     return false;
   }
 
-  const fileInputEl = await findFirst(page, SELECTORS.lotFileUpload);
-  if (!fileInputEl) {
+  // Uppy's file input is intentionally hidden — use locator() without a
+  // visibility check, then call setInputFiles() directly.
+  let fileInputLocator = null;
+  for (const sel of SELECTORS.lotFileUpload) {
+    try {
+      const count = await page.locator(sel).count();
+      if (count > 0) {
+        fileInputLocator = page.locator(sel).first();
+        log.info(`  File input found: ${sel}`);
+        break;
+      }
+    } catch { /* try next */ }
+  }
+
+  if (!fileInputLocator) {
     log.warn(`  Lot #${lotNumber}: No file upload input found — skipping images`);
     log.warn('  Run: node inspect-form.js to check the upload widget on this page');
     return false;
   }
 
   log.info(`  Uploading ${imagePaths.length} image(s) for lot #${lotNumber}…`);
-  await fileInputEl.locator.setInputFiles(imagePaths);
+  await fileInputLocator.setInputFiles(imagePaths);
 
   // Wait for network to go quiet (upload requests complete)
   log.info('  Waiting for upload to complete (watching network)…');
@@ -320,6 +334,62 @@ async function uploadImages(page, imagePaths, lotNumber) {
   }
 
   return true;
+}
+
+// ── Fill title and description from CSV data ─────────────────────────────────
+
+/**
+ * fillLotForm(page, lot)
+ *
+ * Fills the title field and TinyMCE description editor from lot.title and
+ * lot.description (sourced from the CSV). If either field is empty the lot
+ * is still saved — DOA will just show a blank title/description.
+ *
+ * Returns true if both fields were written, false if either was skipped.
+ */
+async function fillLotForm(page, lot) {
+  const { lot_number, title, description } = lot;
+  let ok = true;
+
+  // ── Title ──────────────────────────────────────────────────────────────────
+  if (title && title.trim()) {
+    const titleEl = await findFirst(page, SELECTORS.lotTitle);
+    if (titleEl) {
+      await titleEl.locator.fill(title.trim());
+      log.success(`  Title filled: "${title.trim().slice(0, 60)}"`);
+    } else {
+      log.warn(`  Lot #${lot_number}: title field not found — skipping title`);
+      ok = false;
+    }
+  } else {
+    log.warn(`  Lot #${lot_number}: no title in CSV — leaving title blank`);
+    ok = false;
+  }
+
+  // ── Description (TinyMCE) ──────────────────────────────────────────────────
+  // DOA uses TinyMCE as its description editor. The visible textarea is an
+  // iframe — we set the content via the TinyMCE JS API instead of typing.
+  if (description && description.trim()) {
+    try {
+      await page.evaluate((desc) => {
+        // TinyMCE exposes a global `tinymce` object; setContent() replaces
+        // the editor body. Works whether the content is plain text or HTML.
+        if (window.tinymce && window.tinymce.activeEditor) {
+          window.tinymce.activeEditor.setContent(desc);
+        } else if (window.tinymce && window.tinymce.editors && window.tinymce.editors.length > 0) {
+          window.tinymce.editors[0].setContent(desc);
+        }
+      }, description.trim());
+      log.success(`  Description filled (${description.trim().length} chars)`);
+    } catch (descErr) {
+      log.warn(`  Lot #${lot_number}: could not set TinyMCE description — ${descErr.message}`);
+      ok = false;
+    }
+  } else {
+    log.warn(`  Lot #${lot_number}: no description in CSV — leaving description blank`);
+  }
+
+  return ok;
 }
 
 // ── Trigger AI generation ─────────────────────────────────────────────────────
@@ -466,7 +536,14 @@ async function saveLot(page, lotNumber) {
  * processLot(page, lot, imagePaths)
  *
  * The browser must already be on the correct EditAuction page.
- * Uploads images, triggers AI, then saves.
+ *
+ * Behaviour depends on whether lot.title / lot.description are populated:
+ *
+ *   CSV+Zip mode  — lot.title and lot.description come from the CSV.
+ *                   fillLotForm() writes them directly; no AI dropdown needed.
+ *
+ *   Zip-only mode — lot.title and lot.description are empty strings.
+ *                   triggerAiGeneration() is called instead to use DOA's AI.
  *
  * Returns the URL of the next page.
  */
@@ -478,15 +555,25 @@ async function processLot(page, lot, imagePaths) {
     );
   }
 
-  // Wait for the form to be interactive
-  await page.waitForSelector('input', { state: 'visible', timeout: 15_000 });
-  await page.waitForTimeout(800); // let TinyMCE and any JS finish initialising
+  // Wait for the form to be interactive — wait for the title field specifically.
+  // DOA's form has many hidden ASP.NET inputs; waiting for any 'input' to be
+  // visible will always resolve to a hidden field and time out.
+  await page.waitForSelector('#txtTitle', { state: 'visible', timeout: 20_000 });
+  await page.waitForTimeout(800); // let TinyMCE and Uppy finish initialising
 
-  // 1. Upload images
+  // 1. Fill title and description
+  const hasCsvData = (lot.title && lot.title.trim()) || (lot.description && lot.description.trim());
+
+  if (hasCsvData) {
+    // CSV+Zip mode: write title/description directly from CSV data
+    await fillLotForm(page, lot);
+  } else {
+    // Zip-only mode: use DOA's built-in AI dropdown
+    await triggerAiGeneration(page, lot.lot_number);
+  }
+
+  // 2. Upload images
   await uploadImages(page, imagePaths, lot.lot_number);
-
-  // 2. Trigger AI generation
-  await triggerAiGeneration(page, lot.lot_number);
 
   // 3. Save and advance
   const nextUrl = await saveLot(page, lot.lot_number);
