@@ -44,6 +44,7 @@ import log      from './logger.js';
 import { loadCsv, saveProgress }                from './csvReader.js';
 import { runDoaAgent }                          from './doaAgent.js';
 import { cleanupAllTemp }                       from './imageHandler.js';
+import { extractZip, cleanupExtracted }         from './zipHandler.js';
 import {
   loadFromSupabase,
   getFirstLotUrlForBatch,
@@ -57,6 +58,9 @@ import { startWatchMode }                       from './watchMode.js';
 
 const args = process.argv.slice(2);
 
+const zipIdx      = args.indexOf('--zip');
+const zipFile     = zipIdx !== -1 ? args[zipIdx + 1] : null;
+
 const csvIdx      = args.indexOf('--csv');
 const csvFile     = csvIdx !== -1 ? args[csvIdx + 1] : null;
 
@@ -69,6 +73,7 @@ const batchId     = batchIdx !== -1 ? args[batchIdx + 1] : null;
 const dirIdx      = args.indexOf('--dir');
 const watchDir    = dirIdx !== -1 ? args[dirIdx + 1] : './incoming';
 
+const isZip       = !!zipFile;
 const isSupabase  = args.includes('--supabase');
 const isWatch     = args.includes('--watch');
 const listBatchesFlag = args.includes('--list-batches');
@@ -109,14 +114,20 @@ CSV format: lot_number, title, description, images, starting_bid
 
 // ── Route to the right mode ───────────────────────────────────────────────────
 
-if (!csvFile && !isSupabase && !isWatch) {
+if (!csvFile && !isSupabase && !isWatch && !isZip) {
   console.log(HELP);
   process.exit(0);
 }
 
 checkDOAEnv();  // Always need DOA credentials
 
-if (isWatch) {
+if (isZip) {
+  // ── Zip mode (new primary workflow) ────────────────────────────────────────
+  const urlIdx = args.indexOf('--url');
+  const firstLotUrl = urlIdx !== -1 ? args[urlIdx + 1] : process.env.DOA_FIRST_LOT_URL;
+  await runZipAgent(zipFile, { firstLotUrl, ...flags });
+
+} else if (isWatch) {
   // ── Watch mode ──────────────────────────────────────────────────────────────
   const firstLotUrl = process.env.DOA_FIRST_LOT_URL;
   if (!firstLotUrl) {
@@ -288,6 +299,107 @@ async function runSupabaseAgent(batchId, options = {}) {
         await updateLotStatus(r.lot.id, 'failed', fatalErr?.message);
       }
     }
+  }
+
+  printSummary(results, agentResult, startTime, log.getRunLogPath());
+  process.exit(agentResult.failed > 0 ? 1 : 0);
+}
+
+// ── Zip mode ─────────────────────────────────────────────────────────────────
+
+async function runZipAgent(zipPath, options = {}) {
+  const { firstLotUrl, dryRun = false, force = false } = options;
+  const startTime = Date.now();
+
+  log.section('DOA Listing Agent — Zip Mode');
+  log.info(`Zip:  ${zipPath}`);
+  log.info(`Mode: ${dryRun ? 'DRY RUN' : 'FULL RUN'}`);
+
+  // ── Extract zip ────────────────────────────────────────────────────────────
+  let lotMap;
+  try {
+    lotMap = extractZip(zipPath);
+  } catch (err) {
+    log.error(`Failed to extract zip: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (lotMap.size === 0) {
+    log.error(
+      'No valid lot images found in the zip file.\n\n' +
+      '  Make sure your images are named: {lot}_{index}.{ext}\n' +
+      '  Examples: 101_01.jpg, 101_02.jpg, 102_01.jpg\n'
+    );
+    process.exit(1);
+  }
+
+  // ── Build lot objects ──────────────────────────────────────────────────────
+  const lots = [];
+  for (const [lotNumber, imagePaths] of lotMap) {
+    lots.push({ lot_number: lotNumber, title: '', description: '', images: imagePaths });
+  }
+
+  // ── Resolve first lot URL ──────────────────────────────────────────────────
+  const resolvedUrl = firstLotUrl || process.env.DOA_FIRST_LOT_URL;
+  if (!resolvedUrl) {
+    log.error(
+      'No first lot URL found.\n' +
+      '  Set DOA_FIRST_LOT_URL in your .env file, or pass --url <url>\n' +
+      '  Example: node agent.js --zip images.zip --url "https://denveronlineauctions.com/sub-admin/EditAuction?id=1234567&PartyId=115"'
+    );
+    process.exit(1);
+  }
+
+  // ── Preview table ──────────────────────────────────────────────────────────
+  printLotTable(lots);
+  log.info(`  First lot URL: ${resolvedUrl}`);
+
+  if (dryRun) {
+    log.info('DRY RUN complete — no browser opened');
+    cleanupExtracted();
+    process.exit(0);
+  }
+
+  // ── Confirmation ───────────────────────────────────────────────────────────
+  if (!force) {
+    const answer = await ask(chalk.yellow(`Proceed with ${lots.length} lot(s)? (y/n): `));
+    if (answer.trim().toLowerCase() !== 'y') {
+      log.info('Cancelled');
+      cleanupExtracted();
+      process.exit(0);
+    }
+  } else {
+    log.info('--force flag — skipping confirmation');
+  }
+
+  // ── Run browser automation ─────────────────────────────────────────────────
+  log.section('Starting Browser Automation');
+  const results = [];
+  let agentResult = { succeeded: 0, failed: 0, skipped: 0 };
+
+  try {
+    agentResult = await runDoaAgent(
+      lots,
+      { firstLotUrl: resolvedUrl },
+      {
+        onStart:   async (lot) => { results.push({ lot, status: 'in_progress', error: null }); },
+        onSuccess: async (lot) => {
+          const r = results.find(r => r.lot.lot_number === lot.lot_number);
+          if (r) r.status = 'completed';
+        },
+        onFailure: async (lot, err) => {
+          const r = results.find(r => r.lot.lot_number === lot.lot_number);
+          if (r) { r.status = 'failed'; r.error = err; }
+        },
+      }
+    );
+  } catch (fatalErr) {
+    log.error('Agent stopped due to a fatal error', fatalErr);
+    for (const r of results) {
+      if (r.status === 'in_progress') { r.status = 'failed'; r.error = fatalErr; }
+    }
+  } finally {
+    cleanupExtracted();
   }
 
   printSummary(results, agentResult, startTime, log.getRunLogPath());
