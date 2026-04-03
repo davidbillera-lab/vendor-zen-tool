@@ -5,24 +5,18 @@ title DOA Listing Agent
 :: ============================================================
 ::  DOA Listing Agent -- Drop Folder Launcher
 ::
-::  HOW TO USE EVERY TIME:
-::    1. Open the DROP-HERE folder
-::    2. Drop in your CSV (from Vendor-Zen-Tool)
-::    3. Drop in your image ZIP file
-::    4. Open START-URL.txt -- paste the first lot's URL
-::       and save it (replace the placeholder line)
-::    5. Double-click this file (or the desktop shortcut)
+::  NORMAL RUN (every auction):
+::    1. Drop your CSV and image ZIP into DROP-HERE
+::    2. Paste the first lot URL into START-URL.txt
+::    3. Double-click this file
 ::
-::  DESCRIPTIONS-ONLY MODE (patch a previous run):
-::    1. Drop in the SAME CSV and ZIP used last time
-::    2. Update START-URL.txt with the first lot's URL again
+::  DESCRIPTIONS-ONLY (patch a previous run):
+::    1. Drop the SAME CSV and ZIP back into DROP-HERE
+::    2. Paste the first lot URL into START-URL.txt
 ::    3. Create an empty file called DESCRIPTIONS-ONLY.txt
-::       in the DROP-HERE folder
-::    4. Double-click this file -- only descriptions are filled,
-::       titles and images are left untouched
-::
-::  The agent finds everything automatically, runs all lots,
-::  then moves your files to the archive folder when done.
+::       in DROP-HERE  (right-click -> New -> Text Document,
+::       name it DESCRIPTIONS-ONLY.txt)
+::    4. Double-click this file
 :: ============================================================
 
 set AGENT_DIR=%~dp0
@@ -38,15 +32,6 @@ echo  ====================================================
 echo   DOA Listing Agent
 echo  ====================================================
 echo.
-
-:: -- Check for DESCRIPTIONS-ONLY mode flag -----------------
-set DESC_ONLY_FLAG=
-set DESC_ONLY_FILE=%DROP_DIR%\DESCRIPTIONS-ONLY.txt
-if exist "%DESC_ONLY_FILE%" (
-    set DESC_ONLY_FLAG=--descriptions-only
-    echo  MODE: DESCRIPTIONS-ONLY ^(patching descriptions only^)
-    echo.
-)
 
 :: -- Find the CSV file in DROP-HERE ------------------------
 set CSV_FILE=
@@ -70,21 +55,15 @@ set URL_PATH=%DROP_DIR%\START-URL.txt
 if exist "%URL_PATH%" (
     for /f "usebackq tokens=* delims=" %%L in ("%URL_PATH%") do (
         set LINE=%%L
-        :: Skip comment/instruction lines (those that don't start with http)
-        if "!LINE:~0,4!"=="http" (
-            set START_URL=!LINE!
-        )
+        if "!LINE:~0,4!"=="http" set START_URL=!LINE!
     )
 )
 
 :: -- Check we found all three required items ---------------
 if "%CSV_FILE%"=="" (
     echo  ERROR: No CSV file found in DROP-HERE.
+    echo  Drop your CSV into: %DROP_DIR%
     echo.
-    echo  Drop your CSV ^(from Vendor-Zen-Tool^) into:
-    echo  %DROP_DIR%
-    echo.
-    echo  Opening DROP-HERE now...
     explorer "%DROP_DIR%"
     pause
     exit /b 1
@@ -92,11 +71,8 @@ if "%CSV_FILE%"=="" (
 
 if "%ZIP_FILE%"=="" (
     echo  ERROR: No ZIP file found in DROP-HERE.
+    echo  Drop your image ZIP into: %DROP_DIR%
     echo.
-    echo  Drop your image ZIP into:
-    echo  %DROP_DIR%
-    echo.
-    echo  Opening DROP-HERE now...
     explorer "%DROP_DIR%"
     pause
     exit /b 1
@@ -104,12 +80,8 @@ if "%ZIP_FILE%"=="" (
 
 if "%START_URL%"=="" (
     echo  ERROR: No start URL found in START-URL.txt.
+    echo  Open START-URL.txt in DROP-HERE and paste the first lot URL.
     echo.
-    echo  Open the START-URL.txt file in DROP-HERE,
-    echo  paste the first lot's URL ^(from DOA sub-admin^),
-    echo  and save it. Then run this again.
-    echo.
-    echo  Opening DROP-HERE now...
     explorer "%DROP_DIR%"
     pause
     exit /b 1
@@ -118,16 +90,20 @@ if "%START_URL%"=="" (
 :: -- Check .env has login credentials ----------------------
 if not exist "%AGENT_DIR%.env" (
     echo  ERROR: No .env file found.
-    echo.
-    echo  Create a .env file in the doa-listing-agent folder:
+    echo  Create doa-listing-agent\.env with:
     echo    DOA_EMAIL=your-email@example.com
     echo    DOA_PASSWORD=your-password
     echo.
-    echo  ^(DOA_FIRST_LOT_URL is no longer needed in .env --
-    echo   it is read from DROP-HERE\START-URL.txt instead^)
-    echo.
     pause
     exit /b 1
+)
+
+:: -- Check for DESCRIPTIONS-ONLY flag AFTER showing files --
+:: (Checked here so user can see what was found first)
+set DESC_ONLY_FLAG=
+set DESC_ONLY_FILE=%DROP_DIR%\DESCRIPTIONS-ONLY.txt
+if exist "%DESC_ONLY_FILE%" (
+    set DESC_ONLY_FLAG=--descriptions-only
 )
 
 :: -- Show what we found ------------------------------------
@@ -135,7 +111,9 @@ echo  Found CSV:  %CSV_FILE%
 echo  Found ZIP:  %ZIP_FILE%
 echo  Start URL:  %START_URL%
 if not "%DESC_ONLY_FLAG%"=="" (
-    echo  Mode:       DESCRIPTIONS-ONLY
+    echo  Mode:       DESCRIPTIONS-ONLY  ^(patching descriptions only^)
+) else (
+    echo  Mode:       FULL RUN
 )
 echo.
 echo  Starting agent... Chrome will open automatically.
@@ -144,8 +122,15 @@ echo.
 echo  ====================================================
 echo.
 
-:: -- Copy files to agent root for processing ---------------
+:: -- Copy CSV + ZIP + progress file to agent root ----------
 copy /Y "%CSV_PATH%" "%AGENT_DIR%%CSV_FILE%" >nul
+
+:: Copy the .progress.json sidecar if it exists (enables skip-completed on rerun)
+set PROGRESS_PATH=%DROP_DIR%\%CSV_FILE:.csv=%.progress.json
+if exist "%PROGRESS_PATH%" (
+    copy /Y "%PROGRESS_PATH%" "%AGENT_DIR%%CSV_FILE:.csv=%.progress.json" >nul
+)
+
 copy /Y "%ZIP_PATH%" "%AGENT_DIR%%ZIP_FILE%" >nul
 
 :: -- Run the agent -----------------------------------------
@@ -153,11 +138,18 @@ cd /d "%AGENT_DIR%"
 node agent.js --csv "%CSV_FILE%" --zip "%ZIP_FILE%" --url "%START_URL%" --force %DESC_ONLY_FLAG%
 set AGENT_EXIT=%ERRORLEVEL%
 
+:: -- Copy progress file back to DROP-HERE (so reruns work) -
+set AGENT_PROGRESS=%AGENT_DIR%%CSV_FILE:.csv=%.progress.json
+if exist "%AGENT_PROGRESS%" (
+    copy /Y "%AGENT_PROGRESS%" "%DROP_DIR%\" >nul
+)
+
 :: -- Clean up copied files from agent root -----------------
 del /f /q "%AGENT_DIR%%CSV_FILE%" >nul 2>&1
 del /f /q "%AGENT_DIR%%ZIP_FILE%" >nul 2>&1
+del /f /q "%AGENT_PROGRESS%" >nul 2>&1
 
-:: -- Archive or report -------------------------------------
+:: -- Archive on success or report failure ------------------
 echo.
 if %AGENT_EXIT% EQU 0 (
     echo  ====================================================
@@ -166,27 +158,24 @@ if %AGENT_EXIT% EQU 0 (
     echo.
     echo  Moving files to archive...
 
-    :: Create timestamped archive subfolder using PowerShell (wmic removed in Win11)
     for /f "delims=" %%T in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmm"') do set TIMESTAMP=%%T
     set ARCHIVE_SUBDIR=%ARCHIVE_DIR%\%TIMESTAMP%
     mkdir "%ARCHIVE_SUBDIR%" >nul 2>&1
 
     move /Y "%CSV_PATH%"  "%ARCHIVE_SUBDIR%\" >nul
     move /Y "%ZIP_PATH%"  "%ARCHIVE_SUBDIR%\" >nul
+    if exist "%PROGRESS_PATH%" move /Y "%PROGRESS_PATH%" "%ARCHIVE_SUBDIR%\" >nul
 
-    :: Remove the DESCRIPTIONS-ONLY flag file if present
+    :: Remove DESCRIPTIONS-ONLY flag file if present
     if exist "%DESC_ONLY_FILE%" del /f /q "%DESC_ONLY_FILE%" >nul 2>&1
 
-    :: Reset START-URL.txt to template for next batch
-    (
-        echo PASTE YOUR FIRST LOT URL BELOW THIS LINE -- DELETE THIS LINE FIRST
-        echo https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXXXX^&PartyId=115
-    ) > "%URL_PATH%"
+    :: Reset START-URL.txt
+    (echo PASTE YOUR FIRST LOT URL BELOW THIS LINE -- DELETE THIS LINE FIRST) > "%URL_PATH%"
+    (echo https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXXXX^&PartyId=115) >> "%URL_PATH%"
 
     echo  Archived to: archive\%TIMESTAMP%\
     echo.
     echo  DROP-HERE is reset and ready for the next batch.
-    echo  Just drop in new files and update START-URL.txt.
 ) else (
     echo  ====================================================
     echo   Some lots failed. Check the output above.
