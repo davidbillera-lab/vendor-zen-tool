@@ -44,7 +44,7 @@ const DOA_EMAIL             = process.env.DOA_EMAIL;
 const DOA_PASSWORD          = process.env.DOA_PASSWORD;
 const DOA_FIRST_LOT_URL_ENV = process.env.DOA_FIRST_LOT_URL;
 
-const LOGIN_URL = `${DOA_BASE_URL}/sub-admin/`;
+const LOGIN_URL = `${DOA_BASE_URL}/Account/Login`;  // redirects to sub-admin after auth
 
 // ── Timeouts ──────────────────────────────────────────────────────────────────
 const NAV_TIMEOUT_MS            = 30_000;   // page navigation
@@ -62,17 +62,22 @@ const SAVE_NAV_TIMEOUT_MS       = 25_000;   // wait for Save & Edit Next navigat
 const SELECTORS = {
 
   // ── Login page ──────────────────────────────────────────────────────────────
+  // Confirmed selectors from live DOA login page (April 2026).
+  // The page has a newsletter popup with input[type="email"] that loads first —
+  // always use the specific MainContent IDs to avoid targeting the wrong field.
   loginEmail: [
+    '#MainContent_Email',               // confirmed — DOA login form
+    'input[name="Email"]',
     'input[name="email"]',
     'input[type="email"]',
     'input[name="username"]',
-    'input[id*="email" i]',
     'input[placeholder*="email" i]',
   ],
   loginPassword: [
+    '#MainContent_Password',            // confirmed — DOA login form
+    'input[name="Password"]',
     'input[name="password"]',
     'input[type="password"]',
-    'input[id*="password" i]',
     'input[placeholder*="password" i]',
   ],
   loginSubmit: [
