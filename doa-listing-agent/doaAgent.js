@@ -352,11 +352,22 @@ async function fillLotForm(page, lot) {
   let ok = true;
 
   // ── Title ──────────────────────────────────────────────────────────────────
+  // DOA pre-fills the title field with the lot number prefix (e.g. "Lot #73 ").
+  // We read the existing value and append our CSV title after it so the prefix
+  // is preserved. If the field is empty we just write the title directly.
   if (title && title.trim()) {
     const titleEl = await findFirst(page, SELECTORS.lotTitle);
     if (titleEl) {
-      await titleEl.locator.fill(title.trim());
-      log.success(`  Title filled: "${title.trim().slice(0, 60)}"`);
+      const existingValue = await titleEl.locator.inputValue().catch(() => '');
+      // Detect a lot-number prefix: anything up to and including the first space
+      // after a number, e.g. "73 " or "Lot #73 " or "Lot 73 - ".
+      // Strategy: if the field already has content, append our title after it
+      // (with a space separator); otherwise just write the title.
+      const newValue = existingValue.trim()
+        ? `${existingValue.trimEnd()} ${title.trim()}`
+        : title.trim();
+      await titleEl.locator.fill(newValue);
+      log.success(`  Title filled: "${newValue.slice(0, 80)}"`);
     } else {
       log.warn(`  Lot #${lot_number}: title field not found — skipping title`);
       ok = false;
@@ -372,12 +383,18 @@ async function fillLotForm(page, lot) {
   if (description && description.trim()) {
     try {
       await page.evaluate((desc) => {
-        // TinyMCE exposes a global `tinymce` object; setContent() replaces
-        // the editor body. Works whether the content is plain text or HTML.
-        if (window.tinymce && window.tinymce.activeEditor) {
-          window.tinymce.activeEditor.setContent(desc);
-        } else if (window.tinymce && window.tinymce.editors && window.tinymce.editors.length > 0) {
-          window.tinymce.editors[0].setContent(desc);
+        // DOA's TinyMCE editor ID is 'EditorDescription' (confirmed April 2026).
+        // Use tinymce.get() by ID first — this works even before the user has
+        // clicked the editor (activeEditor is only set on focus).
+        const ed = (window.tinymce && window.tinymce.get('EditorDescription'))
+          || (window.tinymce && window.tinymce.activeEditor)
+          || (window.tinymce && window.tinymce.editors && window.tinymce.editors[0]);
+        if (ed) {
+          ed.setContent(desc);
+        } else {
+          // Last-resort: write directly to the hidden textarea DOA keeps in sync
+          const ta = document.getElementById('EditorDescription');
+          if (ta) ta.value = desc;
         }
       }, description.trim());
       log.success(`  Description filled (${description.trim().length} chars)`);
