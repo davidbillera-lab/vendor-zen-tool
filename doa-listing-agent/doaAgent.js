@@ -336,6 +336,62 @@ async function uploadImages(page, imagePaths, lotNumber) {
   return true;
 }
 
+// ── Fill title and description from CSV data ─────────────────────────────────
+
+/**
+ * fillLotForm(page, lot)
+ *
+ * Fills the title field and TinyMCE description editor from lot.title and
+ * lot.description (sourced from the CSV). If either field is empty the lot
+ * is still saved — DOA will just show a blank title/description.
+ *
+ * Returns true if both fields were written, false if either was skipped.
+ */
+async function fillLotForm(page, lot) {
+  const { lot_number, title, description } = lot;
+  let ok = true;
+
+  // ── Title ──────────────────────────────────────────────────────────────────
+  if (title && title.trim()) {
+    const titleEl = await findFirst(page, SELECTORS.lotTitle);
+    if (titleEl) {
+      await titleEl.locator.fill(title.trim());
+      log.success(`  Title filled: "${title.trim().slice(0, 60)}"`);
+    } else {
+      log.warn(`  Lot #${lot_number}: title field not found — skipping title`);
+      ok = false;
+    }
+  } else {
+    log.warn(`  Lot #${lot_number}: no title in CSV — leaving title blank`);
+    ok = false;
+  }
+
+  // ── Description (TinyMCE) ──────────────────────────────────────────────────
+  // DOA uses TinyMCE as its description editor. The visible textarea is an
+  // iframe — we set the content via the TinyMCE JS API instead of typing.
+  if (description && description.trim()) {
+    try {
+      await page.evaluate((desc) => {
+        // TinyMCE exposes a global `tinymce` object; setContent() replaces
+        // the editor body. Works whether the content is plain text or HTML.
+        if (window.tinymce && window.tinymce.activeEditor) {
+          window.tinymce.activeEditor.setContent(desc);
+        } else if (window.tinymce && window.tinymce.editors && window.tinymce.editors.length > 0) {
+          window.tinymce.editors[0].setContent(desc);
+        }
+      }, description.trim());
+      log.success(`  Description filled (${description.trim().length} chars)`);
+    } catch (descErr) {
+      log.warn(`  Lot #${lot_number}: could not set TinyMCE description — ${descErr.message}`);
+      ok = false;
+    }
+  } else {
+    log.warn(`  Lot #${lot_number}: no description in CSV — leaving description blank`);
+  }
+
+  return ok;
+}
+
 // ── Trigger AI generation ─────────────────────────────────────────────────────
 
 /**
@@ -480,7 +536,14 @@ async function saveLot(page, lotNumber) {
  * processLot(page, lot, imagePaths)
  *
  * The browser must already be on the correct EditAuction page.
- * Uploads images, triggers AI, then saves.
+ *
+ * Behaviour depends on whether lot.title / lot.description are populated:
+ *
+ *   CSV+Zip mode  — lot.title and lot.description come from the CSV.
+ *                   fillLotForm() writes them directly; no AI dropdown needed.
+ *
+ *   Zip-only mode — lot.title and lot.description are empty strings.
+ *                   triggerAiGeneration() is called instead to use DOA's AI.
  *
  * Returns the URL of the next page.
  */
@@ -498,11 +561,19 @@ async function processLot(page, lot, imagePaths) {
   await page.waitForSelector('#txtTitle', { state: 'visible', timeout: 20_000 });
   await page.waitForTimeout(800); // let TinyMCE and Uppy finish initialising
 
-  // 1. Upload images
-  await uploadImages(page, imagePaths, lot.lot_number);
+  // 1. Fill title and description
+  const hasCsvData = (lot.title && lot.title.trim()) || (lot.description && lot.description.trim());
 
-  // 2. Trigger AI generation
-  await triggerAiGeneration(page, lot.lot_number);
+  if (hasCsvData) {
+    // CSV+Zip mode: write title/description directly from CSV data
+    await fillLotForm(page, lot);
+  } else {
+    // Zip-only mode: use DOA's built-in AI dropdown
+    await triggerAiGeneration(page, lot.lot_number);
+  }
+
+  // 2. Upload images
+  await uploadImages(page, imagePaths, lot.lot_number);
 
   // 3. Save and advance
   const nextUrl = await saveLot(page, lot.lot_number);
