@@ -97,10 +97,10 @@ const SELECTORS = {
   ],
 
   // ── Lot edit form ───────────────────────────────────────────────────────────
+  // Confirmed selectors from live DOA EditAuction page (April 2026).
   lotTitle: [
-    'input[name="title"]',
-    'input[name="lot_title"]',
-    'input[name="Title"]',
+    '#txtTitle',                        // confirmed — DOA lot title field
+    'input[name="ctl00$MainContent$txtTitle"]',
     'input[placeholder*="title" i]',
     'input[id*="title" i]',
   ],
@@ -116,13 +116,14 @@ const SELECTORS = {
   ],
 
   // ── Image upload widget ─────────────────────────────────────────────────────
-  // DOA uses a drag-and-drop uploader. Playwright's setInputFiles() works on
-  // the hidden <input type="file"> element even when it's not visible.
+  // DOA uses the Uppy drag-and-drop widget. The file input is intentionally
+  // hidden (class: uppy-Dashboard-input, name: files[]). Playwright's
+  // setInputFiles() works on hidden inputs — no visibility check needed.
   lotFileUpload: [
+    'input.uppy-Dashboard-input',       // confirmed — Uppy widget on DOA
+    'input[name="files[]"]',            // Uppy name attribute
+    'input[type="file"][accept="image/*"]', // generic fallback
     'input[type="file"]',
-    'input[name*="image"]',
-    'input[name*="photo"]',
-    'input[accept*="image"]',
   ],
 
   // Thumbnail elements that appear after a successful upload
@@ -284,15 +285,28 @@ async function uploadImages(page, imagePaths, lotNumber) {
     return false;
   }
 
-  const fileInputEl = await findFirst(page, SELECTORS.lotFileUpload);
-  if (!fileInputEl) {
+  // Uppy's file input is intentionally hidden — use locator() without a
+  // visibility check, then call setInputFiles() directly.
+  let fileInputLocator = null;
+  for (const sel of SELECTORS.lotFileUpload) {
+    try {
+      const count = await page.locator(sel).count();
+      if (count > 0) {
+        fileInputLocator = page.locator(sel).first();
+        log.info(`  File input found: ${sel}`);
+        break;
+      }
+    } catch { /* try next */ }
+  }
+
+  if (!fileInputLocator) {
     log.warn(`  Lot #${lotNumber}: No file upload input found — skipping images`);
     log.warn('  Run: node inspect-form.js to check the upload widget on this page');
     return false;
   }
 
   log.info(`  Uploading ${imagePaths.length} image(s) for lot #${lotNumber}…`);
-  await fileInputEl.locator.setInputFiles(imagePaths);
+  await fileInputLocator.setInputFiles(imagePaths);
 
   // Wait for network to go quiet (upload requests complete)
   log.info('  Waiting for upload to complete (watching network)…');
@@ -478,9 +492,11 @@ async function processLot(page, lot, imagePaths) {
     );
   }
 
-  // Wait for the form to be interactive
-  await page.waitForSelector('input', { state: 'visible', timeout: 15_000 });
-  await page.waitForTimeout(800); // let TinyMCE and any JS finish initialising
+  // Wait for the form to be interactive — wait for the title field specifically.
+  // DOA's form has many hidden ASP.NET inputs; waiting for any 'input' to be
+  // visible will always resolve to a hidden field and time out.
+  await page.waitForSelector('#txtTitle', { state: 'visible', timeout: 20_000 });
+  await page.waitForTimeout(800); // let TinyMCE and Uppy finish initialising
 
   // 1. Upload images
   await uploadImages(page, imagePaths, lot.lot_number);
