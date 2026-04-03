@@ -378,23 +378,41 @@ async function fillLotForm(page, lot) {
   }
 
   // ── Description (TinyMCE) ──────────────────────────────────────────────────
-  // DOA uses TinyMCE as its description editor. The visible textarea is an
-  // iframe — we set the content via the TinyMCE JS API instead of typing.
+  // DOA uses TinyMCE 7.4.1. The editor is present in the DOM immediately but
+  // its internal parser is not ready until the editor fires its 'init' event.
+  // Calling setContent() before init completes throws:
+  //   "TypeError: Cannot read properties of undefined (reading 'parse')"
+  // Fix: poll until ed.initialized === true (max 10s), then write using the
+  // hidden textarea directly via execCommand to bypass the parser entirely.
   if (description && description.trim()) {
     try {
+      await page.waitForFunction(() => {
+        const ed = window.tinymce && window.tinymce.get('EditorDescription');
+        return ed && ed.initialized === true;
+      }, { timeout: 10000 });
+
       await page.evaluate((desc) => {
-        // DOA's TinyMCE editor ID is 'EditorDescription' (confirmed April 2026).
-        // Use tinymce.get() by ID first — this works even before the user has
-        // clicked the editor (activeEditor is only set on focus).
-        const ed = (window.tinymce && window.tinymce.get('EditorDescription'))
-          || (window.tinymce && window.tinymce.activeEditor)
-          || (window.tinymce && window.tinymce.editors && window.tinymce.editors[0]);
-        if (ed) {
-          ed.setContent(desc);
+        const ed = window.tinymce.get('EditorDescription');
+        if (ed && ed.initialized) {
+          // Use execCommand('mceSetContent') which is safe even before the
+          // schema parser is fully warm — it bypasses the parse step.
+          try {
+            ed.execCommand('mceSetContent', false, desc);
+          } catch (e1) {
+            // Fallback: write to the underlying textarea and fire change event
+            const ta = document.getElementById('EditorDescription');
+            if (ta) {
+              ta.value = desc;
+              ta.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }
         } else {
-          // Last-resort: write directly to the hidden textarea DOA keeps in sync
+          // Editor not found — write directly to the textarea
           const ta = document.getElementById('EditorDescription');
-          if (ta) ta.value = desc;
+          if (ta) {
+            ta.value = desc;
+            ta.dispatchEvent(new Event('change', { bubbles: true }));
+          }
         }
       }, description.trim());
       log.success(`  Description filled (${description.trim().length} chars)`);
