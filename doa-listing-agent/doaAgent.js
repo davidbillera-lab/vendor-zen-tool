@@ -336,12 +336,106 @@ async function uploadImages(page, imagePaths, lotNumber) {
   return true;
 }
 
-// ── Fill title and description from CSV data ─────────────────────────────────
+// ── TinyMCE description injection ───────────────────────────────────────────────
 
 /**
- * fillLotForm(page, lot)
+ * setTinyMceDescription(page, lotNumber, description)
  *
- * Fills the title field and TinyMCE description editor from lot.title and
+ * Writes plain text into the TinyMCE editor using a cascade of strategies.
+ * Does NOT rely on ed.initialized (which never becomes true on DOA's page).
+ *
+ * Strategy order:
+ *   1. Wait up to 8s for the TinyMCE iframe to appear (confirms JS loaded)
+ *   2. Try tinymce.get() → setContent() — cleanest approach
+ *   3. Try writing directly to the iframe's body element via contentDocument
+ *   4. Fall back to the hidden textarea + change event
+ *
+ * Returns true if any strategy succeeded, false if all failed.
+ */
+async function setTinyMceDescription(page, lotNumber, description) {
+  // Step 1: Wait for the TinyMCE iframe to appear (max 8s)
+  // The iframe has id="EditorDescription_ifr" in standard TinyMCE builds.
+  try {
+    await page.waitForSelector(
+      'iframe[id*="EditorDescription"], iframe[id*="editor_description" i], .tox-edit-area iframe',
+      { timeout: 8000 }
+    );
+  } catch {
+    // iframe didn't appear — TinyMCE may not be loaded; continue anyway
+    log.warn(`  Lot #${lotNumber}: TinyMCE iframe not found — attempting textarea fallback`);
+  }
+
+  // Step 2–4: Try strategies inside page.evaluate
+  const result = await page.evaluate((desc) => {
+    const strategies = [];
+
+    // Strategy 2: tinymce.get() → setContent()
+    try {
+      if (window.tinymce) {
+        // Try by known ID first, then fall back to first editor in the collection
+        const edById = window.tinymce.get('EditorDescription');
+        const ed = edById || (window.tinymce.editors && window.tinymce.editors[0]);
+        if (ed) {
+          ed.setContent(desc);
+          strategies.push('tinymce.setContent');
+          return { ok: true, strategy: 'tinymce.setContent' };
+        }
+      }
+    } catch (e) {
+      strategies.push(`tinymce.setContent failed: ${e.message}`);
+    }
+
+    // Strategy 3: write directly to the iframe body
+    try {
+      const iframe =
+        document.getElementById('EditorDescription_ifr') ||
+        document.querySelector('iframe[id*="EditorDescription"]') ||
+        document.querySelector('.tox-edit-area iframe');
+      if (iframe && iframe.contentDocument) {
+        const body = iframe.contentDocument.body;
+        if (body) {
+          body.innerHTML = desc.replace(/\n/g, '<br>');
+          strategies.push('iframe.body.innerHTML');
+          return { ok: true, strategy: 'iframe.body.innerHTML' };
+        }
+      }
+    } catch (e) {
+      strategies.push(`iframe write failed: ${e.message}`);
+    }
+
+    // Strategy 4: hidden textarea fallback
+    try {
+      const ta =
+        document.getElementById('EditorDescription') ||
+        document.querySelector('textarea[id*="EditorDescription" i]') ||
+        document.querySelector('textarea[name*="description" i]');
+      if (ta) {
+        ta.value = desc;
+        ta.dispatchEvent(new Event('input',  { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+        strategies.push('textarea.value');
+        return { ok: true, strategy: 'textarea.value' };
+      }
+    } catch (e) {
+      strategies.push(`textarea write failed: ${e.message}`);
+    }
+
+    return { ok: false, strategies };
+  }, description);
+
+  if (result.ok) {
+    log.success(`  Description filled via ${result.strategy} (${description.length} chars)`);
+    return true;
+  } else {
+    log.warn(`  Lot #${lotNumber}: all description strategies failed: ${JSON.stringify(result.strategies)}`);
+    return false;
+  }
+}
+
+// ── Fill title and description from CSV data ─────────────────────────────────────────
+
+/**
+ * fillLotForm(page, lot)ills the title field and TinyMCE description editor from lot.title and
  * lot.description (sourced from the CSV). If either field is empty the lot
  * is still saved — DOA will just show a blank title/description.
  *
@@ -378,48 +472,15 @@ async function fillLotForm(page, lot) {
   }
 
   // ── Description (TinyMCE) ──────────────────────────────────────────────────
-  // DOA uses TinyMCE 7.4.1. The editor is present in the DOM immediately but
-  // its internal parser is not ready until the editor fires its 'init' event.
-  // Calling setContent() before init completes throws:
-  //   "TypeError: Cannot read properties of undefined (reading 'parse')"
-  // Fix: poll until ed.initialized === true (max 10s), then write using the
-  // hidden textarea directly via execCommand to bypass the parser entirely.
+  // DOA uses TinyMCE. We use a multi-strategy approach that does NOT rely on
+  // ed.initialized (which never becomes true on this page):
+  //   1. Wait for the TinyMCE iframe to appear in the DOM (confirms editor loaded)
+  //   2. Try tinymce.get() with setContent — works if editor object is available
+  //   3. Try writing directly to the iframe body via contentDocument
+  //   4. Fall back to writing to the hidden textarea + fire change event
   if (description && description.trim()) {
-    try {
-      await page.waitForFunction(() => {
-        const ed = window.tinymce && window.tinymce.get('EditorDescription');
-        return ed && ed.initialized === true;
-      }, { timeout: 10000 });
-
-      await page.evaluate((desc) => {
-        const ed = window.tinymce.get('EditorDescription');
-        if (ed && ed.initialized) {
-          // Use execCommand('mceSetContent') which is safe even before the
-          // schema parser is fully warm — it bypasses the parse step.
-          try {
-            ed.execCommand('mceSetContent', false, desc);
-          } catch (e1) {
-            // Fallback: write to the underlying textarea and fire change event
-            const ta = document.getElementById('EditorDescription');
-            if (ta) {
-              ta.value = desc;
-              ta.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-          }
-        } else {
-          // Editor not found — write directly to the textarea
-          const ta = document.getElementById('EditorDescription');
-          if (ta) {
-            ta.value = desc;
-            ta.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        }
-      }, description.trim());
-      log.success(`  Description filled (${description.trim().length} chars)`);
-    } catch (descErr) {
-      log.warn(`  Lot #${lot_number}: could not set TinyMCE description — ${descErr.message}`);
-      ok = false;
-    }
+    const descResult = await setTinyMceDescription(page, lot_number, description.trim());
+    if (!descResult) ok = false;
   } else {
     log.warn(`  Lot #${lot_number}: no description in CSV — leaving description blank`);
   }
@@ -638,40 +699,14 @@ async function processLot(page, lot, imagePaths, options = {}) {
 /**
  * fillDescriptionOnly(page, lot)
  *
- * Writes only the TinyMCE description field. Used in --descriptions-only mode
- * to patch lots whose titles and images are already uploaded.
+ * Writes only the TinyMCE description field. Used in --descriptions-only mode.
  */
 async function fillDescriptionOnly(page, lot) {
   const { lot_number, description } = lot;
-  try {
-    await page.waitForFunction(() => {
-      const ed = window.tinymce && window.tinymce.get('EditorDescription');
-      return ed && ed.initialized === true;
-    }, { timeout: 10000 });
-
-    await page.evaluate((desc) => {
-      const ed = window.tinymce.get('EditorDescription');
-      if (ed && ed.initialized) {
-        try {
-          ed.execCommand('mceSetContent', false, desc);
-        } catch (e1) {
-          const ta = document.getElementById('EditorDescription');
-          if (ta) {
-            ta.value = desc;
-            ta.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        }
-      } else {
-        const ta = document.getElementById('EditorDescription');
-        if (ta) {
-          ta.value = desc;
-          ta.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      }
-    }, description.trim());
-    log.success(`  Description patched (${description.trim().length} chars)`);
-  } catch (descErr) {
-    log.warn(`  Lot #${lot_number}: could not patch description — ${descErr.message}`);
+  if (description && description.trim()) {
+    await setTinyMceDescription(page, lot_number, description.trim());
+  } else {
+    log.warn(`  Lot #${lot_number}: no description in CSV — nothing to patch`);
   }
 }
 
