@@ -217,13 +217,19 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: 
       const refined = data.listing;
       setVerifyResult({ verified: data.verified, confidence: data.confidence, notes: data.notes });
 
+      const parseNum = (v: any, fallback: number) => {
+        if (v == null) return fallback;
+        const n = typeof v === 'string' ? parseFloat(v.replace(/[^0-9.]/g, '')) : Number(v);
+        return isNaN(n) ? fallback : n;
+      };
+
       setFormData(prev => ({
         ...prev,
         title: refined.title || prev.title,
         description: refined.description || prev.description,
-        low_est: refined.lowEst ?? prev.low_est,
-        high_est: refined.highEst ?? prev.high_est,
-        start_price: refined.startPrice ?? prev.start_price,
+        low_est: parseNum(refined.lowEst, prev.low_est),
+        high_est: parseNum(refined.highEst, prev.high_est),
+        start_price: parseNum(refined.startPrice, prev.start_price),
         condition: refined.condition || prev.condition,
         category: refined.category || prev.category,
       }));
