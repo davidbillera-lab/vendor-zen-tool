@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Bash(cd:*)",
+      "Bash(node --env-file*)",
+      "Bash(echo:*)",
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit"
+    ]
+  }
+}
