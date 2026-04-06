@@ -172,11 +172,17 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt
       const refined = data.listing;
       setVerifyResult({ verified: data.verified, confidence: data.confidence, notes: data.notes });
 
+      const parseNum = (v: any, fallback: number) => {
+        if (v == null) return fallback;
+        const n = typeof v === 'string' ? parseFloat(v.replace(/[^0-9.]/g, '')) : Number(v);
+        return isNaN(n) ? fallback : n;
+      };
+
       setFormData(prev => ({
         ...prev,
         title: (refined.title || prev.title).substring(0, 100),
         description: refined.description || prev.description,
-        starting_bid: refined.startingBid ?? prev.starting_bid,
+        starting_bid: parseNum(refined.startingBid, prev.starting_bid),
       }));
 
       toast({
