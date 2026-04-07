@@ -508,6 +508,11 @@ export function EbayBatchPanel({
 
     const fullHeaders = [...baseHeaders, ...specificHeaders];
 
+    // Categories that do NOT accept condition 3000 (Used) — only New (1000) or New Other (1500).
+    // eBay error 21916883 if you use an invalid condition for the category.
+    // Vintage/shelf-worn unbuilt kits should use 1500 (New Other).
+    const MODEL_KIT_CATEGORIES = new Set([31787, 37278, 51023, 19063, 2611]);
+
     // eBay ConditionID mapping
     const conditionMap: Record<string, string> = {
       "New": "1000",
@@ -569,7 +574,13 @@ export function EbayBatchPanel({
         "1",                                                             // Quantity
         skipImages ? "" : (row.image_urls || []).join("|"),               // Item photo URL
         "",                                                              // VideoID
-        conditionMap[row.condition || ""] || "3000",                      // Condition ID
+        (() => {
+          const cid = conditionMap[row.condition || ""] || "3000";
+          const numCat = parseInt(categoryId || "0");
+          // Model kit categories only accept 1000 (New) or 1500 (New Other) — not 3000 (Used)
+          if (MODEL_KIT_CATEGORIES.has(numCat) && cid === "3000") return "1500";
+          return cid;
+        })(),                                                              // Condition ID
         toHtmlDescription(row.description || ""),                        // Description
         "FixedPrice",                                                    // Format
         "GTC",                                                           // Duration
