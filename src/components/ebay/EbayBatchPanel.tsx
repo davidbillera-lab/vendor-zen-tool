@@ -927,18 +927,18 @@ export function EbayBatchPanel({
       return;
     }
 
-    // Validation 3: Check for missing required item specifics (Department, Size Type for clothing)
+    // Validation 3: Warn on missing required item specifics — non-blocking so wrong AI categories don't prevent export
     const missingSpecsLots = getMissingItemSpecificsLots();
     if (missingSpecsLots.length > 0) {
-      const preview = missingSpecsLots.slice(0, 3).map(l => 
+      const preview = missingSpecsLots.slice(0, 3).map(l =>
         `#${l.lotNumber} (${l.missing.join(", ")})`
       ).join("; ");
       toast({
-        title: "Missing Required Item Specifics",
-        description: `Clothing categories require Department and Size Type. Fix: ${preview}${missingSpecsLots.length > 3 ? "…" : ""}`,
-        variant: "destructive",
+        title: "Warning: Possible Wrong Category",
+        description: `Lots flagged for missing specifics (may be wrong AI category): ${preview}${missingSpecsLots.length > 3 ? "…" : ""}. CSV will still download — fix category IDs if eBay rejects.`,
+        variant: "default",
       });
-      return;
+      // Non-blocking — fall through to export
     }
 
     // Validation 4: Check for location
