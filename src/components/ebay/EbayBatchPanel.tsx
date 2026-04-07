@@ -287,6 +287,26 @@ export function EbayBatchPanel({
     51028: { replacement: 31787, label: "Models & Kits parent → Military Model Kits 31787" },
     20601: { replacement: 20668, label: "Bedding parent → Blankets & Throws 20668" },
     19130: { replacement: 262318, label: "Old HO Trains → HO Scale 262318" },
+    2611: { replacement: 31787, label: "Aircraft Model Kits 2611 deprecated — eBay remaps to games category. Use Military Model Kits 31787" },
+  };
+
+  // Per-category required item specifics with auto-fill defaults.
+  // "default" = value to inject automatically if missing (blank string = must be filled manually).
+  // Add new entries here as eBay rejects listings for missing fields.
+  const CATEGORY_REQUIRED_SPECIFICS: Record<number, { field: string; default: string }[]> = {
+    // Military Vehicle Model Kits — requires Shade (eBay error 21919303)
+    31787: [{ field: "Shade", default: "Multicolor" }],
+    // Ship/Boat Model Kits
+    37278: [{ field: "Shade", default: "Multicolor" }],
+    // Car/Truck Model Kits
+    51023: [{ field: "Shade", default: "Multicolor" }],
+    // Figure Model Kits
+    19063: [{ field: "Shade", default: "Multicolor" }],
+    // Blankets & Throws — eBay remapped to 133704 which requires Model (eBay error 21919303)
+    20668: [{ field: "Model", default: "" }],
+    133704: [{ field: "Model", default: "" }],
+    // Camcorders — Condition 3000 (Used) is valid, but Condition 1000 (New) is not for most camcorder subcats
+    // (no auto-fill needed, just a reminder that condition matters)
   };
 
   // Known valid leaf categories for quick reference
@@ -352,9 +372,8 @@ export function EbayBatchPanel({
     // Toys
     261068: "Action Figures",
     180349: "Board Games",
-    // Model Kits
-    31787: "Military Vehicle Model Kits",
-    2611: "Aircraft Model Kits",
+    // Model Kits (use 31787 for all military/aircraft kits — 2611 is deprecated, eBay remaps it to a games category)
+    31787: "Military & Aircraft Model Kits",
     37278: "Ship/Boat Model Kits",
     51023: "Car/Truck Model Kits",
     19063: "Figure Model Kits",
@@ -407,7 +426,17 @@ export function EbayBatchPanel({
           missing.push("Size Type");
         }
       }
-      
+
+      // Check category-specific required fields that have no auto-fill default
+      const catRequired = CATEGORY_REQUIRED_SPECIFICS[categoryId] || [];
+      const specs2 = row.item_specifics || {};
+      catRequired.forEach(({ field, default: def }) => {
+        // Only warn if there's no default (empty default = must be filled manually)
+        if (def === "" && !specs2[field]) {
+          missing.push(field);
+        }
+      });
+
       if (missing.length > 0) {
         results.push({ lotNumber: row.lot_number ?? (idx + 1), missing });
       }
@@ -422,12 +451,15 @@ export function EbayBatchPanel({
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
     // Collect ALL item specifics across rows - ensure required ones come first
-    const requiredSpecifics = ["Brand", "Type", "Department", "Size Type", "Size", "Color", "Material", "Style"];
+    const requiredSpecifics = ["Brand", "Type", "Department", "Size Type", "Size", "Color", "Shade", "Material", "Style"];
     const allSpecifics = new Set<string>(requiredSpecifics);
     rows.forEach(r => {
       if (r.item_specifics) {
         Object.keys(r.item_specifics).forEach(k => allSpecifics.add(k));
       }
+      // Ensure columns for any category-required fields exist in the header
+      const catId = parseInt(r.category?.match(/\d{3,}/)?.[0] || "0");
+      (CATEGORY_REQUIRED_SPECIFICS[catId] || []).forEach(({ field }) => allSpecifics.add(field));
     });
     
     // C: prefix for item specifics columns
@@ -517,6 +549,12 @@ export function EbayBatchPanel({
       // Build item specifics values
       const specs = { ...(row.item_specifics || {}) };
       if (row.brand && !specs["Brand"]) specs["Brand"] = row.brand;
+
+      // Auto-inject category-required specifics that have a default value
+      const numCatId = parseInt(categoryId || "0");
+      (CATEGORY_REQUIRED_SPECIFICS[numCatId] || []).forEach(({ field, default: def }) => {
+        if (def !== "" && !specs[field]) specs[field] = def;
+      });
       
       const base = [
         "Add",                                                           // *Action
