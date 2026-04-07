@@ -534,14 +534,9 @@ export function EbayBatchPanel({
       "For parts or not working": "7000",
     };
 
-    const getShippingService = (type: string | null): string => {
-      switch (type) {
-        case "free": return "USPSMedia";
-        case "flat": return "USPSPriority";
-        case "calculated": return "USPSPriority";
-        default: return "USPSMedia";
-      }
-    };
+    // Always use USPS Ground Advantage flat rate $9.98 — hardcoded per JSG standard shipping policy
+    const EBAY_SHIPPING_SERVICE = "USPSGroundAdvantage";
+    const EBAY_SHIPPING_COST = "9.98";
 
     const csvRows = rows.map((row, index) => {
       // Extract numeric category ID
@@ -549,7 +544,7 @@ export function EbayBatchPanel({
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
       const categoryId = (extractedCategoryId || fallbackCategoryId).replace(/\.0$/, '').trim();
       
-      const shippingCost = row.shipping_type === "free" ? "0" : (row.shipping_cost?.toString() || "0");
+      // shippingCost unused — all listings use EBAY_SHIPPING_COST hardcoded above
       
       // Build item specifics values
       const specs = { ...(row.item_specifics || {}) };
@@ -590,8 +585,8 @@ export function EbayBatchPanel({
         row.minimum_best_offer?.toString() || "",                        // Minimum Best Offer Price
         row.best_offer_enabled === true ? "0" : "1",                     // Immediate pay required (0 when Best Offer on, 1 otherwise)
         savedLocation,                                                   // Location
-        getShippingService(row.shipping_type),                           // Shipping service 1 option
-        shippingCost,                                                    // Shipping service 1 cost
+        EBAY_SHIPPING_SERVICE,                                            // Shipping service 1 option
+        EBAY_SHIPPING_COST,                                              // Shipping service 1 cost
         "1",                                                             // Shipping service 1 priority
         "",                                                              // Shipping service 2 option
         "",                                                              // Shipping service 2 cost
