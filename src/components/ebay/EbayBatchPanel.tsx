@@ -283,6 +283,10 @@ export function EbayBatchPanel({
     11450: { replacement: 57990, label: "Clothing parent → pick a leaf" },
     550: { replacement: 360, label: "Art parent → Art Prints 360" },
     20081: { replacement: 162032, label: "Home Décor parent → Figurines 162032" },
+    1188: { replacement: 31787, label: "Toys & Hobbies parent → Military Model Kits 31787" },
+    51028: { replacement: 31787, label: "Models & Kits parent → Military Model Kits 31787" },
+    20601: { replacement: 20668, label: "Bedding parent → Blankets & Throws 20668" },
+    19130: { replacement: 262318, label: "Old HO Trains → HO Scale 262318" },
   };
 
   // Known valid leaf categories for quick reference
@@ -322,6 +326,12 @@ export function EbayBatchPanel({
     112581: "Table Lamps",
     20706: "Floor Lamps",
     45510: "Area Rugs",
+    // Bedding
+    20668: "Blankets & Throws",
+    20677: "Bed Pillows",
+    20672: "Comforters & Sets",
+    20675: "Sheet Sets",
+    20681: "Mattress Pads & Toppers",
     // Shoes
     15709: "Men's Athletic Shoes",
     24087: "Men's Loafers",
@@ -336,10 +346,24 @@ export function EbayBatchPanel({
     // Electronics
     112529: "Wireless Headphones",
     31388: "Digital Cameras",
+    11724: "Camcorders & Video Cameras",
+    15230: "Vintage Cameras",
     139971: "Video Game Consoles",
     // Toys
     261068: "Action Figures",
     180349: "Board Games",
+    // Model Kits
+    31787: "Military Vehicle Model Kits",
+    2611: "Aircraft Model Kits",
+    37278: "Ship/Boat Model Kits",
+    51023: "Car/Truck Model Kits",
+    19063: "Figure Model Kits",
+    // Model Trains
+    262318: "HO Scale Trains",
+    47006: "N Scale Trains",
+    47004: "O Scale Trains",
+    47002: "G Scale Trains",
+    4748: "Model Train Accessories",
     // Seasonal / Holiday
     33164: "Christmas Wreaths",
     170091: "Christmas Ornaments",
@@ -534,8 +558,16 @@ export function EbayBatchPanel({
       ];
 
       // Add item specifics values in header order
+      // Note: eBay caps the Model field at 65 characters — truncate to avoid rejection
+      const SPECIFIC_CHAR_LIMITS: Record<string, number> = {
+        "Model": 65,
+        "MPN": 65,
+        "Series": 65,
+      };
       const specificValues = Array.from(allSpecifics).map(s => {
-        return sanitizeForCSV(specs[s] || "");
+        const val = sanitizeForCSV(specs[s] || "");
+        const limit = SPECIFIC_CHAR_LIMITS[s];
+        return limit ? val.substring(0, limit) : val;
       });
 
       return [...base, ...specificValues];

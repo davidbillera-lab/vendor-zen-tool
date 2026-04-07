@@ -108,9 +108,31 @@ VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
 - Clocks: 20562
 - Baskets: 20563
 - Pottery & Glass: 870
+- Military Vehicle Model Kits (tanks, trucks, armor — any scale): 31787
+- Aircraft Model Kits (planes, helicopters — any scale): 2611
+- Ship/Boat Model Kits: 37278
+- Car/Truck Model Kits (non-military): 51023
+- Figure Model Kits (sci-fi, fantasy, anime): 19063
+- HO Scale Model Trains: 262318
+- N Scale Model Trains: 47006
+- O Scale Model Trains: 47004
+- G Scale Model Trains: 47002
+- Model Train Accessories: 4748
+- Blankets & Throws: 20668
+- Bed Pillows: 20677
+- Comforters & Sets: 20672
+- Sheet Sets: 20675
+- Mattress Pads & Toppers: 20681
+- Camcorders & Video Cameras (working): 11724
+- Camcorders & Video Cameras (parts/not working): 11724
+- Vintage Cameras & Equipment: 15230
+- Camera Lenses: 30106
 
 IMPORTANT RULES:
 - NEVER use parent/intermediate categories (e.g., 11450 "Clothing, Shoes & Accessories" is a PARENT - do not use it)
+- NEVER use 1188 "Toys & Hobbies" — it is a top-level PARENT. Always pick the specific leaf (e.g., 31787 for military model kits, 2611 for aircraft kits, 261068 for action figures)
+- NEVER use 20601 "Bedding" — it is a PARENT. Use the specific leaf (e.g., 20668 for blankets/throws)
+- NEVER use 51028 "Models & Kits" — it is a PARENT. Use the specific model type leaf above
 - If an item is seasonal décor (wreaths, ornaments, etc.), use the Holiday/Seasonal category tree, NOT "Home Décor" generically
 - The categoryId MUST be a number, not a string
 - When in doubt, pick from the VERIFIED list above rather than guessing
@@ -599,6 +621,10 @@ serve(async (req) => {
         281: 261068,     // Toys parent → Action Figures
         625: 112529,     // Audio parent → Wireless Headphones
         14339: 31388,    // Cameras parent → Digital Cameras
+        1188: 31787,     // Toys & Hobbies top-level parent → Military Vehicle Model Kits (fallback)
+        51028: 31787,    // Models & Kits parent → Military Vehicle Model Kits (fallback)
+        20601: 20668,    // Bedding parent → Blankets & Throws (fallback)
+        19130: 262318,   // Old HO Trains category → HO Scale (eBay's own remap)
       };
 
       if (typeof anyListing['categoryId'] === 'number') {
