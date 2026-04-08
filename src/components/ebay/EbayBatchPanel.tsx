@@ -394,10 +394,10 @@ export function EbayBatchPanel({
   // Get lots missing required item specifics for their category
   // Note: clothing-category check removed — JSG deals in liquidation/estate items, not clothing.
   // AI sometimes assigns wrong clothing category IDs; that check caused false blocking errors.
-  const getMissingItemSpecificsLots = (): { lotNumber: number; missing: string[] }[] => {
+  const getMissingItemSpecificsLots = (sourceRows: EbayRow[] = rows): { lotNumber: number; missing: string[] }[] => {
     const results: { lotNumber: number; missing: string[] }[] = [];
 
-    rows.forEach((row, idx) => {
+    sourceRows.forEach((row, idx) => {
       const categoryId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
       const missing: string[] = [];
 
@@ -421,13 +421,13 @@ export function EbayBatchPanel({
 
   // Generate CSV content using eBay's official category listing template format
   // Matches the template downloaded from Seller Hub Reports (Version=1193)
-  const generateCSVContent = (skipImages: boolean = false) => {
+  const generateCSVContent = (skipImages: boolean = false, sourceRows: EbayRow[] = rows) => {
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
     
     // Collect ALL item specifics across rows - ensure required ones come first
     const requiredSpecifics = ["Brand", "Type", "Department", "Size Type", "Size", "Color", "Shade", "Material", "Style"];
     const allSpecifics = new Set<string>(requiredSpecifics);
-    rows.forEach(r => {
+    sourceRows.forEach(r => {
       if (r.item_specifics) {
         Object.keys(r.item_specifics).forEach(k => allSpecifics.add(k));
       }
@@ -512,7 +512,7 @@ export function EbayBatchPanel({
     const EBAY_SHIPPING_SERVICE = "USPSGroundAdvantage";
     const EBAY_SHIPPING_COST = "9.98";
 
-    const csvRows = rows.map((row, index) => {
+    const csvRows = sourceRows.map((row, index) => {
       // Extract numeric category ID
       const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
@@ -610,9 +610,9 @@ export function EbayBatchPanel({
     return csvContent;
   };
 
-  const getMissingCategoryLots = (): number[] => {
+  const getMissingCategoryLots = (sourceRows: EbayRow[] = rows): number[] => {
     const missing: number[] = [];
-    rows.forEach((row, idx) => {
+    sourceRows.forEach((row, idx) => {
       const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
       const categoryId = extractedCategoryId || fallbackCategoryId;
@@ -624,9 +624,9 @@ export function EbayBatchPanel({
   };
 
   // Get lots with deprecated/remapped categories and auto-fix them
-  const getDeprecatedCategoryLots = (): { lotNumber: number; oldCat: number; newCat: number; label: string }[] => {
+  const getDeprecatedCategoryLots = (sourceRows: EbayRow[] = rows): { lotNumber: number; oldCat: number; newCat: number; label: string }[] => {
     const results: { lotNumber: number; oldCat: number; newCat: number; label: string }[] = [];
-    rows.forEach((row, idx) => {
+    sourceRows.forEach((row, idx) => {
       const catId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
       if (catId && DEPRECATED_CATEGORIES[catId]) {
         const dep = DEPRECATED_CATEGORIES[catId];
@@ -642,31 +642,37 @@ export function EbayBatchPanel({
   };
 
   // Auto-fix deprecated categories in batch
-  const fixDeprecatedCategories = async () => {
-    const deprecated = getDeprecatedCategoryLots();
-    if (deprecated.length === 0) return;
+  const fixDeprecatedCategories = async (sourceRows: EbayRow[] = rows): Promise<EbayRow[]> => {
+    const deprecated = getDeprecatedCategoryLots(sourceRows);
+    if (deprecated.length === 0) return sourceRows;
 
     const updates = deprecated.map(d => {
-      const row = rows.find(r => r.lot_number === d.lotNumber || rows.indexOf(r) === d.lotNumber - 1);
+      const row = sourceRows.find((r, idx) => r.lot_number === d.lotNumber || idx === d.lotNumber - 1);
       if (!row) return null;
       return { id: row.id, newCat: String(d.newCat) };
     }).filter(Boolean) as { id: string; newCat: string }[];
 
-    for (const u of updates) {
-      await supabase.from('ebay_batch_rows').update({ category: u.newCat }).eq('id', u.id);
-    }
+    if (updates.length === 0) return sourceRows;
 
-    onRowsChange(rows.map(r => {
-      const hit = updates.find(u => u.id === r.id);
-      return hit ? { ...r, category: hit.newCat } : r;
-    }));
+    await Promise.all(
+      updates.map((u) =>
+        supabase.from('ebay_batch_rows').update({ category: u.newCat }).eq('id', u.id)
+      )
+    );
 
-    toast({ title: "Categories fixed", description: `Updated ${updates.length} deprecated category ID(s) to current ones.` });
+    const updateMap = new Map(updates.map((u) => [u.id, u.newCat]));
+    const updatedRows = sourceRows.map((row) => {
+      const newCategory = updateMap.get(row.id);
+      return newCategory ? { ...row, category: newCategory } : row;
+    });
+
+    onRowsChange(updatedRows);
+    return updatedRows;
   };
 
   // Get lots with titles exceeding 80 characters
-  const getOverlongTitleLots = (): number[] => {
-    return rows
+  const getOverlongTitleLots = (sourceRows: EbayRow[] = rows): number[] => {
+    return sourceRows
       .filter(row => (row.title?.length || 0) > 80)
       .map((row, idx) => row.lot_number ?? (idx + 1));
   };
@@ -866,19 +872,21 @@ export function EbayBatchPanel({
       return;
     }
 
-    // Validation 0: Auto-fix deprecated categories before export
-    const deprecated = getDeprecatedCategoryLots();
+    let exportRows = rows;
+
+    // Validation 0: Auto-fix deprecated categories before export, but do not block download
+    const deprecated = getDeprecatedCategoryLots(exportRows);
     if (deprecated.length > 0) {
-      await fixDeprecatedCategories();
+      exportRows = await fixDeprecatedCategories(exportRows);
       toast({
         title: "Deprecated categories auto-fixed",
-        description: `Fixed ${deprecated.length} deprecated category ID(s). Click Download again to export.`,
+        description: `Fixed ${deprecated.length} deprecated category ID(s) and continued the export.`,
+        variant: "default",
       });
-      return;
     }
 
     // Validation 1: Check for missing category IDs
-    const missingLots = getMissingCategoryLots();
+    const missingLots = getMissingCategoryLots(exportRows);
     if (missingLots.length > 0) {
       const preview = missingLots.slice(0, 5).join(", ");
       toast({
@@ -890,7 +898,7 @@ export function EbayBatchPanel({
     }
 
     // Validation 2: Check for overlong titles
-    const overlongLots = getOverlongTitleLots();
+    const overlongLots = getOverlongTitleLots(exportRows);
     if (overlongLots.length > 0) {
       const preview = overlongLots.slice(0, 5).join(", ");
       toast({
@@ -902,7 +910,7 @@ export function EbayBatchPanel({
     }
 
     // Validation 3: Warn on missing required item specifics — non-blocking so wrong AI categories don't prevent export
-    const missingSpecsLots = getMissingItemSpecificsLots();
+    const missingSpecsLots = getMissingItemSpecificsLots(exportRows);
     if (missingSpecsLots.length > 0) {
       const preview = missingSpecsLots.slice(0, 3).map(l =>
         `#${l.lotNumber} (${l.missing.join(", ")})`
@@ -935,7 +943,7 @@ export function EbayBatchPanel({
     }
 
     // All validations passed - generate CSV and show preview
-    const csvContent = generateCSVContent(excludeImages);
+    const csvContent = generateCSVContent(excludeImages, exportRows);
     setFullCsvContent(csvContent);
 
     // Build preview: show #INFO rows + header + first 3 data rows
