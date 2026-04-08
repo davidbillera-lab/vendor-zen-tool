@@ -439,45 +439,40 @@ export function EbayBatchPanel({
     // C: prefix for item specifics columns
     const specificHeaders = Array.from(allSpecifics).map(s => `C:${s}`);
 
-    // Exact eBay category listing template headers (Version=1193)
-    // Must match the template downloaded from Seller Hub Reports
+    // eBay category listing template headers — matches fx_category_template_EBAY_US (Version=1193|CC=UTF-8)
+    // Downloaded from Seller Hub → Reports → Uploads → Download template → Create or Schedule new listings
     const baseHeaders = [
-      "*Action(SiteID=US|Country=US|Currency=USD|Version=1193)",
-      "Custom Label (SKU)",
-      "Category",
-      "Title",
+      "*Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
+      "CustomLabel",
+      "*Category",
+      "*Title",
       "Relationship",
-      "Relationship details",
-      "Schedule Time",
-      "P:EPID",
-      "Start price",
-      "Quantity",
-      "Item photo URL",
+      "RelationshipDetails",
+      "ScheduleTime",
+      "*ConditionID",
+      "PicURL",
       "VideoID",
-      "Condition ID",
-      "Description",
-      "Format",
-      "Duration",
-      "Buy It Now price",
-      "Best Offer Enabled",
-      "Best Offer Auto Accept Price",
-      "Minimum Best Offer Price",
-      "Immediate pay required",
-      "Location",
-      "Shipping service 1 option",
-      "Shipping service 1 cost",
-      "Shipping service 1 priority",
-      "Shipping service 2 option",
-      "Shipping service 2 cost",
-      "Shipping service 2 priority",
-      "Max dispatch time",
-      "Returns accepted option",
-      "Returns within option",
-      "Refund option",
-      "Return shipping cost paid by",
-      "Shipping profile name",
-      "Return profile name",
-      "Payment profile name",
+      "*Description",
+      "*Format",
+      "*Duration",
+      "*StartPrice",
+      "BuyItNowPrice",
+      "BestOfferEnabled",
+      "BestOfferAutoAcceptPrice",
+      "MinimumBestOfferPrice",
+      "*Quantity",
+      "ImmediatePayRequired",
+      "*Location",
+      "ShippingType",
+      "ShippingService-1:Option",
+      "ShippingService-1:Cost",
+      "ShippingService-2:Option",
+      "ShippingService-2:Cost",
+      "*DispatchTimeMax",
+      "*ReturnsAcceptedOption",
+      "ReturnsWithinOption",
+      "RefundOption",
+      "ShippingCostPaidByOption",
     ];
 
     const fullHeaders = [...baseHeaders, ...specificHeaders];
@@ -532,47 +527,42 @@ export function EbayBatchPanel({
       
       const base = [
         "Add",                                                           // *Action
-        row.lot_number?.toString() || (index + 1).toString(),            // Custom Label (SKU)
-        categoryId,                                                      // Category (numeric leaf ID)
-        sanitizeForCSV((row.title || "").substring(0, 80)),              // Title
+        row.lot_number?.toString() || (index + 1).toString(),            // CustomLabel
+        categoryId,                                                      // *Category (numeric leaf ID)
+        sanitizeForCSV((row.title || "").substring(0, 80)),              // *Title
         "",                                                              // Relationship (empty for non-variation)
-        "",                                                              // Relationship details
-        "",                                                              // Schedule Time
-        "",                                                              // P:EPID
-        row.price?.toString() || "0",                                    // Start price
-        "1",                                                             // Quantity
-        skipImages ? "" : (row.image_urls || []).join("|"),               // Item photo URL
-        "",                                                              // VideoID
+        "",                                                              // RelationshipDetails
+        "",                                                              // ScheduleTime
         (() => {
           const cid = conditionMap[row.condition || ""] || "3000";
           const numCat = parseInt(categoryId || "0");
           // Model kit categories only accept 1000 (New) or 1500 (New Other) — not 3000 (Used)
           if (MODEL_KIT_CATEGORIES.has(numCat) && cid === "3000") return "1500";
           return cid;
-        })(),                                                              // Condition ID
-        toHtmlDescription(row.description || ""),                        // Description
-        "FixedPrice",                                                    // Format
-        "GTC",                                                           // Duration
-        "",                                                              // Buy It Now price
-        row.best_offer_enabled === true ? "1" : "0",                      // Best Offer Enabled (must be 0 when immediate pay = 1)
-        row.best_offer_auto_accept?.toString() || "",                    // Best Offer Auto Accept Price
-        row.minimum_best_offer?.toString() || "",                        // Minimum Best Offer Price
-        row.best_offer_enabled === true ? "0" : "1",                     // Immediate pay required (0 when Best Offer on, 1 otherwise)
-        savedLocation,                                                   // Location
-        EBAY_SHIPPING_SERVICE,                                            // Shipping service 1 option
-        EBAY_SHIPPING_COST,                                              // Shipping service 1 cost
-        "1",                                                             // Shipping service 1 priority
-        "",                                                              // Shipping service 2 option
-        "",                                                              // Shipping service 2 cost
-        "",                                                              // Shipping service 2 priority
-        row.handling_time?.toString() || "1",                            // Max dispatch time — JSG standard: 1 day
-        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted", // Returns accepted option
-        row.return_period ? `Days_${row.return_period}` : "Days_30",     // Returns within option
-        "MoneyBack",                                                     // Refund option
-        "Seller",                                                        // Return shipping cost paid by — JSG standard: seller always pays
-        shippingProfileName.trim(),                                      // Shipping profile name
-        returnProfileName.trim(),                                        // Return profile name
-        paymentProfileName.trim(),                                       // Payment profile name
+        })(),                                                              // *ConditionID
+        skipImages ? "" : (row.image_urls || []).join("|"),               // PicURL
+        "",                                                              // VideoID
+        toHtmlDescription(row.description || ""),                        // *Description
+        "FixedPrice",                                                    // *Format
+        "GTC",                                                           // *Duration
+        row.price?.toString() || "0",                                    // *StartPrice
+        "",                                                              // BuyItNowPrice
+        row.best_offer_enabled === true ? "1" : "0",                     // BestOfferEnabled
+        row.best_offer_auto_accept?.toString() || "",                    // BestOfferAutoAcceptPrice
+        row.minimum_best_offer?.toString() || "",                        // MinimumBestOfferPrice
+        "1",                                                             // *Quantity
+        row.best_offer_enabled === true ? "0" : "1",                     // ImmediatePayRequired
+        savedLocation,                                                   // *Location
+        "Flat",                                                          // ShippingType — flat rate
+        EBAY_SHIPPING_SERVICE,                                           // ShippingService-1:Option
+        EBAY_SHIPPING_COST,                                              // ShippingService-1:Cost
+        "",                                                              // ShippingService-2:Option
+        "",                                                              // ShippingService-2:Cost
+        row.handling_time?.toString() || "1",                            // *DispatchTimeMax — JSG standard: 1 day
+        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted", // *ReturnsAcceptedOption
+        row.return_period ? `Days_${row.return_period}` : "Days_30",     // ReturnsWithinOption
+        "MoneyBack",                                                     // RefundOption
+        "Seller",                                                        // ShippingCostPaidByOption — JSG standard: seller pays
       ];
 
       // Add item specifics values in header order
@@ -591,11 +581,9 @@ export function EbayBatchPanel({
       return [...base, ...specificValues];
     });
 
-    // #INFO rows required by eBay's category template format
+    // Info row required by eBay's category template format
     const infoRows = [
-      `#INFO,Created=${new Date().toISOString().split('T')[0]},,Template=fx_multi_category_template_EBAY_US`,
-      `#INFO,Version=1.0`,
-      `#INFO`,
+      `Info,Version=1.0.0,Template=fx_category_template_EBAY_US`,
     ];
 
     // Build CSV with CRLF line endings - NO BOM
