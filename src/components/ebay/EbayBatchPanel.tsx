@@ -84,6 +84,15 @@ export function EbayBatchPanel({
   nextLotNumber, 
   onLotNumberChange 
 }: EbayBatchPanelProps) {
+  const DEFAULT_SHIPPING_TYPE = "flat" as const;
+  const DEFAULT_SHIPPING_COST = 9.98;
+  const DEFAULT_HANDLING_TIME = 1;
+  const DEFAULT_RETURNS_ACCEPTED = true;
+  const DEFAULT_RETURN_PERIOD = 30;
+  const DEFAULT_RETURN_SHIPPING = "seller" as const;
+  const DEFAULT_PROMOTION_RATE = 5;
+  const DEFAULT_PROMOTION_TYPE = "flat" as const;
+
   const [editingRow, setEditingRow] = useState<EbayRow | null>(null);
   const [viewingRow, setViewingRow] = useState<EbayRow | null>(null);
   const [saving, setSaving] = useState(false);
@@ -170,6 +179,18 @@ export function EbayBatchPanel({
     }
   }, [shippingProfileName, returnProfileName, paymentProfileName, projectId]);
 
+  const normalizeRowDefaults = (row: EbayRow): EbayRow => ({
+    ...row,
+    shipping_type: row.shipping_type || DEFAULT_SHIPPING_TYPE,
+    shipping_cost: row.shipping_cost ?? DEFAULT_SHIPPING_COST,
+    handling_time: row.handling_time ?? DEFAULT_HANDLING_TIME,
+    returns_accepted: row.returns_accepted ?? DEFAULT_RETURNS_ACCEPTED,
+    return_period: row.return_period ?? DEFAULT_RETURN_PERIOD,
+    return_shipping: row.return_shipping || DEFAULT_RETURN_SHIPPING,
+    promotion_rate: row.promotion_rate ?? DEFAULT_PROMOTION_RATE,
+    promotion_type: row.promotion_type || DEFAULT_PROMOTION_TYPE,
+  });
+
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this listing?")) return;
     
@@ -209,40 +230,42 @@ export function EbayBatchPanel({
   const handleSaveEdit = async () => {
     if (!editingRow) return;
     setSaving(true);
+
+    const normalizedRow = normalizeRowDefaults(editingRow);
     
     const { error } = await supabase
       .from('ebay_batch_rows')
       .update({
-        title: editingRow.title,
-        description: editingRow.description,
-        price: editingRow.price,
-        category: editingRow.category,
-        condition: editingRow.condition,
-        item_specifics: editingRow.item_specifics,
-        shipping_type: editingRow.shipping_type,
-        shipping_cost: editingRow.shipping_cost,
-        handling_time: editingRow.handling_time,
-        returns_accepted: editingRow.returns_accepted,
-        return_period: editingRow.return_period,
-        return_shipping: editingRow.return_shipping,
-        promotion_rate: editingRow.promotion_rate,
-        promotion_type: editingRow.promotion_type,
+        title: normalizedRow.title,
+        description: normalizedRow.description,
+        price: normalizedRow.price,
+        category: normalizedRow.category,
+        condition: normalizedRow.condition,
+        item_specifics: normalizedRow.item_specifics,
+        shipping_type: normalizedRow.shipping_type,
+        shipping_cost: normalizedRow.shipping_cost,
+        handling_time: normalizedRow.handling_time,
+        returns_accepted: normalizedRow.returns_accepted,
+        return_period: normalizedRow.return_period,
+        return_shipping: normalizedRow.return_shipping,
+        promotion_rate: normalizedRow.promotion_rate,
+        promotion_type: normalizedRow.promotion_type,
         // New desktop format fields
-        subtitle: editingRow.subtitle,
-        store_category: editingRow.store_category,
-        package_weight_lbs: editingRow.package_weight_lbs,
-        package_weight_oz: editingRow.package_weight_oz,
-        package_length: editingRow.package_length,
-        package_width: editingRow.package_width,
-        package_height: editingRow.package_height,
-        best_offer_enabled: editingRow.best_offer_enabled,
-        best_offer_auto_accept: editingRow.best_offer_auto_accept,
-        minimum_best_offer: editingRow.minimum_best_offer,
-        upc: editingRow.upc,
-        brand: editingRow.brand,
-        mpn: editingRow.mpn,
+        subtitle: normalizedRow.subtitle,
+        store_category: normalizedRow.store_category,
+        package_weight_lbs: normalizedRow.package_weight_lbs,
+        package_weight_oz: normalizedRow.package_weight_oz,
+        package_length: normalizedRow.package_length,
+        package_width: normalizedRow.package_width,
+        package_height: normalizedRow.package_height,
+        best_offer_enabled: normalizedRow.best_offer_enabled,
+        best_offer_auto_accept: normalizedRow.best_offer_auto_accept,
+        minimum_best_offer: normalizedRow.minimum_best_offer,
+        upc: normalizedRow.upc,
+        brand: normalizedRow.brand,
+        mpn: normalizedRow.mpn,
       })
-      .eq('id', editingRow.id);
+      .eq('id', normalizedRow.id);
     
     setSaving(false);
     
@@ -251,7 +274,7 @@ export function EbayBatchPanel({
       return;
     }
     
-    onRowsChange(rows.map(r => r.id === editingRow.id ? editingRow : r));
+    onRowsChange(rows.map(r => r.id === normalizedRow.id ? normalizedRow : r));
     setEditingRow(null);
     toast({ title: "Listing updated" });
   };
@@ -503,21 +526,28 @@ export function EbayBatchPanel({
       "For parts or not working": "7000",
     };
 
-    // Always use USPS Ground Advantage flat rate $9.98 — hardcoded per JSG standard shipping policy
+    // JSG default service: USPS Ground Advantage with editable flat-rate cost
     const EBAY_SHIPPING_SERVICE = "USPSGroundAdvantage";
-    const EBAY_SHIPPING_COST = "9.98";
 
     const csvRows = sourceRows.map((row, index) => {
+      const normalizedRow = normalizeRowDefaults(row);
       // Extract numeric category ID
-      const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
+      const extractedCategoryId = normalizedRow.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
       const categoryId = (extractedCategoryId || fallbackCategoryId).replace(/\.0$/, '').trim();
-      
-      // shippingCost unused — all listings use EBAY_SHIPPING_COST hardcoded above
+
+      const shippingCost = normalizedRow.shipping_type === "free"
+        ? "0.00"
+        : (normalizedRow.shipping_cost ?? DEFAULT_SHIPPING_COST).toFixed(2);
+      const returnsAccepted = normalizedRow.returns_accepted ?? DEFAULT_RETURNS_ACCEPTED;
+      const returnPeriod = normalizedRow.return_period ?? DEFAULT_RETURN_PERIOD;
+      const returnShippingPaidBy = (normalizedRow.return_shipping || DEFAULT_RETURN_SHIPPING) === "buyer"
+        ? "Buyer"
+        : "Seller";
       
       // Build item specifics values
-      const specs = { ...(row.item_specifics || {}) };
-      if (row.brand && !specs["Brand"]) specs["Brand"] = row.brand;
+      const specs = { ...(normalizedRow.item_specifics || {}) };
+      if (normalizedRow.brand && !specs["Brand"]) specs["Brand"] = normalizedRow.brand;
 
       // Auto-inject category-required specifics that have a default value
       const numCatId = parseInt(categoryId || "0");
@@ -527,42 +557,42 @@ export function EbayBatchPanel({
       
       const base = [
         "Add",                                                           // *Action
-        row.lot_number?.toString() || (index + 1).toString(),            // CustomLabel
+        normalizedRow.lot_number?.toString() || (index + 1).toString(),  // CustomLabel
         categoryId,                                                      // *Category (numeric leaf ID)
-        sanitizeForCSV((row.title || "").substring(0, 80)),              // *Title
+        sanitizeForCSV((normalizedRow.title || "").substring(0, 80)),    // *Title
         "",                                                              // Relationship (empty for non-variation)
         "",                                                              // RelationshipDetails
         "",                                                              // ScheduleTime
         (() => {
-          const cid = conditionMap[row.condition || ""] || "3000";
+          const cid = conditionMap[normalizedRow.condition || ""] || "3000";
           const numCat = parseInt(categoryId || "0");
           // Model kit categories only accept 1000 (New) or 1500 (New Other) — not 3000 (Used)
           if (MODEL_KIT_CATEGORIES.has(numCat) && cid === "3000") return "1500";
           return cid;
         })(),                                                              // *ConditionID
-        skipImages ? "" : (row.image_urls || []).join("|"),               // PicURL
+        skipImages ? "" : (normalizedRow.image_urls || []).join("|"),     // PicURL
         "",                                                              // VideoID
-        toHtmlDescription(row.description || ""),                        // *Description
+        toHtmlDescription(normalizedRow.description || ""),              // *Description
         "FixedPrice",                                                    // *Format
         "GTC",                                                           // *Duration
-        row.price?.toString() || "0",                                    // *StartPrice
+        normalizedRow.price?.toString() || "0",                          // *StartPrice
         "",                                                              // BuyItNowPrice
-        row.best_offer_enabled === true ? "1" : "0",                     // BestOfferEnabled
-        row.best_offer_auto_accept?.toString() || "",                    // BestOfferAutoAcceptPrice
-        row.minimum_best_offer?.toString() || "",                        // MinimumBestOfferPrice
+        normalizedRow.best_offer_enabled === true ? "1" : "0",           // BestOfferEnabled
+        normalizedRow.best_offer_auto_accept?.toString() || "",          // BestOfferAutoAcceptPrice
+        normalizedRow.minimum_best_offer?.toString() || "",              // MinimumBestOfferPrice
         "1",                                                             // *Quantity
-        row.best_offer_enabled === true ? "0" : "1",                     // ImmediatePayRequired
+        normalizedRow.best_offer_enabled === true ? "0" : "1",           // ImmediatePayRequired
         savedLocation,                                                   // *Location
         "Flat",                                                          // ShippingType — flat rate
         EBAY_SHIPPING_SERVICE,                                           // ShippingService-1:Option
-        EBAY_SHIPPING_COST,                                              // ShippingService-1:Cost
+        shippingCost,                                                    // ShippingService-1:Cost
         "",                                                              // ShippingService-2:Option
         "",                                                              // ShippingService-2:Cost
-        row.handling_time?.toString() || "1",                            // *DispatchTimeMax — JSG standard: 1 day
-        row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted", // *ReturnsAcceptedOption
-        row.return_period ? `Days_${row.return_period}` : "Days_30",     // ReturnsWithinOption
-        "MoneyBack",                                                     // RefundOption
-        "Seller",                                                        // ShippingCostPaidByOption — JSG standard: seller pays
+        (normalizedRow.handling_time ?? DEFAULT_HANDLING_TIME).toString(), // *DispatchTimeMax
+        returnsAccepted ? "ReturnsAccepted" : "ReturnsNotAccepted",     // *ReturnsAcceptedOption
+        returnsAccepted ? `Days_${returnPeriod}` : "",                   // ReturnsWithinOption
+        returnsAccepted ? "MoneyBack" : "",                            // RefundOption
+        returnsAccepted ? returnShippingPaidBy : "",                    // ShippingCostPaidByOption
       ];
 
       // Add item specifics values in header order
@@ -1705,12 +1735,12 @@ export function EbayBatchPanel({
 
               <EbayShippingSettings
                 settings={{
-                  shippingType: (editingRow.shipping_type as "flat" | "calculated" | "free") || "flat",
-                  shippingCost: editingRow.shipping_cost || 0,
-                  handlingTime: editingRow.handling_time || 3,
-                  returnsAccepted: editingRow.returns_accepted ?? true,
-                  returnPeriod: editingRow.return_period || 30,
-                  returnShipping: (editingRow.return_shipping as "buyer" | "seller") || "buyer",
+                  shippingType: (editingRow.shipping_type as "flat" | "calculated" | "free") || DEFAULT_SHIPPING_TYPE,
+                  shippingCost: editingRow.shipping_cost ?? DEFAULT_SHIPPING_COST,
+                  handlingTime: editingRow.handling_time ?? DEFAULT_HANDLING_TIME,
+                  returnsAccepted: editingRow.returns_accepted ?? DEFAULT_RETURNS_ACCEPTED,
+                  returnPeriod: editingRow.return_period ?? DEFAULT_RETURN_PERIOD,
+                  returnShipping: (editingRow.return_shipping as "buyer" | "seller") || DEFAULT_RETURN_SHIPPING,
                 }}
                 onChange={(settings) => setEditingRow({
                   ...editingRow,
