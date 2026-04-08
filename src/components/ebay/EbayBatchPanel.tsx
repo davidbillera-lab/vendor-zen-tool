@@ -565,7 +565,7 @@ export function EbayBatchPanel({
         "",                                                              // Shipping service 2 option
         "",                                                              // Shipping service 2 cost
         "",                                                              // Shipping service 2 priority
-        row.handling_time?.toString() || "3",                            // Max dispatch time
+        row.handling_time?.toString() || "1",                            // Max dispatch time — JSG standard: 1 day
         row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted", // Returns accepted option
         row.return_period ? `Days_${row.return_period}` : "Days_30",     // Returns within option
         "MoneyBack",                                                     // Refund option

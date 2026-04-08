@@ -14,7 +14,7 @@ Reference for all eBay bulk upload requirements, known failures, and JSG standar
 | Format | `FixedPrice` | |
 | Duration | `GTC` (Good Till Cancelled) | |
 | Returns | `ReturnsAccepted`, 30 days, MoneyBack, Seller pays return shipping | |
-| Handling time | 3 days | |
+| Handling time | 1 day | |
 | Promoted Listings | 5% General campaign | Set in Seller Hub → Marketing → Promoted Listings → auto-enroll all listings. NOT in CSV — must be configured once as an always-on campaign. |
 
 ---
