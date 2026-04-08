@@ -391,48 +391,22 @@ export function EbayBatchPanel({
     116022: "Seasonal Home Décor",
   };
 
-  // Categories that require Department and Size Type
-  const CLOTHING_CATEGORY_RANGES = [
-    { start: 11450, end: 11499 }, // Men's clothing ranges
-    { start: 11550, end: 11599 }, // Women's clothing ranges  
-    { start: 53000, end: 54000 }, // Various clothing
-    { start: 57980, end: 58000 }, // Men's specific
-    { start: 63850, end: 63900 }, // Women's specific
-    { start: 185000, end: 186000 }, // Activewear
-    { start: 175750, end: 175800 }, // Vintage clothing
-  ];
-
-  const isClothingCategory = (categoryId: number): boolean => {
-    return CLOTHING_CATEGORY_RANGES.some(range => 
-      categoryId >= range.start && categoryId <= range.end
-    );
-  };
-
   // Get lots missing required item specifics for their category
+  // Note: clothing-category check removed — JSG deals in liquidation/estate items, not clothing.
+  // AI sometimes assigns wrong clothing category IDs; that check caused false blocking errors.
   const getMissingItemSpecificsLots = (): { lotNumber: number; missing: string[] }[] => {
     const results: { lotNumber: number; missing: string[] }[] = [];
-    
+
     rows.forEach((row, idx) => {
       const categoryId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
       const missing: string[] = [];
-      
-      // Check if this is a clothing category
-      if (categoryId && isClothingCategory(categoryId)) {
-        const specs = row.item_specifics || {};
-        if (!specs["Department"] && !specs["department"]) {
-          missing.push("Department");
-        }
-        if (!specs["Size Type"] && !specs["size_type"] && !specs["SizeType"]) {
-          missing.push("Size Type");
-        }
-      }
 
       // Check category-specific required fields that have no auto-fill default
       const catRequired = CATEGORY_REQUIRED_SPECIFICS[categoryId] || [];
-      const specs2 = row.item_specifics || {};
+      const specs = row.item_specifics || {};
       catRequired.forEach(({ field, default: def }) => {
         // Only warn if there's no default (empty default = must be filled manually)
-        if (def === "" && !specs2[field]) {
+        if (def === "" && !specs[field]) {
           missing.push(field);
         }
       });
@@ -441,7 +415,7 @@ export function EbayBatchPanel({
         results.push({ lotNumber: row.lot_number ?? (idx + 1), missing });
       }
     });
-    
+
     return results;
   };
 
