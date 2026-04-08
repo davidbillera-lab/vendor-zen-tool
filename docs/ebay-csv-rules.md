@@ -13,7 +13,7 @@ Reference for all eBay bulk upload requirements, known failures, and JSG standar
 | Shipping cost | `$9.98` flat rate | All listings |
 | Format | `FixedPrice` | |
 | Duration | `GTC` (Good Till Cancelled) | |
-| Returns | `ReturnsAccepted`, 30 days, MoneyBack, Buyer pays return shipping | |
+| Returns | `ReturnsAccepted`, 30 days, MoneyBack, Seller pays return shipping | |
 | Handling time | 3 days | |
 | Promoted Listings | 5% General campaign | Set in Seller Hub → Marketing → Promoted Listings → auto-enroll all listings. NOT in CSV — must be configured once as an always-on campaign. |
 
@@ -48,6 +48,7 @@ Never use these. eBay either rejects (parent) or silently remaps to the wrong ca
 | 133704 | Throws (eBay's remapped blanket ID) | Treat same as 20668 |
 | 11724 | Camcorders & Video Cameras | |
 | 15230 | Vintage Cameras | |
+| 20625 | Kitchen Knives & Cutlery Sets | Paring knives, chef knives, cutlery sets |
 
 ---
 

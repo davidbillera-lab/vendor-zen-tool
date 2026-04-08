@@ -569,7 +569,7 @@ export function EbayBatchPanel({
         row.returns_accepted ? "ReturnsAccepted" : "ReturnsNotAccepted", // Returns accepted option
         row.return_period ? `Days_${row.return_period}` : "Days_30",     // Returns within option
         "MoneyBack",                                                     // Refund option
-        row.return_shipping === "buyer" ? "Buyer" : "Seller",           // Return shipping cost paid by
+        "Seller",                                                        // Return shipping cost paid by — JSG standard: seller always pays
         shippingProfileName.trim(),                                      // Shipping profile name
         returnProfileName.trim(),                                        // Return profile name
         paymentProfileName.trim(),                                       // Payment profile name
