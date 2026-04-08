@@ -156,11 +156,11 @@ export default function CreateListing() {
   const [loadingEbay, setLoadingEbay] = useState(false);
   const [ebayShippingSettings, setEbayShippingSettings] = useState<ShippingSettings>({
     shippingType: "flat",
-    shippingCost: 0,
-    handlingTime: 3,
+    shippingCost: 9.98,
+    handlingTime: 1,
     returnsAccepted: true,
     returnPeriod: 30,
-    returnShipping: "buyer",
+    returnShipping: "seller",
   });
   const [ebayItemSpecifics, setEbayItemSpecifics] = useState<Record<string, string>>({});
 
