@@ -70,11 +70,15 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: "redirect_uri is required" }, 400);
       }
 
+      const scopesToUse = (body.scopes && Array.isArray(body.scopes) && body.scopes.length > 0)
+        ? body.scopes
+        : REQUIRED_SCOPES;
+
       const params = new URLSearchParams({
         client_id: clientId,
         response_type: "code",
         redirect_uri: redirect_uri,
-        scope: REQUIRED_SCOPES.join(" "),
+        scope: scopesToUse.join(" "),
       });
 
       const authUrl = `${env.authUrl}?${params.toString()}`;

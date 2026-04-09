@@ -1085,16 +1085,20 @@ export function EbayBatchPanel({
 
     setPublishing(true);
     try {
-      const { data, error } = await supabase.functions.invoke("ebay-publish", {
-        body: { rowIds: rows.map(r => r.id), location: loc },
-      });
-
-      if (error) {
-        toast({ title: "Push failed", description: error.message, variant: "destructive" });
+      const res = await fetch(
+        "https://atgrxqfxysvppqoyvjdd.supabase.co/functions/v1/ebay-publish",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows }),
+        }
+      );
+      if (!res.ok) {
+        const errText = await res.text();
+        toast({ title: "Push failed", description: errText.substring(0, 200), variant: "destructive" });
         return;
       }
-
-      const { succeeded, failed, results } = data;
+      const { succeeded, failed, results } = await res.json();
       if (succeeded > 0) {
         const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
         onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
