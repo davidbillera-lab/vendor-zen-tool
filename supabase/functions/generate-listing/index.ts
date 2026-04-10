@@ -56,6 +56,7 @@ HOW TO PICK THE RIGHT LEAF CATEGORY:
 4. If you're unsure, pick the broader leaf category rather than guessing a specific one
 
 VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
+- Men's T-Shirts: 21235
 - Men's Coats, Jackets & Vests: 3001
 - Men's Casual Shirts: 57990
 - Men's Dress Shirts: 57991
@@ -217,11 +218,12 @@ ALWAYS INCLUDE:
 - Style/Era
 - Country/Region of Manufacture
 
-**REQUIRED FOR CLOTHING CATEGORIES (eBay will REJECT without these):**
-- Department: "Men", "Women", "Boys", "Girls", or "Unisex" (REQUIRED!)
-- Size Type: "Regular", "Petite", "Plus", "Tall", "Big & Tall", "Maternity" (REQUIRED!)
-- Size: Actual size like "M", "L", "XL", "32", "10", etc.
+**REQUIRED FOR CLOTHING CATEGORIES (eBay error 21919303 if missing — ALWAYS include these):**
+- Department: EXACTLY "Men", "Women", "Boys", "Girls", or "Unisex Adults" — derive from category (Men's T-Shirts → "Men", Women's Dresses → "Women")
+- Size: Actual size like "S", "M", "L", "XL", "2XL", "32", "10", etc. — read from label in photo if visible; use "See Description" only if truly unreadable
+- Size Type: "Regular", "Petite", "Plus", "Tall", "Big & Tall", "Maternity" — default "Regular" if not apparent
 - Gender: "Men's", "Women's", "Unisex"
+- DO NOT omit Department or Size — the listing will be rejected by eBay
 
 CATEGORY-SPECIFIC:
 - Clothing: Size, Size Type, Department, Gender, Pattern, Sleeve Length

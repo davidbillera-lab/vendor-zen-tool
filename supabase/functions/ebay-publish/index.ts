@@ -180,6 +180,42 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
     if (!specifics["Brand"]) specifics["Brand"] = "Unbranded";
   }
 
+  // Clothing — eBay requires Department and Size (error 21919303 if missing)
+  // Department is deterministic from category; Size falls back to "See Description" if AI didn't provide it.
+  const MENS_CLOTHING_CATEGORIES = new Set([
+    "21235",  // Men's T-Shirts
+    "57990",  // Men's Casual Shirts
+    "57991",  // Men's Dress Shirts
+    "11483",  // Men's Jeans
+    "57989",  // Men's Dress Pants
+    "11484",  // Men's Sweaters
+    "3001",   // Men's Suits & Blazers
+    "15709",  // Men's Athletic Shoes
+    "24087",  // Men's Casual Shoes / Loafers
+    "53120",  // Men's Dress Shoes
+    "4250",   // Men's Bags
+  ]);
+  const WOMENS_CLOTHING_CATEGORIES = new Set([
+    "63862",  // Women's Coats & Jackets
+    "53159",  // Women's Tops & Blouses
+    "63861",  // Women's Dresses
+    "11554",  // Women's Jeans
+    "63866",  // Women's Sweaters
+    "185176", // Women's Activewear Tops
+    "55793",  // Women's Pumps & Heels
+    "45333",  // Women's Flats
+    "95672",  // Women's Athletic Shoes
+    "169291", // Women's Shoulder Bags & Totes
+  ]);
+  if (MENS_CLOTHING_CATEGORIES.has(categoryId)) {
+    if (!specifics["Department"]) specifics["Department"] = "Men";
+    if (!specifics["Size"]) specifics["Size"] = "See Description";
+  }
+  if (WOMENS_CLOTHING_CATEGORIES.has(categoryId)) {
+    if (!specifics["Department"]) specifics["Department"] = "Women";
+    if (!specifics["Size"]) specifics["Size"] = "See Description";
+  }
+
   const specificsXml = Object.entries(specifics).length > 0
     ? `<ItemSpecifics>${Object.entries(specifics).map(([k, v]) =>
         `<NameValueList><Name>${k.replace(/&/g, "&amp;")}</Name><Value>${String(v).replace(/&/g, "&amp;")}</Value></NameValueList>`

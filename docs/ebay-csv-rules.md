@@ -34,6 +34,7 @@ Never use these. eBay either rejects (parent) or silently remaps to the wrong ca
 | 11700 | Home & Garden — parent category | 177005 (for knives) |
 | 20625 | Kitchen, Dining & Bar — parent category | 177005 |
 | 20637 | Flatware, Knives & Cutlery — parent category | 177005 |
+| 177708 | AI-hallucinated ID — eBay error 107 "Category is not valid" | Select correct leaf manually |
 
 ---
 
@@ -90,8 +91,14 @@ eBay rejects with **error 21919303** if these fields are missing. All auto-fille
 |----------|---------------|-------------------|-----------------|
 | 31787, 37278, 51023, 19063 (model kits) | `Shade` | `Multicolor` | 21919303 |
 | 20668 / 133704 (blankets) | `Model` | *(must fill manually — use product line name e.g. "Silky Soft")* | 21919303 |
+| 21235, 57990, 57991, 11483, 57989, 11484, 3001, 15709, 24087, 53120 (Men's clothing/shoes) | `Department` | `Men` | 21919303 |
+| 21235, 57990, 57991, 11483, 57989, 11484, 3001, 15709, 24087, 53120 (Men's clothing/shoes) | `Size` | `See Description` (fallback — AI should supply actual size) | 21919303 |
+| 63862, 53159, 63861, 11554, 63866, 185176, 55793, 45333, 95672 (Women's clothing/shoes) | `Department` | `Women` | 21919303 |
+| 63862, 53159, 63861, 11554, 63866, 185176, 55793, 45333, 95672 (Women's clothing/shoes) | `Size` | `See Description` (fallback — AI should supply actual size) | 21919303 |
 
-**Where coded:** `CATEGORY_REQUIRED_SPECIFICS` in `src/components/ebay/EbayBatchPanel.tsx`
+**Where coded:** `CATEGORY_REQUIRED_SPECIFICS` in `src/components/ebay/EbayBatchPanel.tsx`; clothing sets also in `ebay-publish/index.ts` as server-side safety net.
+
+**Note on clothing Size:** AI reads size from photo labels when visible and sets the actual value (S/M/L/XL etc.). "See Description" is the fallback only when size is genuinely unreadable from the image.
 
 ---
 

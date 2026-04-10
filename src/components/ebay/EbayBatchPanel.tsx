@@ -315,6 +315,8 @@ export function EbayBatchPanel({
     11700:  { replacement: 177005, label: "Home & Garden parent (11700) → Kitchen & Steak Knives 177005" },
     20625:  { replacement: 177005, label: "Kitchen, Dining & Bar parent (20625) → Kitchen & Steak Knives 177005" },
     20637:  { replacement: 177005, label: "Flatware, Knives & Cutlery parent (20637) → Kitchen & Steak Knives 177005" },
+    // AI-hallucinated / invalid IDs — eBay error 107 "Category is not valid"
+    177708: { replacement: 0, label: "Invalid category 177708 — eBay returned error 107. Select correct leaf category manually." },
   };
 
   // Per-category required item specifics with auto-fill defaults.
@@ -332,6 +334,27 @@ export function EbayBatchPanel({
     // Blankets & Throws — eBay remapped to 133704 which requires Model (eBay error 21919303)
     20668: [{ field: "Model", default: "" }],
     133704: [{ field: "Model", default: "" }],
+    // Men's Clothing — Department auto-filled; Size falls back to "See Description" if AI didn't provide it
+    21235: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's T-Shirts
+    57990: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Casual Shirts
+    57991: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Dress Shirts
+    11483: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Jeans
+    57989: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Dress Pants
+    11484: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Sweaters
+    3001:  [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Suits & Blazers
+    15709: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Athletic Shoes
+    24087: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Casual Shoes
+    53120: [{ field: "Department", default: "Men" }, { field: "Size", default: "See Description" }],  // Men's Dress Shoes
+    // Women's Clothing — Department auto-filled; Size falls back to "See Description" if AI didn't provide it
+    63862: [{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Coats & Jackets
+    53159: [{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Tops & Blouses
+    63861: [{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Dresses
+    11554: [{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Jeans
+    63866: [{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Sweaters
+    185176:[{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Activewear
+    55793: [{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Pumps & Heels
+    45333: [{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Flats
+    95672: [{ field: "Department", default: "Women" }, { field: "Size", default: "See Description" }], // Women's Athletic Shoes
     // Camcorders — Condition 3000 (Used) is valid, but Condition 1000 (New) is not for most camcorder subcats
     // (no auto-fill needed, just a reminder that condition matters)
   };
@@ -1128,6 +1151,19 @@ export function EbayBatchPanel({
       if (deprecated.length > 0) {
         pushRows = await fixDeprecatedCategories(pushRows);
       }
+
+      // Step 2.5: Inject category-required item specifics defaults (e.g. Department for clothing)
+      // Mirrors the CSV export path — ensures push path has same auto-fill as CSV.
+      pushRows = pushRows.map(r => {
+        const catId = parseInt(r.category?.match(/\d{3,}/)?.[0] || "0");
+        const required = CATEGORY_REQUIRED_SPECIFICS[catId] || [];
+        if (required.length === 0) return r;
+        const specs = { ...(r.item_specifics || {}) };
+        required.forEach(({ field, default: def }) => {
+          if (def !== "" && !specs[field]) specs[field] = def;
+        });
+        return { ...r, item_specifics: specs };
+      });
 
       // Step 3: Apply default category ID fallback for rows still missing a category
       const fallbackCatId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
