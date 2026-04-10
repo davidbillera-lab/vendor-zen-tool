@@ -1085,12 +1085,39 @@ export function EbayBatchPanel({
 
     setPublishing(true);
     try {
+      // Step 1: Auto-fix deprecated categories
+      let pushRows = rows;
+      const deprecated = getDeprecatedCategoryLots(pushRows);
+      if (deprecated.length > 0) {
+        pushRows = await fixDeprecatedCategories(pushRows);
+      }
+
+      // Step 2: Apply default category ID fallback for rows missing a category
+      const fallbackCatId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
+      if (fallbackCatId) {
+        pushRows = pushRows.map(r =>
+          r.category?.match(/\d{3,}/) ? r : { ...r, category: fallbackCatId }
+        );
+      }
+
+      // Step 3: Block push if any rows still have no valid category ID
+      const missingLots = getMissingCategoryLots(pushRows);
+      if (missingLots.length > 0) {
+        const preview = missingLots.slice(0, 5).join(", ");
+        toast({
+          title: "Missing Category ID",
+          description: `Set a numeric eBay category ID for lot(s): ${preview}${missingLots.length > 5 ? "…" : ""}. eBay rejects listings without a leaf category ID.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
       const res = await fetch(
         "https://atgrxqfxysvppqoyvjdd.supabase.co/functions/v1/ebay-publish",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rows }),
+          body: JSON.stringify({ rows: pushRows }),
         }
       );
       if (!res.ok) {
