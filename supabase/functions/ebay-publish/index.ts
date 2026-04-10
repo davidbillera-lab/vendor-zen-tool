@@ -140,6 +140,9 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
   if (row.mpn && !specifics["MPN"]) specifics["MPN"] = row.mpn;
   if (row.upc && !specifics["UPC"]) specifics["UPC"] = row.upc;
 
+  // Universal fallback — eBay requires Compatible Brand for many categories
+  if (!specifics["Compatible Brand"]) specifics["Compatible Brand"] = "Does Not Apply";
+
   // Category-required defaults (mirrors EbayBatchPanel CATEGORY_REQUIRED_SPECIFICS)
   const MODEL_KIT_CATEGORIES = new Set(["31787", "37278", "51023", "19063"]);
   if (MODEL_KIT_CATEGORIES.has(categoryId)) {
