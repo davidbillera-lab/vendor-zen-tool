@@ -77,6 +77,7 @@ VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
 - Sculptures & Carvings: 60628
 - Mixed Media Art & Collage Art: 158658
 - Decorative Collectible Figurines: 162032
+- Kitchen & Steak Knives (paring, chef, santoku, slicer, boning, cleaver, cutlery sets): 177005
 - Kitchen Glassware: 20625
 - Decorative Plates & Bowls: 36018
 - Table Lamps: 112581
@@ -109,7 +110,7 @@ VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
 - Baskets: 20563
 - Pottery & Glass: 870
 - Military Vehicle Model Kits (tanks, trucks, armor — any scale): 31787
-- Aircraft Model Kits (planes, helicopters — any scale): 2611
+- Aircraft Model Kits (planes, helicopters — any scale): 31787 (DO NOT use 2611 — it is DEPRECATED, eBay remaps it to a video games category!)
 - Ship/Boat Model Kits: 37278
 - Car/Truck Model Kits (non-military): 51023
 - Figure Model Kits (sci-fi, fantasy, anime): 19063
@@ -614,7 +615,9 @@ serve(async (req) => {
         // Deprecated seasonal
         159769: 33164,   // Old Christmas Wreaths → Christmas Wreaths, Garlands & Plants
         128035: 170083,  // Old holiday décor → Other Christmas Décor (common remap)
-        // Parent categories that are NOT leaf
+        // Deprecated model kit IDs
+        2611: 31787,     // Aircraft Model Kits (DEPRECATED — eBay remaps to video games!) → Military Model Kits
+        // Parent categories that are NOT leaf (eBay error 87)
         11450: 57990,    // Clothing parent → Men's Casual Shirts (fallback)
         550: 360,        // Art parent → Art Prints
         20081: 162032,   // Home Décor parent → Figurines
@@ -625,6 +628,10 @@ serve(async (req) => {
         51028: 31787,    // Models & Kits parent → Military Vehicle Model Kits (fallback)
         20601: 20668,    // Bedding parent → Blankets & Throws (fallback)
         19130: 262318,   // Old HO Trains category → HO Scale (eBay's own remap)
+        // Knife parent categories (eBay error 87)
+        11700: 177005,   // Home & Garden parent → Kitchen & Steak Knives (if knife context)
+        20625: 177005,   // Kitchen, Dining & Bar parent → Kitchen & Steak Knives
+        20637: 177005,   // Flatware, Knives & Cutlery parent → Kitchen & Steak Knives (leaf)
       };
 
       if (typeof anyListing['categoryId'] === 'number') {
@@ -634,6 +641,78 @@ serve(async (req) => {
           anyListing['categoryId'] = remapped;
         }
       }
+
+      // ── eBay Category Suggestions API validation ──────────────────────────
+      // Ask eBay's own taxonomy engine what category the title belongs to.
+      // Override the AI's guess if eBay returns a confident, different answer.
+      // This prevents hallucinated or deprecated category IDs from ever reaching
+      // the listing push step.
+      try {
+        const title = (anyListing['title'] as string) || "";
+        if (title.length >= 3) {
+          const suggestUrl =
+            `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions` +
+            `?q=${encodeURIComponent(title)}`;
+
+          // Get app token (client_credentials — no user context needed for taxonomy)
+          const ebayClientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+          const ebayClientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+
+          if (ebayClientId && ebayClientSecret) {
+            const tokenRes = await fetch(
+              "https://api.ebay.com/identity/v1/oauth2/token",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/x-www-form-urlencoded",
+                  Authorization: `Basic ${btoa(`${ebayClientId}:${ebayClientSecret}`)}`,
+                },
+                body: new URLSearchParams({
+                  grant_type: "client_credentials",
+                  scope: "https://api.ebay.com/oauth/api_scope",
+                }),
+              }
+            );
+
+            if (tokenRes.ok) {
+              const tokenData = await tokenRes.json();
+              const appToken = tokenData.access_token as string;
+
+              const suggestRes = await fetch(suggestUrl, {
+                headers: { Authorization: `Bearer ${appToken}` },
+              });
+
+              if (suggestRes.ok) {
+                const suggestData = await suggestRes.json();
+                const topSuggestion = suggestData.categorySuggestions?.[0];
+
+                if (topSuggestion) {
+                  const ebayId = parseInt(topSuggestion.category.categoryId, 10);
+                  const ebayName = topSuggestion.category.categoryName as string;
+                  const aiId = anyListing['categoryId'] as number | null;
+
+                  if (ebayId && !Number.isNaN(ebayId) && ebayId !== aiId) {
+                    console.log(
+                      `[generate-listing] Category override: AI=${aiId} → eBay suggestion=${ebayId} (${ebayName}) for title="${title}"`
+                    );
+                    anyListing['categoryId'] = ebayId;
+                    anyListing['category'] = ebayName;
+                  } else {
+                    console.log(
+                      `[generate-listing] Category confirmed: AI=${aiId} matches eBay suggestion=${ebayId} (${ebayName})`
+                    );
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (catErr) {
+        // Non-fatal — if suggestion API fails, keep the AI's category (still
+        // protected by KEYWORD_CATEGORY_MAP in ebay-publish at push time)
+        console.warn("[generate-listing] Category suggestion API error (non-fatal):", catErr);
+      }
+      // ─────────────────────────────────────────────────────────────────────
 
       if (anyListing['itemSpecifics'] == null && anyListing['ItemSpecifics'] != null) {
         anyListing['itemSpecifics'] = anyListing['ItemSpecifics'];
