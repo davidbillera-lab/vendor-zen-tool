@@ -217,7 +217,7 @@ async function publishRow(
 ): Promise<{ success: boolean; error?: string; details?: string[]; listingId?: string }> {
   try {
     // Guard: reject rows with no valid eBay category ID before hitting the API
-    const categoryId = row.category?.match(/\d{3,}/)?.[0];
+    let categoryId = row.category?.match(/\d{3,}/)?.[0];
     if (!categoryId) {
       return {
         success: false,
@@ -225,7 +225,36 @@ async function publishRow(
       };
     }
 
-    const xml = buildAddFixedPriceItemXml(row);
+    // Known-good eBay leaf category IDs for JSG
+    const KNOWN_GOOD_CATEGORIES = new Set([
+      "31787", "37278", "51023", "19063",  // model kits
+      "262318", "47006", "47004",           // model trains
+      "20668", "133704",                    // blankets/throws
+      "11724", "15230",                     // cameras
+      "20625",                              // kitchen knives
+    ]);
+
+    // Known bad AI-generated IDs → correct leaf ID
+    const BAD_CATEGORY_REMAPS: Record<string, string> = {
+      "178224": "20625",  // AI hallucination → Kitchen Knives & Cutlery Sets
+    };
+
+    // Apply known bad ID remap first
+    if (BAD_CATEGORY_REMAPS[categoryId]) {
+      console.log(`[ebay-publish] LOT-${row.lot_number}: remapping bad category ${categoryId} → ${BAD_CATEGORY_REMAPS[categoryId]}`);
+      categoryId = BAD_CATEGORY_REMAPS[categoryId];
+    }
+
+    // Title-based category override for items with bad/unknown categories
+    if (!KNOWN_GOOD_CATEGORIES.has(categoryId)) {
+      const titleLower = (row.title || "").toLowerCase();
+      if (/\b(knife|knives|cleaver|slicer|santoku|boning|paring|cutlery|chef knife)\b/.test(titleLower)) {
+        console.log(`[ebay-publish] LOT-${row.lot_number}: knife keyword in title, overriding category ${categoryId} → 20625`);
+        categoryId = "20625";
+      }
+    }
+
+    const xml = buildAddFixedPriceItemXml({ ...row, category: categoryId });
 
     const res = await fetch(tradingApiUrl, {
       method: "POST",
