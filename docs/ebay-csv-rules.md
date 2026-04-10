@@ -31,8 +31,9 @@ Never use these. eBay either rejects (parent) or silently remaps to the wrong ca
 | 2611 | Aircraft Model Kits — eBay remaps to 183454 (video games), causes wrong required fields | 31787 |
 | 20601 | Bedding — parent category | 20668 |
 | 19130 | Old HO Scale Trains ID | 262318 |
+| 11700 | Home & Garden — parent category | 177005 (for knives) |
 | 20625 | Kitchen, Dining & Bar — parent category | 177005 |
-| 11700 | Home & Garden — parent category | Use correct leaf (e.g. 177005 for knives) |
+| 20637 | Flatware, Knives & Cutlery — parent category | 177005 |
 
 ---
 
@@ -40,19 +41,44 @@ Never use these. eBay either rejects (parent) or silently remaps to the wrong ca
 
 | ID | Category | Notes |
 |----|----------|-------|
-| 31787 | Military & Aircraft Model Kits | Use for all military vehicles, tanks, planes, any scale |
-| 37278 | Ship/Boat Model Kits | |
-| 51023 | Car/Truck Model Kits (non-military) | |
-| 19063 | Figure Model Kits | |
-| 262318 | HO Scale Model Trains | |
-| 47006 | N Scale Model Trains | |
-| 47004 | O Scale Model Trains | |
+| 31787 | Military & Aircraft Model Kits | Use for all military vehicles, tanks, planes, any scale; brands: Tamiya, Revell, Monogram, Airfix |
+| 37278 | Ship/Boat Model Kits | Submarine, destroyer, warship, battleship kits |
+| 51023 | Car/Truck Model Kits (non-military) | Dragster, stock car, hot rod kits |
+| 19063 | Figure Model Kits | Gundam, figurine kits |
+| 262318 | HO Scale Model Trains | Matches: "HO scale", "HO gauge" |
+| 47006 | N Scale Model Trains | Matches: "N scale train", "N gauge train" |
+| 47004 | O Scale Model Trains | Matches: "O scale train", "O gauge train", Lionel trains |
+| 47002 | G Scale Model Trains | Matches: "G scale train", "G gauge train" |
 | 20668 | Blankets & Throws | eBay internally remaps to 133704 — that's fine |
 | 133704 | Throws (eBay's remapped blanket ID) | Treat same as 20668 |
-| 11724 | Camcorders & Video Cameras | |
-| 15230 | Vintage Cameras | |
-| 177005 | Kitchen & Steak Knives | Paring knives, chef knives, santoku, slicers, boning knives |
-| 20637 | Flatware, Knives & Cutlery | Use 177005 for individual knives |
+| 11724 | Camcorders & Video Cameras | Matches: "camcorder", "handycam" |
+| 15230 | Vintage Cameras | Film cameras, 35mm, rangefinders |
+| 177005 | Kitchen & Steak Knives | **All individual knives**: paring, chef, santoku, slicer, boning, cleaver, cutlery |
+| 20637 | Flatware, Knives & Cutlery | Parent — do NOT use; maps down to 177005 |
+
+---
+
+## Keyword → Category Auto-Assignment
+
+The Push to eBay function automatically assigns the correct leaf category from the listing title.
+This catches AI-hallucinated IDs and missing categories. **First match wins.**
+
+| Keywords in Title | → Category ID | Category Name |
+|-------------------|---------------|---------------|
+| knife, knives, cleaver, slicer, santoku, boning, paring, cutlery | 177005 | Kitchen & Steak Knives |
+| HO scale, HO gauge | 262318 | HO Scale Model Trains |
+| N scale train, N gauge train | 47006 | N Scale Model Trains |
+| O scale train, O gauge train, Lionel train | 47004 | O Scale Model Trains |
+| G scale train, G gauge train | 47002 | G Scale Model Trains |
+| ship model kit, boat model kit, submarine kit, warship kit | 37278 | Ship/Boat Model Kits |
+| car model kit, truck model kit, dragster kit | 51023 | Car/Truck Model Kits |
+| figure kit, figurine kit, Gundam | 19063 | Figure Model Kits |
+| model kit, scale model, plastic kit, tank kit, aircraft kit, Tamiya, Revell, Monogram, Airfix | 31787 | Military & Aircraft Model Kits |
+| blanket, fleece throw, throw blanket, sherpa blanket | 20668 | Blankets & Throws |
+| film camera, 35mm camera, vintage camera, SLR film, rangefinder | 15230 | Vintage Cameras |
+| camcorder, handycam | 11724 | Camcorders & Video Cameras |
+
+**Where coded:** `KEYWORD_CATEGORY_MAP` in `EbayBatchPanel.tsx` (frontend) and `ebay-publish/index.ts` (edge function — always runs server-side as last line of defense).
 
 ---
 

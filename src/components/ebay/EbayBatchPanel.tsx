@@ -301,16 +301,20 @@ export function EbayBatchPanel({
 
   // Categories that eBay has deprecated or remapped — warn before export
   const DEPRECATED_CATEGORIES: Record<number, { replacement: number; label: string }> = {
-    159769: { replacement: 33164, label: "Christmas Wreaths → 33164" },
+    159769: { replacement: 33164,  label: "Christmas Wreaths → 33164" },
     128035: { replacement: 170083, label: "Holiday Décor → 170083" },
-    11450: { replacement: 57990, label: "Clothing parent → pick a leaf" },
-    550: { replacement: 360, label: "Art parent → Art Prints 360" },
-    20081: { replacement: 162032, label: "Home Décor parent → Figurines 162032" },
-    1188: { replacement: 31787, label: "Toys & Hobbies parent → Military Model Kits 31787" },
-    51028: { replacement: 31787, label: "Models & Kits parent → Military Model Kits 31787" },
-    20601: { replacement: 20668, label: "Bedding parent → Blankets & Throws 20668" },
-    19130: { replacement: 262318, label: "Old HO Trains → HO Scale 262318" },
-    2611: { replacement: 31787, label: "Aircraft Model Kits 2611 deprecated — eBay remaps to games category. Use Military Model Kits 31787" },
+    11450:  { replacement: 57990,  label: "Clothing parent → pick a leaf" },
+    550:    { replacement: 360,    label: "Art parent → Art Prints 360" },
+    20081:  { replacement: 162032, label: "Home Décor parent → Figurines 162032" },
+    1188:   { replacement: 31787,  label: "Toys & Hobbies parent → Military Model Kits 31787" },
+    51028:  { replacement: 31787,  label: "Models & Kits parent → Military Model Kits 31787" },
+    20601:  { replacement: 20668,  label: "Bedding parent → Blankets & Throws 20668" },
+    19130:  { replacement: 262318, label: "Old HO Trains → HO Scale 262318" },
+    2611:   { replacement: 31787,  label: "Aircraft Model Kits 2611 deprecated — eBay remaps to games category. Use Military Model Kits 31787" },
+    // Parent categories that eBay rejects with error 87 (not a leaf)
+    11700:  { replacement: 177005, label: "Home & Garden parent (11700) → Kitchen & Steak Knives 177005" },
+    20625:  { replacement: 177005, label: "Kitchen, Dining & Bar parent (20625) → Kitchen & Steak Knives 177005" },
+    20637:  { replacement: 177005, label: "Flatware, Knives & Cutlery parent (20637) → Kitchen & Steak Knives 177005" },
   };
 
   // Per-category required item specifics with auto-fill defaults.
@@ -364,7 +368,10 @@ export function EbayBatchPanel({
     162032: "Home Figurines",
     36018: "Decorative Plates",
     48579: "Vintage Jewelry",
-    // Home
+    // Home — Knives & cutlery
+    177005: "Kitchen & Steak Knives",      // leaf under 20637 > 20625 > 11700
+    20637:  "Flatware, Knives & Cutlery",  // NOTE: this is a parent — use 177005 for individual knives
+    // Home — Décor & lighting
     20625: "Kitchen Glassware",
     112581: "Table Lamps",
     20706: "Floor Lamps",
@@ -626,6 +633,30 @@ export function EbayBatchPanel({
     ].join("\r\n");
 
     return csvContent;
+  };
+
+  // Keyword → eBay leaf category map (mirrors edge function logic, first match wins)
+  // Used to auto-correct AI-hallucinated or missing category IDs before push.
+  const KEYWORD_CATEGORY_MAP: Array<{ pattern: RegExp; categoryId: number; name: string }> = [
+    { pattern: /knife|knives|cleaver|slicer|santoku|boning|paring|cutlery/i,                               categoryId: 177005, name: "Kitchen & Steak Knives" },
+    { pattern: /ho[ -]?scale|ho[ -]?gauge/i,                                                               categoryId: 262318, name: "HO Scale Model Trains" },
+    { pattern: /\bn[ -]?scale\b.*train|\bn[ -]?gauge\b.*train/i,                                           categoryId: 47006,  name: "N Scale Model Trains" },
+    { pattern: /\bo[ -]?scale\b.*train|\bo[ -]?gauge\b.*train|lionel.*train/i,                             categoryId: 47004,  name: "O Scale Model Trains" },
+    { pattern: /\bg[ -]?scale\b.*train|\bg[ -]?gauge\b.*train/i,                                           categoryId: 47002,  name: "G Scale Model Trains" },
+    { pattern: /ship.*model.*kit|boat.*model.*kit|submarine.*kit|warship.*kit|destroyer.*kit/i,            categoryId: 37278,  name: "Ship/Boat Model Kits" },
+    { pattern: /car.*model.*kit|truck.*model.*kit|dragster.*kit|stock.*car.*kit/i,                         categoryId: 51023,  name: "Car/Truck Model Kits" },
+    { pattern: /figure.*kit|figurine.*kit|gundam/i,                                                        categoryId: 19063,  name: "Figure Model Kits" },
+    { pattern: /model[ -]?kit|scale[ -]?model|plastic[ -]?kit|tank.*kit|aircraft.*kit|tamiya|revell|monogram|airfix/i, categoryId: 31787, name: "Military & Aircraft Model Kits" },
+    { pattern: /\bblanket\b|fleece.*throw|throw.*blanket|sherpa.*blanket/i,                                categoryId: 20668,  name: "Blankets & Throws" },
+    { pattern: /film.*camera|35mm.*camera|vintage.*camera|slr.*film|rangefinder.*camera/i,                categoryId: 15230,  name: "Vintage Cameras" },
+    { pattern: /camcorder|handycam/i,                                                                      categoryId: 11724,  name: "Camcorders & Video Cameras" },
+  ];
+
+  const suggestCategoryFromTitle = (title: string): { categoryId: number; name: string } | null => {
+    for (const entry of KEYWORD_CATEGORY_MAP) {
+      if (entry.pattern.test(title || "")) return entry;
+    }
+    return null;
   };
 
   const getMissingCategoryLots = (sourceRows: EbayRow[] = rows): number[] => {
@@ -1085,14 +1116,20 @@ export function EbayBatchPanel({
 
     setPublishing(true);
     try {
-      // Step 1: Auto-fix deprecated categories
-      let pushRows = rows;
+      // Step 1: Apply keyword-based category fix — corrects AI-hallucinated IDs by item type
+      let pushRows = rows.map(r => {
+        const suggested = suggestCategoryFromTitle(r.title);
+        if (!suggested) return r;
+        return { ...r, category: String(suggested.categoryId) };
+      });
+
+      // Step 2: Auto-fix remaining deprecated/parent categories
       const deprecated = getDeprecatedCategoryLots(pushRows);
       if (deprecated.length > 0) {
         pushRows = await fixDeprecatedCategories(pushRows);
       }
 
-      // Step 2: Apply default category ID fallback for rows missing a category
+      // Step 3: Apply default category ID fallback for rows still missing a category
       const fallbackCatId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
       if (fallbackCatId) {
         pushRows = pushRows.map(r =>
@@ -1100,7 +1137,7 @@ export function EbayBatchPanel({
         );
       }
 
-      // Step 3: Block push if any rows still have no valid category ID
+      // Step 4: Block push if any rows still have no valid category ID
       const missingLots = getMissingCategoryLots(pushRows);
       if (missingLots.length > 0) {
         const preview = missingLots.slice(0, 5).join(", ");
