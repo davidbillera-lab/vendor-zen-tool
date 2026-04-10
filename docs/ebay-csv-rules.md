@@ -15,6 +15,7 @@ Reference for all eBay bulk upload requirements, known failures, and JSG standar
 | Duration | `GTC` (Good Till Cancelled) | |
 | Returns | `ReturnsAccepted`, 30 days, MoneyBack, Seller pays return shipping | |
 | Handling time | 1 day | |
+| Location | `80129` | Required field — Error 10009 if missing. JSG zip code. |
 | Promoted Listings | 5% General campaign | Set in Seller Hub → Marketing → Promoted Listings → auto-enroll all listings. NOT in CSV — must be configured once as an always-on campaign. |
 
 ---
@@ -30,6 +31,8 @@ Never use these. eBay either rejects (parent) or silently remaps to the wrong ca
 | 2611 | Aircraft Model Kits — eBay remaps to 183454 (video games), causes wrong required fields | 31787 |
 | 20601 | Bedding — parent category | 20668 |
 | 19130 | Old HO Scale Trains ID | 262318 |
+| 20625 | Kitchen, Dining & Bar — parent category | 177005 |
+| 11700 | Home & Garden — parent category | Use correct leaf (e.g. 177005 for knives) |
 
 ---
 
@@ -48,7 +51,8 @@ Never use these. eBay either rejects (parent) or silently remaps to the wrong ca
 | 133704 | Throws (eBay's remapped blanket ID) | Treat same as 20668 |
 | 11724 | Camcorders & Video Cameras | |
 | 15230 | Vintage Cameras | |
-| 20625 | Kitchen Knives & Cutlery Sets | Paring knives, chef knives, cutlery sets |
+| 177005 | Kitchen & Steak Knives | Paring knives, chef knives, santoku, slicers, boning knives |
+| 20637 | Flatware, Knives & Cutlery | Use 177005 for individual knives |
 
 ---
 
@@ -120,6 +124,7 @@ eBay error **21919308** if exceeded.
 | 21916883 | Condition ID invalid for category | Check allowed conditions table above; auto-fix is in EbayBatchPanel.tsx |
 | 21919308 | Item specific value too long | Add to `SPECIFIC_CHAR_LIMITS` in EbayBatchPanel.tsx |
 | 21919067 | Duplicate listing — identical item already live | Delete the old listing or skip this row |
+| 10009 | `Item.Location` missing or empty | Add `Location` column with value `80129` (JSG zip code) |
 | 87 | Category is not a leaf category (parent ID used) | Add to `DEPRECATED_CATEGORIES`, find correct leaf ID |
 | 20505 | Category remapped (warning, not failure) | Update `DEPRECATED_CATEGORIES` to point to new ID |
 

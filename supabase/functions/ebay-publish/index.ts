@@ -228,8 +228,8 @@ async function publishRow(
     // Always apply title-based category fix FIRST — catches AI hallucinated IDs by item type
     const titleLower = (row.title || "").toLowerCase();
     if (/knife|knives|cleaver|slicer|santoku|boning|paring|cutlery/.test(titleLower)) {
-      console.log(`[ebay-publish] LOT-${row.lot_number}: knife title match, forcing category → 20625 (was ${categoryId})`);
-      categoryId = "20625";
+      console.log(`[ebay-publish] LOT-${row.lot_number}: knife title match, forcing category -> 177005 (was ${categoryId})`);
+      categoryId = "177005"; // Kitchen & Steak Knives (leaf under 20637 > 20625 > 11700)
     }
 
     const xml = buildAddFixedPriceItemXml({ ...row, category: categoryId });
