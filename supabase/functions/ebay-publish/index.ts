@@ -211,7 +211,7 @@ async function publishRow(
   accessToken: string,
   tradingApiUrl: string,
   environment: EbayEnvironment
-): Promise<{ success: boolean; error?: string; listingId?: string }> {
+): Promise<{ success: boolean; error?: string; details?: string[]; listingId?: string }> {
   try {
     const xml = buildAddFixedPriceItemXml(row);
 
@@ -241,10 +241,25 @@ async function publishRow(
       return { success: true, listingId: itemId };
     }
 
-    // Extract error message
-    const errorMatch = responseText.match(/<LongMessage>(.*?)<\/LongMessage>/s);
-    const errorMsg = errorMatch?.[1] || responseText.substring(0, 500);
-    return { success: false, error: `Trading API error (${ack}): ${errorMsg}` };
+    // Extract all error blocks — filter to SeverityCode=Error only (ignore warnings)
+    const errorBlocks = [...responseText.matchAll(
+      /<Errors>([\s\S]*?)<\/Errors>/g
+    )].map(m => m[1]);
+
+    const realErrors = errorBlocks.filter(b => /<SeverityCode>Error<\/SeverityCode>/.test(b));
+    const allForLog  = errorBlocks; // log everything
+
+    const extract = (block: string, tag: string) =>
+      block.match(new RegExp(`<${tag}>(.*?)<\/${tag}>`, "s"))?.[1]?.replace(/<[^>]+>/g, "").trim() || "";
+
+    const logLines = allForLog.map(b => `[${extract(b,"ErrorCode")}] ${extract(b,"ShortMessage")}`);
+    console.error(`[ebay-publish] LOT-${row.lot_number} FAILED — ${logLines.join(" | ")}`);
+
+    const errorSummary = realErrors.length > 0
+      ? realErrors.map(b => `[${extract(b,"ErrorCode")}] ${extract(b,"ShortMessage")}: ${extract(b,"LongMessage")}`).join(" | ")
+      : logLines.join(" | ");
+
+    return { success: false, error: errorSummary };
 
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
