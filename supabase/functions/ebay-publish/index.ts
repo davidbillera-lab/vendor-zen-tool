@@ -265,13 +265,13 @@ async function publishRow(
       block.match(new RegExp(`<${tag}>(.*?)<\/${tag}>`, "s"))?.[1]?.replace(/<[^>]+>/g, "").trim() || "";
 
     const logLines = allForLog.map(b => `[${extract(b,"ErrorCode")}] ${extract(b,"ShortMessage")}`);
-    console.error(`[ebay-publish] LOT-${row.lot_number} FAILED — ${logLines.join(" | ")}`);
+    console.error(`[ebay-publish] LOT-${row.lot_number} (category="${row.category}") FAILED — ${logLines.join(" | ")}`);
 
     const errorSummary = realErrors.length > 0
       ? realErrors.map(b => `[${extract(b,"ErrorCode")}] ${extract(b,"ShortMessage")}: ${extract(b,"LongMessage")}`).join(" | ")
       : logLines.join(" | ");
 
-    return { success: false, error: errorSummary };
+    return { success: false, error: `Lot ${row.lot_number} (cat:${categoryId}): ${errorSummary}` };
 
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
