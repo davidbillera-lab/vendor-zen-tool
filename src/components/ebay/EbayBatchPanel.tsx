@@ -1132,10 +1132,11 @@ export function EbayBatchPanel({
       }
 
       if (failed > 0) {
-        const firstError = results.find((r: any) => !r.success)?.error || "Unknown";
+        const failedResults = results.filter((r: any) => !r.success);
+        const allErrors = failedResults.map((r: any) => r.error || "Unknown").join(" || ");
         toast({
           title: `${succeeded} pushed, ${failed} failed`,
-          description: `First error: ${firstError.substring(0, 300)}`,
+          description: allErrors.substring(0, 500),
           variant: "destructive",
         });
       } else {
