@@ -12,6 +12,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { Pool } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -89,6 +90,49 @@ function flattenTree(
   }
 }
 
+/* ─── Bootstrap the table if it doesn't exist yet ─── */
+
+async function ensureSchema(dbUrl: string): Promise<void> {
+  const pool = new Pool(dbUrl, 1, true);
+  const conn = await pool.connect();
+  try {
+    await conn.queryObject(`
+      CREATE TABLE IF NOT EXISTS ebay_categories (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        parent_id  TEXT,
+        path       TEXT,
+        level      INTEGER,
+        is_leaf    BOOLEAN NOT NULL DEFAULT FALSE,
+        synced_at  TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ebay_categories_leaf
+        ON ebay_categories(is_leaf) WHERE is_leaf = TRUE;
+      CREATE INDEX IF NOT EXISTS idx_ebay_categories_fts
+        ON ebay_categories
+        USING gin(to_tsvector('english', name || ' ' || COALESCE(path, '')));
+      CREATE OR REPLACE FUNCTION suggest_ebay_category(query TEXT, result_limit INT DEFAULT 5)
+      RETURNS TABLE (id TEXT, name TEXT, path TEXT, rank REAL) AS $$
+      BEGIN
+        RETURN QUERY
+        SELECT c.id, c.name, c.path,
+          ts_rank(to_tsvector('english', c.name || ' ' || COALESCE(c.path, '')),
+                  plainto_tsquery('english', query)) AS rank
+        FROM ebay_categories c
+        WHERE c.is_leaf = TRUE
+          AND to_tsvector('english', c.name || ' ' || COALESCE(c.path, ''))
+              @@ plainto_tsquery('english', query)
+        ORDER BY rank DESC
+        LIMIT result_limit;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+  } finally {
+    conn.release();
+    await pool.end();
+  }
+}
+
 /* ─── Upsert in batches ─── */
 
 async function batchUpsert(
@@ -128,10 +172,15 @@ Deno.serve(async (req: Request) => {
   const t0 = Date.now();
 
   try {
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const serviceKey  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const dbUrl       = Deno.env.get("SUPABASE_DB_URL")!;
+
+    const supabase = createClient(supabaseUrl, serviceKey);
+
+    // 0. Ensure table + indexes + FTS function exist (self-bootstrapping)
+    console.log("[sync-ebay-categories] Ensuring schema...");
+    await ensureSchema(dbUrl);
 
     // 1. Get eBay app token
     console.log("[sync-ebay-categories] Getting app token...");

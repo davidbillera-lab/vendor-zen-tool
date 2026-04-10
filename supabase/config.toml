@@ -29,3 +29,9 @@ verify_jwt = false
 
 [functions.generate-denver-listing]
 verify_jwt = false
+
+[functions.sync-ebay-categories]
+verify_jwt = false
+
+[functions.suggest-ebay-category]
+verify_jwt = false
