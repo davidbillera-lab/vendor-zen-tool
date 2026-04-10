@@ -56,88 +56,180 @@ HOW TO PICK THE RIGHT LEAF CATEGORY:
 4. If you're unsure, pick the broader leaf category rather than guessing a specific one
 
 VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
+
+-- CLOTHING & SHOES (root: 11450) --
 - Men's T-Shirts: 21235
-- Men's Coats, Jackets & Vests: 3001
 - Men's Casual Shirts: 57990
 - Men's Dress Shirts: 57991
 - Men's Jeans: 11483
 - Men's Sweaters: 11484
 - Men's Dress Pants: 57989
+- Men's Coats, Jackets & Vests: 3001
+- Men's Athletic Shoes: 15709
+- Men's Casual Shoes / Loafers: 24087
+- Men's Dress Shoes: 53120
 - Women's Coats & Jackets: 63862
 - Women's Tops & Blouses: 53159
 - Women's Dresses: 63861
 - Women's Jeans: 11554
 - Women's Sweaters: 63866
 - Women's Activewear Tops: 185176
+- Women's Heels & Pumps: 55793
+- Women's Flats: 45333
+- Women's Athletic Shoes: 95672
+- Women's Handbags & Purses: 169291
+- Men's Bags & Backpacks: 4250
+
+-- JEWELRY & WATCHES (root: 281) --
 - Wristwatches: 31387
 - Fine Rings: 67681
 - Fine Necklaces & Pendants: 67652
-- Fashion Jewelry Necklaces: 10968
+- Fashion Jewelry: 10968
+- Vintage & Antique Jewelry: 48579
+
+-- ART (root: 550) --
 - Art Prints: 360
-- Paintings: 551 (DO NOT use 118429 or 117089 — those are deprecated)
+- Paintings: 551 (DO NOT use 118429 or 117089 — deprecated)
 - Sculptures & Carvings: 60628
-- Mixed Media Art & Collage Art: 158658
+- Mixed Media & Collage Art: 158658
+
+-- COLLECTIBLES (root: 1) --
 - Decorative Collectible Figurines: 162032
-- Kitchen & Steak Knives (paring, chef, santoku, slicer, boning, cleaver, cutlery sets): 177005
-- Kitchen Glassware: 20625
-- Decorative Plates & Bowls: 36018
+- Decorative Plates & Platters: 36018
+- Christmas Wreaths & Garlands: 33164 (NOT 159769 — remapped)
+- Christmas Ornaments: 170091
+- Christmas Stockings: 170098
+- Other Christmas Décor: 170083
+- Seasonal Home Décor: 116022
+
+-- HOME & GARDEN (root: 11700) --
+- Kitchen & Steak Knives (paring, chef, santoku, slicer, boning, cleaver): 177005
 - Table Lamps: 112581
 - Floor Lamps: 20706
 - Area Rugs: 45510
-- Men's Athletic Shoes: 15709
-- Men's Casual Shoes: 24087
-- Men's Dress Shoes: 53120
-- Women's Heels: 55793
-- Women's Flats: 45333
-- Women's Athletic Shoes: 95672
-- Women's Handbags: 169291
-- Men's Bags: 4250
-- Wireless/Bluetooth Headphones: 112529
-- Digital Cameras: 31388
-- Video Game Consoles: 139971
-- Action Figures & Accessories: 261068
-- Board & Traditional Games: 180349
-- Christmas Wreaths, Garlands & Plants: 33164 (NOT 159769 — that was remapped!)
-- Christmas Ornaments: 170091
-- Christmas Stockings & Hangers: 170098
-- Other Christmas Décor: 170083
-- Seasonal Home Décor: 116022
-- Candles: 46782
-- Vases: 20625
-- Bookends: 261
-- Picture Frames: 16041
 - Mirrors: 20580
 - Clocks: 20562
-- Baskets: 20563
-- Pottery & Glass: 870
-- Military Vehicle Model Kits (tanks, trucks, armor — any scale): 31787
-- Aircraft Model Kits (planes, helicopters — any scale): 31787 (DO NOT use 2611 — it is DEPRECATED, eBay remaps it to a video games category!)
-- Ship/Boat Model Kits: 37278
-- Car/Truck Model Kits (non-military): 51023
-- Figure Model Kits (sci-fi, fantasy, anime): 19063
-- HO Scale Model Trains: 262318
-- N Scale Model Trains: 47006
-- O Scale Model Trains: 47004
-- G Scale Model Trains: 47002
-- Model Train Accessories: 4748
+- Picture Frames: 16041
+- Candles: 46782
+- Baskets & Bowls: 20563
 - Blankets & Throws: 20668
 - Bed Pillows: 20677
 - Comforters & Sets: 20672
 - Sheet Sets: 20675
 - Mattress Pads & Toppers: 20681
-- Camcorders & Video Cameras (working): 11724
-- Camcorders & Video Cameras (parts/not working): 11724
-- Vintage Cameras & Equipment: 15230
+
+-- CAMERAS & PHOTO (root: 625) --
+- Digital Cameras: 31388
+- Vintage Cameras & Film Cameras: 15230
+- Camcorders & Video Cameras: 11724
 - Camera Lenses: 30106
 
-IMPORTANT RULES:
-- NEVER use parent/intermediate categories (e.g., 11450 "Clothing, Shoes & Accessories" is a PARENT - do not use it)
-- NEVER use 1188 "Toys & Hobbies" — it is a top-level PARENT. Always pick the specific leaf (e.g., 31787 for military model kits, 2611 for aircraft kits, 261068 for action figures)
-- NEVER use 20601 "Bedding" — it is a PARENT. Use the specific leaf (e.g., 20668 for blankets/throws)
-- NEVER use 51028 "Models & Kits" — it is a PARENT. Use the specific model type leaf above
+-- CONSUMER ELECTRONICS (root: 293) --
+- Wireless / Bluetooth Headphones: 112529
+
+-- VIDEO GAMES & CONSOLES (root: 1249) --
+- Video Game Consoles: 139971
+
+-- POTTERY & GLASS (root: 870) --
+- Pottery & China: 870 (use this for pottery, ceramics, china dishware, porcelain)
+- Glass: 916 (use this for decorative glass, glassware, crystal)
+- Vases: 45237
+
+-- ANTIQUES (root: 20081) --
+- Antique Furniture: 20091
+- Antique Decorative Arts: 20086
+- Antique Rugs & Carpets: 37978
+- Antique Clocks: 1192
+
+-- BOOKS & MAGAZINES (root: 267) --
+- Antiquarian & Collectible Books: 29223
+- Fiction & Literature Books: 171228
+- Nonfiction Books: 183387
+- Magazines: 280
+
+-- COINS & PAPER MONEY (root: 11116) --
+- US Coins: 253
+- World / Foreign Coins: 256
+- US Paper Money: 3412
+- Coin Collections & Lots: 18880
+
+-- DOLLS & BEARS (root: 237) --
+- Barbie Dolls: 238
+- Vintage & Antique Dolls: 16497
+- Teddy Bears: 2228
+- Action Figures (non-toy): 261068
+
+-- MOVIES & TV (root: 11232) --
+- DVDs & Blu-ray Discs: 617
+- VHS Tapes: 309
+
+-- MUSIC (root: 11233) --
+- Vinyl Records: 306
+- CDs: 176984
+
+-- MUSICAL INSTRUMENTS (root: 619) --
+- Guitars: 33034
+- Pianos & Keyboards: 16220
+- Brass Instruments: 180014
+- String Instruments: 183085
+- Percussion & Drums: 12229
+- Vintage Musical Instruments: 41833
+
+-- SPORTING GOODS (root: 888) --
+- Exercise & Fitness Equipment: 15273
+- Golf Clubs: 1513
+- Fishing Equipment: 1492
+- Camping & Hiking Gear: 16034
+
+-- TOYS & HOBBIES (root: 220) --
+- Military & Aircraft Model Kits (tanks, planes, armor — any scale): 31787
+- Aircraft Model Kits: 31787 (DO NOT use 2611 — DEPRECATED, eBay remaps to video games)
+- Ship/Boat Model Kits: 37278
+- Car/Truck Model Kits (non-military): 51023
+- Figure Model Kits (sci-fi, fantasy, Gundam): 19063
+- HO Scale Model Trains: 262318
+- N Scale Model Trains: 47006
+- O Scale Model Trains: 47004
+- G Scale Model Trains: 47002
+- Model Train Accessories: 4748
+- Action Figures & Accessories: 261068
+- Board & Traditional Games: 180349
+
+-- STAMPS (root: 260) --
+- US Stamps: 261
+- World Stamps: 262
+
+IMPORTANT RULES — PARENT CATEGORY IDs: NEVER USE THESE IN A LISTING
+These are ALL root/parent categories — eBay error 87 if used directly. Always drill to a leaf:
+- 11450 = Clothing, Shoes & Accessories (PARENT)
+- 220   = Toys & Hobbies (PARENT) — use 31787, 261068, 262318, etc.
+- 267   = Books & Magazines (PARENT) — use 29223, 171228, 183387, 280
+- 281   = Jewelry & Watches (PARENT) — use 31387, 67681, etc.
+- 293   = Consumer Electronics (PARENT) — use 112529, etc.
+- 550   = Art (PARENT) — use 360, 551, 60628, 158658
+- 619   = Musical Instruments & Gear (PARENT) — use 33034, 16220, etc.
+- 625   = Cameras & Photo (PARENT) — use 31388, 15230, 11724, 30106
+- 237   = Dolls & Bears (PARENT) — use 238, 16497, 2228
+- 260   = Stamps (PARENT) — use 261, 262
+- 870   = Pottery & Glass (PARENT) — use 916, 45237, etc.
+- 888   = Sporting Goods (PARENT) — use 15273, 1513, 1492, etc.
+- 1     = Collectibles (PARENT) — use 162032, 36018, 33164, etc.
+- 1249  = Video Games & Consoles (PARENT) — use 139971
+- 11116 = Coins & Paper Money (PARENT) — use 253, 256, 3412
+- 11232 = Movies & TV (PARENT) — use 617, 309
+- 11233 = Music (PARENT) — use 306, 176984
+- 11700 = Home & Garden (PARENT) — use 177005, 112581, 20706, etc.
+- 20081 = Antiques (PARENT) — use 20091, 20086, etc.
+- 45100 = Entertainment Memorabilia (PARENT)
+- 20601 = Bedding (PARENT) — use 20668, 20677, 20672, 20675
+- 51028 = Models & Kits (PARENT) — use 31787, 37278, 51023, 19063
+- 180250 = Model Railroads & Trains (PARENT) — use 262318, 47006, 47004, 47002
+
+ADDITIONAL RULES:
 - If an item is seasonal décor (wreaths, ornaments, etc.), use the Holiday/Seasonal category tree, NOT "Home Décor" generically
 - The categoryId MUST be a number, not a string
-- When in doubt, pick from the VERIFIED list above rather than guessing
+- When in doubt, pick from the VERIFIED list above rather than guessing a random number
+- NEVER invent a category ID — if you are not certain, pick the closest verified ID from this list
 
 === STEP 3: TITLE (HARD LIMIT: 80 CHARACTERS MAX — CASSINI OPTIMIZED) ===
 **THIS IS CRITICAL - COUNT YOUR CHARACTERS!**

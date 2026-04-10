@@ -20,20 +20,55 @@ Reference for all eBay bulk upload requirements, known failures, and JSG standar
 
 ---
 
+## eBay Root-Level Category IDs (April 2026 — Confirmed)
+
+Source: eBay API / isoldwhat.com. These are TOP-LEVEL PARENTS — never use as listing category.
+
+| Root Category | Root ID | Estate Sale? | Common Leaf IDs |
+|---------------|---------|--------------|-----------------|
+| Antiques | 20081 | Yes | 20091 furniture, 20086 decorative arts, 37978 rugs, 1192 clocks |
+| Art | 550 | Yes | 360 prints, 551 paintings, 60628 sculptures, 158658 mixed media |
+| Books & Magazines | 267 | Yes | 29223 antiquarian, 171228 fiction, 183387 nonfiction, 280 magazines |
+| Cameras & Photo | 625 | Yes | 31388 digital, 15230 vintage/film, 11724 camcorders, 30106 lenses |
+| Clothing, Shoes & Accessories | 11450 | Yes | 21235 men's tees, 57990 men's shirts, 63861 women's dresses, etc. |
+| Coins & Paper Money | 11116 | Yes | 253 US coins, 256 world coins, 3412 US paper money, 18880 lots |
+| Collectibles | 1 | Yes | 162032 figurines, 36018 plates, 33164 Xmas wreaths, 170091 ornaments |
+| Consumer Electronics | 293 | Yes | 112529 Bluetooth headphones |
+| Dolls & Bears | 237 | Yes | 238 Barbie, 16497 vintage dolls, 2228 teddy bears |
+| Entertainment Memorabilia | 45100 | Yes | (drill to specific leaf) |
+| Home & Garden | 11700 | Yes | 177005 knives, 112581 table lamps, 20706 floor lamps, 20668 blankets |
+| Jewelry & Watches | 281 | Yes | 31387 watches, 67681 rings, 67652 necklaces, 10968 fashion jewelry |
+| Movies & TV | 11232 | Yes | 617 DVDs/Blu-ray, 309 VHS |
+| Music | 11233 | Yes | 306 vinyl records, 176984 CDs |
+| Musical Instruments & Gear | 619 | Yes | 33034 guitars, 16220 keyboards, 180014 brass, 183085 strings |
+| Pottery & Glass | 870 | Yes | 916 glass, 45237 vases, (ceramics/china use 870 sub-leaves) |
+| Sporting Goods | 888 | Yes | 15273 fitness equipment, 1513 golf, 1492 fishing, 16034 camping |
+| Stamps | 260 | Yes | 261 US stamps, 262 world stamps |
+| Toys & Hobbies | **220** | Yes | 31787 model kits, 261068 action figures, 262318 HO trains |
+| Video Games & Consoles | 1249 | Yes | 139971 consoles |
+
+> **Note:** Toys & Hobbies root ID is **220** (not 1188 — 1188 is a subcategory). Both are blocked in DEPRECATED_CATEGORIES.
+
+---
+
 ## Deprecated / Remapped Category IDs
 
 Never use these. eBay either rejects (parent) or silently remaps to the wrong category.
 
 | Bad ID | Problem | Use Instead |
 |--------|---------|-------------|
-| 1188 | Toys & Hobbies — parent category | 31787 |
+| 220 | Toys & Hobbies ROOT — eBay error 87 | 31787 model kits, 261068 action figures, 262318 HO trains |
+| 1188 | Toys & Hobbies old/sub ID — blocked | 31787 |
 | 51028 | Models & Kits — parent category | 31787 |
-| 2611 | Aircraft Model Kits — eBay remaps to 183454 (video games), causes wrong required fields | 31787 |
-| 20601 | Bedding — parent category | 20668 |
+| 180250 | Model Railroads & Trains — parent | 262318 HO, 47006 N, 47004 O, 47002 G |
+| 2611 | Aircraft Model Kits — eBay remaps to 183454 (video games) | 31787 |
+| 20601 | Bedding — parent category | 20668 blankets, 20677 pillows, 20672 comforters |
 | 19130 | Old HO Scale Trains ID | 262318 |
-| 11700 | Home & Garden — parent category | 177005 (for knives) |
-| 20625 | Kitchen, Dining & Bar — parent category | 177005 |
-| 20637 | Flatware, Knives & Cutlery — parent category | 177005 |
+| 11700 | Home & Garden ROOT — parent | pick correct leaf (177005 for knives) |
+| 20625 | Kitchen, Dining & Bar — parent | 177005 |
+| 20637 | Flatware, Knives & Cutlery — parent | 177005 |
+| 550 | Art ROOT — parent | 360 prints, 551 paintings, 60628 sculptures |
+| 11450 | Clothing ROOT — parent | pick clothing leaf |
 | 177708 | AI-hallucinated ID — eBay error 107 "Category is not valid" | Select correct leaf manually |
 
 ---
