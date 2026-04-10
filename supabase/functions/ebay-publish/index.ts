@@ -216,6 +216,15 @@ async function publishRow(
   environment: EbayEnvironment
 ): Promise<{ success: boolean; error?: string; details?: string[]; listingId?: string }> {
   try {
+    // Guard: reject rows with no valid eBay category ID before hitting the API
+    const categoryId = row.category?.match(/\d{3,}/)?.[0];
+    if (!categoryId) {
+      return {
+        success: false,
+        error: `Lot ${row.lot_number}: No eBay category ID found. Category field is: "${row.category || "empty"}". Set a numeric eBay category ID in the app before pushing.`,
+      };
+    }
+
     const xml = buildAddFixedPriceItemXml(row);
 
     const res = await fetch(tradingApiUrl, {
