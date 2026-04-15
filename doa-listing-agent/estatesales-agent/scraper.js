@@ -32,11 +32,12 @@ export async function scrapeAuction(auctionUrl) {
 
   let context = null;
   try {
+    const isCI = process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true';
     context = await chromium.launchPersistentContext(SESSION_DIR, {
-      headless: false,
-      slowMo: 50,
-      args: ['--start-maximized'],
-      viewport: null,
+      headless: isCI,
+      slowMo: isCI ? 0 : 50,
+      args: isCI ? [] : ['--start-maximized'],
+      viewport: isCI ? { width: 1280, height: 720 } : null,
     });
 
     const page = await context.newPage();

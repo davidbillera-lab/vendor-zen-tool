@@ -9,6 +9,7 @@
     "scrape-only": "node agent.js --scrape-only"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
     "chalk": "^5.3.0",
     "dotenv": "^16.4.5",
     "nodemailer": "^6.9.13",

@@ -556,14 +556,20 @@ export async function runDoaAgent(lots, options = {}, callbacks = {}) {
 
   try {
     // ── Launch browser ────────────────────────────────────────────────────────
-    log.section('Launching Chromium (headed mode — you can watch the browser)');
+    const isCI = process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true';
+    log.section(isCI
+      ? 'Launching Chromium (headless — running in GitHub Actions)'
+      : 'Launching Chromium (headed mode — you can watch the browser)');
     browser = await chromium.launch({
-      headless: false,
-      slowMo: 80,        // 80ms between actions — mimics human typing speed
-      args: ['--start-maximized'],
+      headless: isCI,
+      slowMo: isCI ? 0 : 80,
+      args: isCI ? [] : ['--start-maximized'],
     });
 
-    const context = await browser.newContext({ viewport: null, acceptDownloads: true });
+    const context = await browser.newContext({
+      viewport: isCI ? { width: 1280, height: 720 } : null,
+      acceptDownloads: true,
+    });
     page = await context.newPage();
 
     // ── Login ─────────────────────────────────────────────────────────────────

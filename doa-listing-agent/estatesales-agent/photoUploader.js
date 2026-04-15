@@ -90,11 +90,12 @@ export async function uploadPhotos(listingUrl, lots, { email, password }, onProg
   let failed = 0;
 
   try {
+    const isCI = process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true';
     context = await chromium.launchPersistentContext(SESSION_DIR, {
-      headless: false,
-      slowMo: 80,
-      args: ['--start-maximized'],
-      viewport: null,
+      headless: isCI,
+      slowMo: isCI ? 0 : 80,
+      args: isCI ? [] : ['--start-maximized'],
+      viewport: isCI ? { width: 1280, height: 720 } : null,
     });
 
     const page = await context.newPage();

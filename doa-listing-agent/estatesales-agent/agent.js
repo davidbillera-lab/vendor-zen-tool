@@ -23,6 +23,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 import log from './logger.js';
 import { scrapeAuction, auctionSlugFromUrl } from './scraper.js';
 import { downloadLots } from './downloader.js';
@@ -46,12 +47,131 @@ function flagValue(flag) {
   return idx !== -1 && args[idx + 1] ? args[idx + 1] : null;
 }
 
+const JOB_ID        = flagValue('--job-id') || process.env.JOB_ID || null;
 const AUCTION_URL    = flagValue('--auction') || DEFAULT_AUCTION_URL;
 const LISTING_URL    = flagValue('--listing');
 const SCRAPE_ONLY    = args.includes('--scrape-only');
 const DESCRIBE_ONLY  = args.includes('--describe-only');
 const UPLOAD_ONLY    = args.includes('--upload-only');
 const DRY_RUN        = args.includes('--dry-run');
+
+// ── Supabase helpers (used by --job-id mode) ──────────────────────────────────
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set for --job-id mode');
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
+async function updateJobStatus(supabase, jobId, fields) {
+  const { error } = await supabase.from('estatesales_jobs').update(fields).eq('id', jobId);
+  if (error) log.warn(`Could not update job status: ${error.message}`);
+}
+
+// ── --job-id mode: pull config from Supabase, run full pipeline ───────────────
+async function runJobMode(jobId) {
+  log.section(`EstateSales Agent — Job Mode (job: ${jobId})`);
+
+  const supabase = getSupabase();
+
+  // Fetch the job record
+  const { data: job, error: jobErr } = await supabase
+    .from('estatesales_jobs')
+    .select('*')
+    .eq('id', jobId)
+    .single();
+
+  if (jobErr || !job) {
+    log.error(`Job not found: ${jobId} — ${jobErr?.message}`);
+    process.exit(1);
+  }
+
+  // Fetch the user's estatesales.net credentials
+  const { data: creds, error: credsErr } = await supabase
+    .from('user_estatesales_credentials')
+    .select('estatesales_email, estatesales_password')
+    .eq('user_id', job.user_id)
+    .single();
+
+  if (credsErr || !creds) {
+    await updateJobStatus(supabase, jobId, { status: 'failed', error_message: 'No estatesales.net credentials on file for this user' });
+    log.error(`No credentials found for user ${job.user_id}`);
+    process.exit(1);
+  }
+
+  const credentials = { email: creds.estatesales_email, password: creds.estatesales_password };
+
+  // Mark job as running
+  await updateJobStatus(supabase, jobId, { status: 'running' });
+
+  try {
+    // Phase 1: Scrape
+    const auctionSlug = auctionSlugFromUrl(job.doa_url);
+    log.section('Phase 1: Scraping DOA Auction');
+    const freshLots = await scrapeAuction(job.doa_url);
+    const cached = loadLots(auctionSlug) || [];
+    const cachedMap = new Map(cached.map(l => [l.lotNumber, l]));
+    let lots = freshLots.map(l => {
+      const prior = cachedMap.get(l.lotNumber);
+      return prior
+        ? { ...l, uploadedAt: prior.uploadedAt, descriptionFilled: prior.descriptionFilled, imagePath: prior.imagePath }
+        : l;
+    });
+    saveLots(lots, auctionSlug);
+    await updateJobStatus(supabase, jobId, { lots_scraped: lots.length });
+    log.success(`Scraped ${lots.length} lots`);
+
+    // Phase 2: Download
+    log.section('Phase 2: Downloading Images');
+    const needsDownload = lots.filter(l => !l.imagePath || !fs.existsSync(l.imagePath));
+    if (needsDownload.length > 0) {
+      await downloadLots(lots, auctionSlug);
+      saveLots(lots, auctionSlug);
+    }
+
+    // Phase 3: Upload photos
+    log.section('Phase 3: Uploading Photos');
+    const uploadResult = await uploadPhotos(job.estatesales_url, lots, credentials, () => {
+      saveLots(lots, auctionSlug);
+    });
+    saveLots(lots, auctionSlug);
+    await updateJobStatus(supabase, jobId, { lots_uploaded: uploadResult.succeeded });
+
+    // Phase 4: Fill descriptions
+    log.section('Phase 4: Filling Descriptions');
+    const descResult = await fillDescriptions(job.estatesales_url, lots, credentials, () => {
+      saveLots(lots, auctionSlug);
+    });
+    saveLots(lots, auctionSlug);
+
+    const totalFailed = uploadResult.failed + descResult.failed;
+
+    // Phase 5: Notify
+    await sendCompletionEmail({
+      auctionSlug,
+      listingUrl: job.estatesales_url,
+      uploaded:  uploadResult.succeeded,
+      described: descResult.succeeded,
+      failed:    totalFailed,
+    });
+
+    await updateJobStatus(supabase, jobId, {
+      status:           totalFailed > 0 ? 'completed' : 'completed',
+      lots_described:   descResult.succeeded,
+      completed_at:     new Date().toISOString(),
+      error_message:    totalFailed > 0 ? `${totalFailed} lot(s) failed` : null,
+    });
+
+    log.section('Job Complete');
+    log.info(`Uploaded: ${uploadResult.succeeded}  Described: ${descResult.succeeded}  Failed: ${totalFailed}`);
+    process.exit(totalFailed > 0 ? 1 : 0);
+
+  } catch (err) {
+    await updateJobStatus(supabase, jobId, { status: 'failed', error_message: err.message });
+    log.error(`Job failed: ${err.message}`);
+    process.exit(1);
+  }
+}
 
 // ── lots.json helpers ─────────────────────────────────────────────────────────
 function lotsDir(slug)      { return path.join(__dirname, 'lots', slug); }
@@ -101,6 +221,12 @@ function validateConfig() {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
+  // Cloud/SaaS mode — triggered by GitHub Actions via trigger-estatesales-agent
+  if (JOB_ID) {
+    await runJobMode(JOB_ID);
+    return;
+  }
+
   log.section('EstateSales Photo Upload Agent');
 
   const mode = DESCRIBE_ONLY ? 'describe-only'
