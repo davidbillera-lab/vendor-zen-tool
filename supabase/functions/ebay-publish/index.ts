@@ -35,11 +35,39 @@ function getEnvironment(): EbayEnvironment {
   return configured === "sandbox" ? "sandbox" : "production";
 }
 
-async function getAccessToken(): Promise<{ accessToken: string; environment: EbayEnvironment; tradingApiUrl: string }> {
+// Look up per-user eBay credentials from DB. Returns null if not found (fall back to shared secrets).
+async function getUserEbayCreds(authHeader: string | null): Promise<{ clientId: string; clientSecret: string; refreshToken: string } | null> {
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey) return null;
+
+  try {
+    const jwt = authHeader.slice(7);
+    // Decode user_id from JWT payload (base64 middle segment)
+    const payload = JSON.parse(atob(jwt.split(".")[1]));
+    const userId = payload.sub as string;
+    if (!userId) return null;
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const { data } = await supabase
+      .from("user_ebay_credentials")
+      .select("client_id, client_secret, refresh_token")
+      .eq("user_id", userId)
+      .single();
+
+    if (!data?.client_id || !data?.client_secret || !data?.refresh_token) return null;
+    return { clientId: data.client_id, clientSecret: data.client_secret, refreshToken: data.refresh_token };
+  } catch {
+    return null;
+  }
+}
+
+async function getAccessToken(userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null): Promise<{ accessToken: string; environment: EbayEnvironment; tradingApiUrl: string }> {
   const environment = getEnvironment();
-  const clientId = sanitizeSecret("EBAY_CLIENT_ID");
-  const clientSecret = sanitizeSecret("EBAY_CLIENT_SECRET");
-  const refreshToken = sanitizeSecret("EBAY_REFRESH_TOKEN");
+  const clientId = userCreds?.clientId ?? sanitizeSecret("EBAY_CLIENT_ID");
+  const clientSecret = userCreds?.clientSecret ?? sanitizeSecret("EBAY_CLIENT_SECRET");
+  const refreshToken = userCreds?.refreshToken ?? sanitizeSecret("EBAY_REFRESH_TOKEN");
 
   const b64Auth = btoa(`${clientId}:${clientSecret}`);
 
@@ -363,10 +391,15 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json();
+    const authHeader = req.headers.get("authorization");
+
+    // Resolve credentials: per-user DB row first, fall back to shared secrets
+    const userCreds = await getUserEbayCreds(authHeader);
+    console.log(userCreds ? "[ebay-publish] Using per-user eBay credentials" : "[ebay-publish] Using shared eBay credentials (fallback)");
 
     // Quick auth test mode
     if (body.test_auth_only) {
-      const auth = await getAccessToken();
+      const auth = await getAccessToken(userCreds);
       return new Response(
         JSON.stringify({ success: true, environment: auth.environment }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -381,8 +414,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Get eBay access token
-    const { accessToken, environment, tradingApiUrl } = await getAccessToken();
+    // Get eBay access token (per-user if available, shared secrets otherwise)
+    const { accessToken, environment, tradingApiUrl } = await getAccessToken(userCreds);
     console.log(`Publishing via Trading API — ${environment}`);
 
     // Process each row

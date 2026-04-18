@@ -736,75 +736,75 @@ serve(async (req) => {
         }
       }
 
-      // ── eBay Category Suggestions API validation ──────────────────────────
-      // Ask eBay's own taxonomy engine what category the title belongs to.
-      // Override the AI's guess if eBay returns a confident, different answer.
-      // This prevents hallucinated or deprecated category IDs from ever reaching
-      // the listing push step.
-      try {
-        const title = (anyListing['title'] as string) || "";
-        if (title.length >= 3) {
-          const suggestUrl =
-            `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions` +
-            `?q=${encodeURIComponent(title)}`;
+      // ── eBay Category Suggestions API (fallback only) ────────────────────
+      // Only call the Taxonomy API when the AI has no category or picked a
+      // known-bad (deprecated/parent) ID. If the AI already has a valid leaf
+      // ID, trust it — eBay's generic suggestion engine returns worse results
+      // for estate-sale items (vintage, antique, niche) than the verified list
+      // built into the AI prompt.
+      const aiCatId = anyListing['categoryId'] as number | null;
+      const needsTaxonomyFallback = !aiCatId || aiCatId <= 0 || aiCatId in CATEGORY_REMAPS;
 
-          // Get app token (client_credentials — no user context needed for taxonomy)
-          const ebayClientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
-          const ebayClientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+      if (needsTaxonomyFallback) {
+        try {
+          const title = (anyListing['title'] as string) || "";
+          if (title.length >= 3) {
+            const suggestUrl =
+              `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions` +
+              `?q=${encodeURIComponent(title)}`;
 
-          if (ebayClientId && ebayClientSecret) {
-            const tokenRes = await fetch(
-              "https://api.ebay.com/identity/v1/oauth2/token",
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/x-www-form-urlencoded",
-                  Authorization: `Basic ${btoa(`${ebayClientId}:${ebayClientSecret}`)}`,
-                },
-                body: new URLSearchParams({
-                  grant_type: "client_credentials",
-                  scope: "https://api.ebay.com/oauth/api_scope",
-                }),
-              }
-            );
+            const ebayClientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+            const ebayClientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
 
-            if (tokenRes.ok) {
-              const tokenData = await tokenRes.json();
-              const appToken = tokenData.access_token as string;
+            if (ebayClientId && ebayClientSecret) {
+              const tokenRes = await fetch(
+                "https://api.ebay.com/identity/v1/oauth2/token",
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    Authorization: `Basic ${btoa(`${ebayClientId}:${ebayClientSecret}`)}`,
+                  },
+                  body: new URLSearchParams({
+                    grant_type: "client_credentials",
+                    scope: "https://api.ebay.com/oauth/api_scope",
+                  }),
+                }
+              );
 
-              const suggestRes = await fetch(suggestUrl, {
-                headers: { Authorization: `Bearer ${appToken}` },
-              });
+              if (tokenRes.ok) {
+                const tokenData = await tokenRes.json();
+                const appToken = tokenData.access_token as string;
 
-              if (suggestRes.ok) {
-                const suggestData = await suggestRes.json();
-                const topSuggestion = suggestData.categorySuggestions?.[0];
+                const suggestRes = await fetch(suggestUrl, {
+                  headers: { Authorization: `Bearer ${appToken}` },
+                });
 
-                if (topSuggestion) {
-                  const ebayId = parseInt(topSuggestion.category.categoryId, 10);
-                  const ebayName = topSuggestion.category.categoryName as string;
-                  const aiId = anyListing['categoryId'] as number | null;
+                if (suggestRes.ok) {
+                  const suggestData = await suggestRes.json();
+                  const topSuggestion = suggestData.categorySuggestions?.[0];
 
-                  if (ebayId && !Number.isNaN(ebayId) && ebayId !== aiId) {
-                    console.log(
-                      `[generate-listing] Category override: AI=${aiId} → eBay suggestion=${ebayId} (${ebayName}) for title="${title}"`
-                    );
-                    anyListing['categoryId'] = ebayId;
-                    anyListing['category'] = ebayName;
-                  } else {
-                    console.log(
-                      `[generate-listing] Category confirmed: AI=${aiId} matches eBay suggestion=${ebayId} (${ebayName})`
-                    );
+                  if (topSuggestion) {
+                    const ebayId = parseInt(topSuggestion.category.categoryId, 10);
+                    const ebayName = topSuggestion.category.categoryName as string;
+
+                    if (ebayId && !Number.isNaN(ebayId)) {
+                      console.log(
+                        `[generate-listing] Taxonomy fallback: AI=${aiCatId} (missing/invalid) → eBay suggestion=${ebayId} (${ebayName}) for title="${title}"`
+                      );
+                      anyListing['categoryId'] = ebayId;
+                      anyListing['category'] = ebayName;
+                    }
                   }
                 }
               }
             }
           }
+        } catch (catErr) {
+          console.warn("[generate-listing] Category suggestion API error (non-fatal):", catErr);
         }
-      } catch (catErr) {
-        // Non-fatal — if suggestion API fails, keep the AI's category (still
-        // protected by KEYWORD_CATEGORY_MAP in ebay-publish at push time)
-        console.warn("[generate-listing] Category suggestion API error (non-fatal):", catErr);
+      } else {
+        console.log(`[generate-listing] Category retained: AI=${aiCatId} (valid leaf — skipping Taxonomy override)`);
       }
       // ─────────────────────────────────────────────────────────────────────
 

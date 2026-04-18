@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import {
   Shield,
@@ -15,6 +16,7 @@ import {
   Loader2,
   Copy,
   RefreshCw,
+  Save,
 } from "lucide-react";
 
 interface DiagnoseResult {
@@ -34,12 +36,63 @@ interface TestResult {
 }
 
 export function EbayOAuthManager() {
+  const { user } = useAuth();
   const [ruName, setRuName] = useState("");
   const [authCode, setAuthCode] = useState("");
   const [diagnosis, setDiagnosis] = useState<DiagnoseResult | null>(null);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [loading, setLoading] = useState("");
   const [authUrl, setAuthUrl] = useState("");
+
+  // Per-user credential fields
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
+  const [credsSaved, setCredsSaved] = useState(false);
+  const [loadingCreds, setLoadingCreds] = useState(false);
+
+  // Load existing per-user credentials on mount
+  useEffect(() => {
+    if (!user) return;
+    supabase
+      .from('user_ebay_credentials' as any)
+      .select('client_id, client_secret, refresh_token')
+      .eq('user_id', user.id)
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          setClientId((data as any).client_id || "");
+          setClientSecret((data as any).client_secret || "");
+          setRefreshToken((data as any).refresh_token || "");
+          setCredsSaved(true);
+        }
+      });
+  }, [user]);
+
+  const handleSaveCreds = async () => {
+    if (!user) return;
+    if (!clientId || !clientSecret || !refreshToken) {
+      toast.error("Fill in Client ID, Client Secret, and Refresh Token");
+      return;
+    }
+    setLoadingCreds(true);
+    const { error } = await supabase
+      .from('user_ebay_credentials' as any)
+      .upsert({
+        user_id: user.id,
+        client_id: clientId.trim(),
+        client_secret: clientSecret.trim(),
+        refresh_token: refreshToken.trim(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' });
+    setLoadingCreds(false);
+    if (error) {
+      toast.error("Failed to save credentials: " + error.message);
+    } else {
+      setCredsSaved(true);
+      toast.success("eBay credentials saved to your account");
+    }
+  };
 
   const callOAuth = async (action: string, extra: Record<string, string> = {}) => {
     const { data, error } = await supabase.functions.invoke("ebay-oauth", {
@@ -116,18 +169,16 @@ export function EbayOAuthManager() {
         toast.error(`${result.error}: ${result.details || ""}`);
         return;
       }
-      toast.success(
-        "OAuth tokens received! Copy the refresh token and save it as EBAY_REFRESH_TOKEN."
-      );
+      if (result.refresh_token) {
+        setRefreshToken(result.refresh_token);
+        setAuthCode(result.refresh_token);
+        toast.success("Refresh token received — save it to your account below.");
+      }
       setTestResult({
         success: true,
-        message: `Refresh token received (${result.refresh_token?.length || 0} chars). Save it as EBAY_REFRESH_TOKEN secret.`,
+        message: `Refresh token received (${result.refresh_token?.length || 0} chars). Click Save Credentials below.`,
         token_type_hint: "✅ OAuth 2.0 User Token",
       });
-      // Show the token so they can copy it
-      if (result.refresh_token) {
-        setAuthCode(result.refresh_token);
-      }
     } catch (e: any) {
       toast.error(e.message);
     } finally {
@@ -137,15 +188,71 @@ export function EbayOAuthManager() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Shield className="h-5 w-5 text-primary" />
-        <div>
-          <h3 className="font-semibold text-foreground">eBay OAuth 2.0 Setup</h3>
-          <p className="text-sm text-muted-foreground">
-            Generate a proper OAuth 2.0 refresh token (not Auth'n'Auth)
-          </p>
+
+      {/* Your Credentials — saves to DB per user */}
+      <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-4">
+        <div className="flex items-center gap-2">
+          <Shield className="h-5 w-5 text-primary" />
+          <div>
+            <h3 className="font-semibold text-foreground">Your eBay Credentials</h3>
+            <p className="text-sm text-muted-foreground">
+              Saved to your account — listings push to your eBay store only.
+            </p>
+          </div>
+          {credsSaved && (
+            <Badge variant="outline" className="ml-auto text-green-600 border-green-600">
+              <CheckCircle className="h-3 w-3 mr-1" /> Saved
+            </Badge>
+          )}
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="client_id">Client ID (App ID)</Label>
+            <Input
+              id="client_id"
+              value={clientId}
+              onChange={e => setClientId(e.target.value)}
+              placeholder="YourApp-xxxx-PRD-xxxxxxx"
+              className="font-mono text-xs"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="client_secret">Client Secret (Cert ID)</Label>
+            <Input
+              id="client_secret"
+              type="password"
+              value={clientSecret}
+              onChange={e => setClientSecret(e.target.value)}
+              placeholder="PRD-xxxxxxxx"
+              className="font-mono text-xs"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="refresh_token_field">Refresh Token</Label>
+          <div className="flex gap-2">
+            <Input
+              id="refresh_token_field"
+              type="password"
+              value={refreshToken}
+              onChange={e => setRefreshToken(e.target.value)}
+              placeholder="Paste your OAuth 2.0 refresh token (use Step 3 below to generate one)"
+              className="font-mono text-xs"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button variant="gold" onClick={handleSaveCreds} disabled={loadingCreds}>
+            {loadingCreds ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+            Save Credentials
+          </Button>
         </div>
       </div>
+
+      <Separator />
 
       {/* Step 1: Diagnose */}
       <div className="rounded-lg border border-border bg-secondary/20 p-4 space-y-3">
@@ -227,10 +334,10 @@ export function EbayOAuthManager() {
       <div className="rounded-lg border border-border bg-secondary/20 p-4 space-y-4">
         <div className="flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-warning" />
-          <h4 className="font-medium text-foreground">Step 3: Generate New OAuth 2.0 Token</h4>
+          <h4 className="font-medium text-foreground">Step 3: Generate New OAuth 2.0 Refresh Token</h4>
         </div>
         <p className="text-sm text-muted-foreground">
-          If your token is Auth'n'Auth or expired, use this flow to get a proper OAuth 2.0 refresh token.
+          Use this to generate a fresh refresh token. After exchange, paste it into the Refresh Token field above and save.
         </p>
 
         <div className="space-y-2">
@@ -305,21 +412,8 @@ export function EbayOAuthManager() {
           <div className="rounded-md bg-success/10 border border-success/30 p-3 text-sm">
             <p className="font-medium text-success flex items-center gap-2">
               <CheckCircle className="h-4 w-4" />
-              Refresh token received! Copy it and save as EBAY_REFRESH_TOKEN:
+              Refresh token ready — it's been pre-filled above. Click Save Credentials.
             </p>
-            <div className="mt-2 flex gap-2">
-              <Input value={authCode} readOnly className="font-mono text-xs" />
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => {
-                  navigator.clipboard.writeText(authCode);
-                  toast.success("Refresh token copied!");
-                }}
-              >
-                <Copy className="h-4 w-4" />
-              </Button>
-            </div>
           </div>
         )}
       </div>

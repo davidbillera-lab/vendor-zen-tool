@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -5,163 +6,162 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { EbayOAuthManager } from "@/components/ebay/EbayOAuthManager";
-import { 
-  User, 
-  Bell, 
-  Shield, 
-  CreditCard,
-  Palette,
-  Globe,
-  HelpCircle
-} from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { Store, Facebook, Gavel, Truck, ShoppingBag, Package } from "lucide-react";
 
-const settingsSections = [
-  { id: "profile", label: "Profile", icon: User },
-  { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "security", label: "Security", icon: Shield },
-  { id: "billing", label: "Billing", icon: CreditCard },
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "integrations", label: "Integrations", icon: Globe },
-  { id: "help", label: "Help & Support", icon: HelpCircle },
+const ALL_PLATFORMS = [
+  { id: "ebay", label: "eBay", icon: Store, description: "List and push directly to your eBay store" },
+  { id: "denver_auctions", label: "Denver Online Auctions", icon: Gavel, description: "Build and upload auction batches to DOA" },
+  { id: "liveauctioneers", label: "LiveAuctioneers", icon: Gavel, description: "Manage lots for LiveAuctioneers auctions" },
+  { id: "facebook", label: "Facebook Marketplace", icon: Facebook, description: "Export listings for Facebook Marketplace" },
+  { id: "mercari", label: "Mercari", icon: ShoppingBag, description: "List items on Mercari" },
+  { id: "poshmark", label: "Poshmark", icon: Package, description: "List clothing and accessories on Poshmark" },
+  { id: "estate_services", label: "Estate Services", icon: Truck, description: "Track estate clean-out and consignment projects" },
 ];
 
 export default function Settings() {
+  const { user, userPlatforms, refreshPlatforms } = useAuth();
+  const { toast } = useToast();
+
+  const [businessName, setBusinessName] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [platformStates, setPlatformStates] = useState<Record<string, boolean>>({});
+  const [savingPlatforms, setSavingPlatforms] = useState(false);
+
+  // Load profile
+  useEffect(() => {
+    if (!user) return;
+    supabase
+      .from('user_profiles' as any)
+      .select('business_name')
+      .eq('id', user.id)
+      .single()
+      .then(({ data }) => {
+        if ((data as any)?.business_name) setBusinessName((data as any).business_name);
+      });
+  }, [user]);
+
+  // Load platform toggles from DB
+  useEffect(() => {
+    const states: Record<string, boolean> = {};
+    ALL_PLATFORMS.forEach(p => { states[p.id] = false; });
+    states['ebay'] = true; // safe default for new users
+
+    if (userPlatforms.length > 0) {
+      userPlatforms.forEach(p => { states[p.platform] = p.enabled; });
+    }
+    setPlatformStates(states);
+  }, [userPlatforms]);
+
+  const handleSaveProfile = async () => {
+    if (!user) return;
+    setSavingProfile(true);
+    const { error } = await supabase
+      .from('user_profiles' as any)
+      .upsert({ id: user.id, business_name: businessName });
+    setSavingProfile(false);
+    if (error) {
+      toast({ title: "Error saving profile", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Profile saved" });
+    }
+  };
+
+  const handleSavePlatforms = async () => {
+    if (!user) return;
+    setSavingPlatforms(true);
+    const rows = ALL_PLATFORMS.map((p, i) => ({
+      user_id: user.id,
+      platform: p.id,
+      enabled: platformStates[p.id] ?? false,
+      display_order: i,
+    }));
+    const { error } = await supabase
+      .from('user_platforms' as any)
+      .upsert(rows, { onConflict: 'user_id,platform' });
+    setSavingPlatforms(false);
+    if (error) {
+      toast({ title: "Error saving platforms", description: error.message, variant: "destructive" });
+    } else {
+      await refreshPlatforms();
+      toast({ title: "Platform preferences saved" });
+    }
+  };
+
   return (
-    <MainLayout 
-      title="Settings" 
-      subtitle="Manage your account and preferences"
-    >
-      <div className="grid gap-8 lg:grid-cols-4">
-        {/* Sidebar Navigation */}
-        <div className="lg:col-span-1">
-          <nav className="space-y-1">
-            {settingsSections.map((section) => (
-              <button
-                key={section.id}
-                className={cn(
-                  "flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-medium transition-colors",
-                  section.id === "profile"
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-                )}
-              >
-                <section.icon className="h-5 w-5" />
-                {section.label}
-              </button>
+    <MainLayout title="Settings" subtitle="Manage your account and platform preferences">
+      <div className="max-w-3xl space-y-8">
+
+        {/* Profile */}
+        <div className="rounded-xl border border-border bg-card p-6">
+          <h2 className="font-serif text-xl font-semibold text-foreground">Profile</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Your business information</p>
+          <Separator className="my-6" />
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" value={user?.email ?? ""} disabled className="opacity-60" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="business">Business Name</Label>
+              <Input
+                id="business"
+                value={businessName}
+                onChange={e => setBusinessName(e.target.value)}
+                placeholder="e.g. JSG Liquidators LLC"
+              />
+            </div>
+          </div>
+          <div className="mt-6 flex justify-end">
+            <Button variant="gold" onClick={handleSaveProfile} disabled={savingProfile}>
+              {savingProfile ? "Saving…" : "Save Profile"}
+            </Button>
+          </div>
+        </div>
+
+        {/* Platform Preferences */}
+        <div className="rounded-xl border border-border bg-card p-6">
+          <h2 className="font-serif text-xl font-semibold text-foreground">Active Platforms</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Enable only the platforms you use. Your dashboard and workflow panels reflect these choices.
+          </p>
+          <Separator className="my-6" />
+          <div className="space-y-4">
+            {ALL_PLATFORMS.map(p => (
+              <div key={p.id} className="flex items-center justify-between rounded-lg bg-secondary/30 p-4">
+                <div className="flex items-center gap-3">
+                  <p.icon className="h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <p className="font-medium text-foreground">{p.label}</p>
+                    <p className="text-sm text-muted-foreground">{p.description}</p>
+                  </div>
+                </div>
+                <Switch
+                  checked={platformStates[p.id] ?? false}
+                  onCheckedChange={val => setPlatformStates(prev => ({ ...prev, [p.id]: val }))}
+                />
+              </div>
             ))}
-          </nav>
-        </div>
-
-        {/* Settings Content */}
-        <div className="lg:col-span-3 space-y-8">
-          {/* Profile Section */}
-          <div className="rounded-xl border border-border bg-card p-6">
-            <h2 className="font-serif text-xl font-semibold text-foreground">Profile Settings</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Manage your personal information and business details
-            </p>
-
-            <Separator className="my-6" />
-
-            <div className="space-y-6">
-              <div className="flex items-center gap-6">
-                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-gradient-gold text-2xl font-bold text-primary-foreground">
-                  JD
-                </div>
-                <div>
-                  <Button variant="outline" size="sm">Change Photo</Button>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    JPG, GIF or PNG. Max size 2MB.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="firstName">First Name</Label>
-                  <Input id="firstName" defaultValue="John" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="lastName">Last Name</Label>
-                  <Input id="lastName" defaultValue="Doe" />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
-                <Input id="email" type="email" defaultValue="john@estatesales.com" />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="business">Business Name</Label>
-                <Input id="business" defaultValue="Estate Treasures LLC" />
-              </div>
-            </div>
-
-            <div className="mt-6 flex justify-end">
-              <Button variant="gold">Save Changes</Button>
-            </div>
           </div>
-
-          {/* Notifications Section */}
-          <div className="rounded-xl border border-border bg-card p-6">
-            <h2 className="font-serif text-xl font-semibold text-foreground">Notifications</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Choose what notifications you want to receive
-            </p>
-
-            <Separator className="my-6" />
-
-            <div className="space-y-6">
-              {[
-                { id: "orders", label: "New Orders", description: "Get notified when you receive a new order" },
-                { id: "messages", label: "Buyer Messages", description: "Receive alerts for new buyer inquiries" },
-                { id: "listings", label: "Listing Updates", description: "Get updates on your listing performance" },
-                { id: "sync", label: "Sync Status", description: "Be alerted when platform sync completes or fails" },
-              ].map((notification) => (
-                <div key={notification.id} className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-foreground">{notification.label}</p>
-                    <p className="text-sm text-muted-foreground">{notification.description}</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* eBay OAuth Section */}
-          <div className="rounded-xl border border-border bg-card p-6">
-            <h2 className="font-serif text-xl font-semibold text-foreground">eBay Connection</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Set up and test your eBay OAuth 2.0 credentials
-            </p>
-            <Separator className="my-6" />
-            <EbayOAuthManager />
-          </div>
-
-          {/* Other Platforms */}
-          <div className="rounded-xl border border-border bg-card p-6">
-            <h2 className="font-serif text-xl font-semibold text-foreground">Other Platforms</h2>
-            <Separator className="my-6" />
-            <div className="space-y-4">
-              {[
-                { platform: "Facebook", status: "Connected" },
-                { platform: "LiveAuctioneers", status: "Connected" },
-                { platform: "Denver Auctions", status: "Connected" },
-              ].map((api) => (
-                <div key={api.platform} className="flex items-center justify-between rounded-lg bg-secondary/30 p-4">
-                  <div>
-                    <p className="font-medium text-foreground">{api.platform}</p>
-                    <p className="text-sm text-success">{api.status}</p>
-                  </div>
-                  <Button variant="outline" size="sm">Configure</Button>
-                </div>
-              ))}
-            </div>
+          <div className="mt-6 flex justify-end">
+            <Button variant="gold" onClick={handleSavePlatforms} disabled={savingPlatforms}>
+              {savingPlatforms ? "Saving…" : "Save Platforms"}
+            </Button>
           </div>
         </div>
+
+        {/* eBay Connection */}
+        <div className="rounded-xl border border-border bg-card p-6">
+          <h2 className="font-serif text-xl font-semibold text-foreground">eBay Connection</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Connect your own eBay developer credentials. Listings push to your eBay store.
+          </p>
+          <Separator className="my-6" />
+          <EbayOAuthManager />
+        </div>
+
       </div>
     </MainLayout>
   );
