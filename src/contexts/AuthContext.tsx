@@ -30,11 +30,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userPlatforms, setUserPlatforms] = useState<UserPlatform[]>([]);
 
   const fetchProfile = async (userId: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('user_profiles' as any)
       .select('is_admin')
       .eq('id', userId)
       .single();
+    if (error) console.error('[AuthContext] fetchProfile error:', error);
+    console.log('[AuthContext] fetchProfile result:', data);
     setIsAdmin(!!(data as any)?.is_admin);
   };
 
