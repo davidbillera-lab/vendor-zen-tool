@@ -852,14 +852,12 @@ export function EbayBatchPanel({
     }
   };
 
-  const bulkEnrichItemSpecifics = async () => {
+  const bulkEnrichItemSpecifics = async (force = false) => {
     if (!projectId || rows.length === 0) return;
 
-    // Find rows with sparse item specifics (fewer than 3 keys)
-    const sparseRows = rows.filter((r) => {
-      const specCount = Object.keys(r.item_specifics || {}).length;
-      return specCount < 3;
-    });
+    const sparseRows = force
+      ? rows
+      : rows.filter((r) => Object.keys(r.item_specifics || {}).length < 3);
 
     if (sparseRows.length === 0) {
       toast({ title: "All enriched", description: "All listings already have 3+ item specifics." });
@@ -910,8 +908,7 @@ export function EbayBatchPanel({
           const mergedSpecifics = { ...(row.item_specifics || {}), ...item.item_specifics };
           const updatePayload: any = { item_specifics: mergedSpecifics };
           
-          // Also update category if AI found a better one and current is missing
-          if (item.category_id && !row.category?.match(/\d{3,}/)) {
+          if (item.category_id && (force || !row.category?.match(/\d{3,}/))) {
             updatePayload.category = String(item.category_id);
           }
 
@@ -934,7 +931,7 @@ export function EbayBatchPanel({
             if (!hit) return r;
             const merged = { ...(r.item_specifics || {}), ...hit.item_specifics };
             const updatedRow = { ...r, item_specifics: merged };
-            if (hit.category_id && !r.category?.match(/\d{3,}/)) {
+            if (hit.category_id && (force || !r.category?.match(/\d{3,}/))) {
               updatedRow.category = String(hit.category_id);
             }
             return updatedRow;
@@ -1351,12 +1348,21 @@ export function EbayBatchPanel({
             {rows.length > 0 && (
               <Button
                 variant="outline"
-                onClick={bulkEnrichItemSpecifics}
+                onClick={() => bulkEnrichItemSpecifics(false)}
                 disabled={enriching}
                 className="gap-2"
               >
                 {enriching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 {enriching ? "Enriching…" : "Bulk AI Enrich"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => bulkEnrichItemSpecifics(true)}
+                disabled={enriching}
+                className="gap-2"
+              >
+                {enriching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {enriching ? "Enriching…" : "Force Re-Enrich All"}
               </Button>
             )}
 
