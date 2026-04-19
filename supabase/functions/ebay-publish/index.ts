@@ -208,6 +208,21 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
     if (!specifics["Brand"]) specifics["Brand"] = "Unbranded";
   }
 
+  // Fragrances — eBay requires "Fragrance Name" (error 21919303 if missing)
+  const FRAGRANCE_CATEGORIES = new Set(["11848", "11849", "11850", "11846", "31786", "177989", "177990"]);
+  if (FRAGRANCE_CATEGORIES.has(categoryId)) {
+    if (!specifics["Fragrance Name"]) {
+      // Extract fragrance name: strip qty/type suffixes, take first 65 chars
+      const cleaned = (row.title || "")
+        .replace(/\d+(\.\d+)?\s*(oz|fl oz|ml|ounce)s?/gi, "")
+        .replace(/\b(eau de (parfum|toilette|cologne)|edp|edt|edc|parfum|perfume|cologne|fragrance|spray|set|gift set|for\s+(men|women|him|her|man|woman))\b/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      specifics["Fragrance Name"] = cleaned.substring(0, 65) || (row.brand ?? "See Title");
+    }
+    if (!specifics["Type"]) specifics["Type"] = "Eau de Parfum";
+  }
+
   // Clothing — eBay requires Department and Size (error 21919303 if missing)
   // Department is deterministic from category; Size falls back to "See Description" if AI didn't provide it.
   const MENS_CLOTHING_CATEGORIES = new Set([
