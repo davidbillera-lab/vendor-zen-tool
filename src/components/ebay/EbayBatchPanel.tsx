@@ -116,6 +116,7 @@ export function EbayBatchPanel({
   const [paymentProfileName, setPaymentProfileName] = useState<string>("");
   const [fullCsvContent, setFullCsvContent] = useState<string>("");
   const [pendingDeleteIds, setPendingDeleteIds] = useState<{ ids: string[]; count: number } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Persist default category and location per project
   useEffect(() => {
@@ -1156,12 +1157,13 @@ export function EbayBatchPanel({
       toast({ title: "Missing Location", description: "Set an Item Location (ZIP or City, ST) before pushing to eBay.", variant: "destructive" });
       return;
     }
-    if (!confirm(`Push ${rows.length} listing(s) as drafts to your eBay Seller Hub?`)) return;
+    const rowsToPush = selectedIds.size > 0 ? rows.filter((r) => selectedIds.has(r.id)) : rows;
+    if (!confirm(`Push ${rowsToPush.length} listing(s) as drafts to your eBay Seller Hub?`)) return;
 
     setPublishing(true);
     try {
       // Step 1: Apply keyword-based category fix — corrects AI-hallucinated IDs by item type
-      let pushRows = rows.map(r => {
+      let pushRows = rowsToPush.map(r => {
         const suggested = suggestCategoryFromTitle(r.title);
         if (!suggested) return r;
         return { ...r, category: String(suggested.categoryId) };
@@ -1408,7 +1410,7 @@ export function EbayBatchPanel({
             {rows.length > 0 && (
               <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
                 {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {publishing ? "Pushing…" : "Push to eBay"}
+                {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push ${selectedIds.size} Selected` : `Push All (${rows.length})`}
               </Button>
             )}
             {rows.length > 0 && (
@@ -1536,17 +1538,35 @@ export function EbayBatchPanel({
         {rows.length > 0 && (
           <div className="border-t border-border pt-4 space-y-2">
             <div className="flex items-center gap-2 mb-2">
-              <Check className="h-4 w-4 text-green-500" />
-              <span className="text-sm font-medium">{rows.length} listings ready for export</span>
+              <Checkbox
+                id="select-all-rows"
+                checked={selectedIds.size === rows.length && rows.length > 0}
+                onCheckedChange={(checked) =>
+                  setSelectedIds(checked ? new Set(rows.map((r) => r.id)) : new Set())
+                }
+              />
+              <label htmlFor="select-all-rows" className="text-sm font-medium cursor-pointer select-none">
+                {selectedIds.size === 0
+                  ? `${rows.length} listings ready — select to push a subset`
+                  : `${selectedIds.size} of ${rows.length} selected`}
+              </label>
             </div>
-            
+
             <div className="max-h-48 overflow-y-auto space-y-1">
               {rows.map((row) => (
-                <div 
-                  key={row.id} 
-                  className="text-xs flex justify-between items-center py-2 px-3 bg-background/50 rounded hover:bg-background/80 transition-colors"
+                <div
+                  key={row.id}
+                  className={`text-xs flex justify-between items-center py-2 px-3 rounded hover:bg-background/80 transition-colors ${selectedIds.has(row.id) ? "bg-primary/10 border border-primary/30" : "bg-background/50"}`}
                 >
                   <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <Checkbox
+                      checked={selectedIds.has(row.id)}
+                      onCheckedChange={(checked) => {
+                        const next = new Set(selectedIds);
+                        checked ? next.add(row.id) : next.delete(row.id);
+                        setSelectedIds(next);
+                      }}
+                    />
                     <span className="font-mono text-muted-foreground">#{row.lot_number}</span>
                     <span className="truncate font-medium">{row.title}</span>
                   </div>
