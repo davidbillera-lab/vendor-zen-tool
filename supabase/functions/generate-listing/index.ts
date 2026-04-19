@@ -736,14 +736,55 @@ serve(async (req) => {
         }
       }
 
-      // ── eBay Category Suggestions API (fallback only) ────────────────────
-      // Only call the Taxonomy API when the AI has no category or picked a
-      // known-bad (deprecated/parent) ID. If the AI already has a valid leaf
-      // ID, trust it — eBay's generic suggestion engine returns worse results
-      // for estate-sale items (vintage, antique, niche) than the verified list
-      // built into the AI prompt.
+      // ── eBay Category Suggestions API ─────────────────────────────────────
+      // Trust the AI only when it picks a category from our curated verified
+      // list (same list in the prompt above). Any ID outside that list — even
+      // if it looks numeric — gets validated against the Taxonomy API. This
+      // catches hallucinated IDs like 177009/177040 that aren't in CATEGORY_REMAPS.
+      const VERIFIED_LEAF_CATEGORIES = new Set<number>([
+        // Clothing
+        21235, 57990, 57991, 11483, 57989, 11484, 3001, 15709, 24087, 53120,
+        63862, 53159, 63861, 11554, 63866, 185176, 55793, 45333, 95672, 169291, 4250,
+        // Jewelry
+        31387, 67681, 67652, 10968, 48579,
+        // Art
+        360, 551, 60628, 158658,
+        // Collectibles
+        162032, 36018, 33164, 170091, 170098, 170083, 116022,
+        // Home & Garden
+        177005, 112581, 20706, 45510, 20580, 20562, 16041, 46782, 20563, 20668, 20677, 20672, 20675, 20681,
+        // Cameras
+        31388, 15230, 11724, 30106,
+        // Electronics
+        112529,
+        // Video Games
+        139971,
+        // Pottery & Glass
+        45237, 916,
+        // Antiques
+        20091, 20086, 37978, 1192,
+        // Books
+        29223, 171228, 183387, 280,
+        // Coins
+        253, 256, 3412, 18880,
+        // Dolls & Bears
+        238, 16497, 2228, 261068,
+        // Movies & Music
+        617, 309, 306, 176984,
+        // Musical Instruments
+        33034, 16220, 180014, 183085, 12229, 41833,
+        // Sporting Goods
+        15273, 1513, 1492, 16034,
+        // Toys & Hobbies
+        31787, 37278, 51023, 19063, 262318, 47006, 47004, 47002, 4748, 180349,
+        // Stamps
+        261, 262,
+        // Fragrances
+        11848, 11849, 11850, 11846,
+      ]);
+
       const aiCatId = anyListing['categoryId'] as number | null;
-      const needsTaxonomyFallback = !aiCatId || aiCatId <= 0 || aiCatId in CATEGORY_REMAPS;
+      const needsTaxonomyFallback = !aiCatId || aiCatId <= 0 || (aiCatId in CATEGORY_REMAPS) || !VERIFIED_LEAF_CATEGORIES.has(aiCatId);
 
       if (needsTaxonomyFallback) {
         try {
