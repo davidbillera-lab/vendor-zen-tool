@@ -148,6 +148,39 @@ const KEYWORD_CATEGORY_MAP: Array<{ pattern: RegExp; categoryId: string; name: s
   { pattern: /camcorder|handycam/i,                                                                      categoryId: "11724",  name: "Camcorders & Video Cameras" },
 ];
 
+/* ──────────── Category learning helpers ──────────── */
+
+function extractKeywords(title: string): string {
+  const stop = new Set(['a','an','the','and','or','of','in','for','with','to','is','by','as','at','its','this','that','lot','set','new','used','vintage']);
+  return title
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !stop.has(w))
+    .slice(0, 6)
+    .sort()
+    .join(' ');
+}
+
+async function saveCategoryLearning(title: string, categoryId: string, categoryName: string) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey) return;
+  const keywords = extractKeywords(title);
+  if (!keywords) return;
+  try {
+    const sb = createClient(supabaseUrl, serviceRoleKey);
+    await sb.rpc('record_category_learning', {
+      p_keywords: keywords,
+      p_category_id: parseInt(categoryId),
+      p_category_name: categoryName,
+    });
+    console.log(`[ebay-publish] Learned: "${keywords}" → ${categoryId} (${categoryName})`);
+  } catch (e) {
+    console.warn('[ebay-publish] Failed to save learning (non-fatal):', e);
+  }
+}
+
 /* ──────────── Build Trading API XML ──────────── */
 
 interface EbayRow {
@@ -322,7 +355,7 @@ async function publishRow(
   accessToken: string,
   tradingApiUrl: string,
   environment: EbayEnvironment
-): Promise<{ success: boolean; error?: string; details?: string[]; listingId?: string }> {
+): Promise<{ success: boolean; error?: string; details?: string[]; listingId?: string; usedCategoryId?: string; categoryName?: string }> {
   try {
     // Guard: reject rows with no valid eBay category ID before hitting the API
     let categoryId = row.category?.match(/\d{3,}/)?.[0];
@@ -369,7 +402,7 @@ async function publishRow(
     const ack = ackMatch?.[1] || "";
 
     if (ack === "Success" || ack === "Warning") {
-      return { success: true, listingId: itemId };
+      return { success: true, listingId: itemId, usedCategoryId: categoryId, categoryName: row.category || categoryId };
     }
 
     // Extract all error blocks — filter to SeverityCode=Error only (ignore warnings)
@@ -438,6 +471,10 @@ Deno.serve(async (req: Request) => {
     for (const row of rows) {
       const result = await publishRow(row as unknown as EbayRow, accessToken, tradingApiUrl, environment);
       results.push({ id: row.id, lot_number: row.lot_number, ...result });
+      // Save category learning for every successful push
+      if (result.success && result.usedCategoryId) {
+        await saveCategoryLearning((row as any).title || '', result.usedCategoryId, result.categoryName || result.usedCategoryId);
+      }
     }
 
     const succeeded = results.filter((r) => r.success).length;

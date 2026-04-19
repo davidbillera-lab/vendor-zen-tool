@@ -803,6 +803,37 @@ serve(async (req) => {
         11848, 11849, 11850, 11846, 26262, 67537, 67538,
       ]);
 
+      // ── Query category learnings (highest priority after remaps) ──────────
+      // If we've successfully pushed this item type before with confidence ≥ 3,
+      // use the learned category — skip AI guess and Taxonomy API entirely.
+      try {
+        const learnTitle = (anyListing['title'] as string) || '';
+        const stop = new Set(['a','an','the','and','or','of','in','for','with','to','is','by','as','at','its','this','that','lot','set','new','used','vintage']);
+        const learnKeywords = learnTitle.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/)
+          .filter((w: string) => w.length > 2 && !stop.has(w)).slice(0, 6).sort().join(' ');
+
+        if (learnKeywords.length >= 3) {
+          const sbAdmin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+          const { data: learnings } = await sbAdmin
+            .from('ebay_category_learnings')
+            .select('category_id, category_name, confidence')
+            .textSearch('item_keywords', learnKeywords, { config: 'english' })
+            .order('confidence', { ascending: false })
+            .limit(1);
+
+          const top = learnings?.[0] as { category_id: number; category_name: string; confidence: number } | undefined;
+          if (top && top.confidence >= 3) {
+            console.log(`[generate-listing] LEARNED category: "${top.category_name}" (${top.category_id}) — confidence ${top.confidence}`);
+            anyListing['categoryId'] = top.category_id;
+            anyListing['category'] = top.category_name;
+            VERIFIED_LEAF_CATEGORIES.add(top.category_id);
+          }
+        }
+      } catch (learnErr) {
+        console.warn('[generate-listing] Category learnings query failed (non-fatal):', learnErr);
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
       const aiCatId = anyListing['categoryId'] as number | null;
       const needsTaxonomyFallback = !aiCatId || aiCatId <= 0 || (aiCatId in CATEGORY_REMAPS) || !VERIFIED_LEAF_CATEGORIES.has(aiCatId);
 
