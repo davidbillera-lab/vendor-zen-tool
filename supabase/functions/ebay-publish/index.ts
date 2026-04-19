@@ -254,6 +254,10 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
       specifics["Fragrance Name"] = cleaned.substring(0, 65) || (row.brand ?? "See Title");
     }
     if (!specifics["Type"]) specifics["Type"] = "Eau de Parfum";
+    if (!specifics["Volume"]) {
+      const volMatch = (row.title || "").match(/(\d+(?:\.\d+)?)\s*(oz|fl\.?\s*oz|ml|ounce)s?/i);
+      specifics["Volume"] = volMatch ? `${volMatch[1]} ${volMatch[2].toLowerCase().replace(/\s/g, "")}` : "See Description";
+    }
   }
 
   // Clothing — eBay requires Department and Size (error 21919303 if missing)
@@ -348,6 +352,38 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
 </AddFixedPriceItemRequest>`;
 }
 
+/* ──────────── Taxonomy API — fallback category lookup ──────────── */
+
+async function getCategoryFromTaxonomy(title: string): Promise<string | null> {
+  try {
+    const clientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+    const clientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+    if (!clientId || !clientSecret) return null;
+
+    const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      },
+      body: new URLSearchParams({ grant_type: "client_credentials", scope: "https://api.ebay.com/oauth/api_scope" }),
+    });
+    if (!tokenRes.ok) return null;
+    const { access_token } = await tokenRes.json();
+
+    const suggestRes = await fetch(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions?q=${encodeURIComponent(title)}`,
+      { headers: { Authorization: `Bearer ${access_token}` } }
+    );
+    if (!suggestRes.ok) return null;
+    const data = await suggestRes.json();
+    const leafId = data.categorySuggestions?.[0]?.category?.categoryId;
+    return leafId ? String(leafId) : null;
+  } catch {
+    return null;
+  }
+}
+
 /* ──────────── Call Trading API ──────────── */
 
 async function publishRow(
@@ -418,6 +454,36 @@ async function publishRow(
 
     const logLines = allForLog.map(b => `[${extract(b,"ErrorCode")}] ${extract(b,"ShortMessage")}`);
     console.error(`[ebay-publish] LOT-${row.lot_number} (category="${row.category}") FAILED — ${logLines.join(" | ")}`);
+
+    // Auto-retry: if eBay says the category is invalid/non-leaf (87 or 107), ask Taxonomy API for the right one
+    const categoryErrorCodes = new Set(["87", "107"]);
+    const hasCategoryError = realErrors.some(b => categoryErrorCodes.has(extract(b, "ErrorCode")));
+    if (hasCategoryError) {
+      console.log(`[ebay-publish] LOT-${row.lot_number}: category error detected, querying Taxonomy API for "${row.title}"`);
+      const correctedCategoryId = await getCategoryFromTaxonomy(row.title || "");
+      if (correctedCategoryId && correctedCategoryId !== categoryId) {
+        console.log(`[ebay-publish] LOT-${row.lot_number}: retrying with Taxonomy category ${correctedCategoryId}`);
+        const retryXml = buildAddFixedPriceItemXml({ ...row, category: correctedCategoryId });
+        const retryRes = await fetch(tradingApiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/xml",
+            "X-EBAY-API-CALL-NAME": "AddFixedPriceItem",
+            "X-EBAY-API-SITEID": "0",
+            "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+            "X-EBAY-API-IAF-TOKEN": accessToken,
+          },
+          body: retryXml,
+        });
+        const retryText = await retryRes.text();
+        const retryAck = retryText.match(/<Ack>(.*?)<\/Ack>/)?.[1] || "";
+        const retryItemId = retryText.match(/<ItemID>(\d+)<\/ItemID>/)?.[1];
+        if (retryAck === "Success" || retryAck === "Warning") {
+          console.log(`[ebay-publish] LOT-${row.lot_number}: retry succeeded with category ${correctedCategoryId}`);
+          return { success: true, listingId: retryItemId, usedCategoryId: correctedCategoryId, categoryName: correctedCategoryId };
+        }
+      }
+    }
 
     const errorSummary = realErrors.length > 0
       ? realErrors.map(b => `[${extract(b,"ErrorCode")}] ${extract(b,"ShortMessage")}: ${extract(b,"LongMessage")}`).join(" | ")
