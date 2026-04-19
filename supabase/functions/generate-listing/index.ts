@@ -37,10 +37,20 @@ Before anything else, carefully study the image(s) and determine EXACTLY what th
 - What is its primary PURPOSE or function?
 - What CATEGORY does a buyer search for when looking for this item?
 
+CRITICAL ITEM IDENTIFICATION RULES — READ BEFORE CATEGORIZING:
+
+CLOTHING — COUNT THE PIECES FIRST:
+- SUIT = matching jacket + pants (or jacket + pants + vest) as a SET. You must see BOTH pieces to call it a suit.
+- BLAZER / SPORT COAT = single jacket only, structured, worn over dress shirt. NOT a suit.
+- JACKET = single outerwear piece (puffer, bomber, denim, fleece, windbreaker, etc.)
+- COAT = long outerwear (reaches at or past the knee)
+- If you only see ONE piece of clothing in the image → it is NOT a suit. Period.
+
 COMMON MISTAKES TO AVOID:
-- A jacket is NOT underwear - it's outerwear (Coats, Jackets & Vests)
-- A lamp is NOT a ceiling fan - check category carefully
+- A single jacket is NOT a suit — suits require matching pants
+- A lamp is NOT a ceiling fan — check category carefully
 - A decorative plate is NOT dinnerware if it's meant for display
+- Shower gel / body wash is NOT a fragrance — it's Bath & Body
 - Always match the item to how a BUYER would search for it
 
 === STEP 2: CATEGORY ID (MUST BE LEAF CATEGORY - CRITICAL) ===
@@ -64,7 +74,9 @@ VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
 - Men's Jeans: 11483
 - Men's Sweaters: 11484
 - Men's Dress Pants: 57989
-- Men's Coats, Jackets & Vests: 3001
+- Men's Suits (2-piece or 3-piece matching set with pants): 3002
+- Men's Blazers & Sport Coats (single jacket, structured): 3002
+- Men's Coats, Jackets & Vests (standalone outerwear): 3001
 - Men's Athletic Shoes: 15709
 - Men's Casual Shoes / Loafers: 24087
 - Men's Dress Shoes: 53120
@@ -194,6 +206,14 @@ VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
 - Model Train Accessories: 4748
 - Action Figures & Accessories: 261068
 - Board & Traditional Games: 180349
+
+-- HEALTH & BEAUTY (root: 11836) --
+- Fragrances / Women's Perfume: 11848
+- Fragrances / Men's Cologne & Aftershave: 11846
+- Body Wash & Shower Gel: 26262
+- Body Lotion & Moisturizer: 67537
+- Shampoo & Conditioner: 67538
+NOTE: Shower gel, body wash, lotion, shampoo are NEVER fragrances — use the Bath & Body categories above.
 
 -- STAMPS (root: 260) --
 - US Stamps: 261
@@ -743,7 +763,7 @@ serve(async (req) => {
       // catches hallucinated IDs like 177009/177040 that aren't in CATEGORY_REMAPS.
       const VERIFIED_LEAF_CATEGORIES = new Set<number>([
         // Clothing
-        21235, 57990, 57991, 11483, 57989, 11484, 3001, 15709, 24087, 53120,
+        21235, 57990, 57991, 11483, 57989, 11484, 3001, 3002, 15709, 24087, 53120,
         63862, 53159, 63861, 11554, 63866, 185176, 55793, 45333, 95672, 169291, 4250,
         // Jewelry
         31387, 67681, 67652, 10968, 48579,
@@ -779,8 +799,8 @@ serve(async (req) => {
         31787, 37278, 51023, 19063, 262318, 47006, 47004, 47002, 4748, 180349,
         // Stamps
         261, 262,
-        // Fragrances
-        11848, 11849, 11850, 11846,
+        // Fragrances & Bath/Body
+        11848, 11849, 11850, 11846, 26262, 67537, 67538,
       ]);
 
       const aiCatId = anyListing['categoryId'] as number | null;
