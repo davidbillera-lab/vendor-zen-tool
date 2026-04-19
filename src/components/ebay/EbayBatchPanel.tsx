@@ -25,6 +25,8 @@ import { generateListing } from "@/lib/api/listings";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -113,6 +115,7 @@ export function EbayBatchPanel({
   const [returnProfileName, setReturnProfileName] = useState<string>("");
   const [paymentProfileName, setPaymentProfileName] = useState<string>("");
   const [fullCsvContent, setFullCsvContent] = useState<string>("");
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<{ ids: string[]; count: number } | null>(null);
 
   // Persist default category and location per project
   useEffect(() => {
@@ -1217,27 +1220,41 @@ export function EbayBatchPanel({
         return;
       }
       const { succeeded, failed, results } = await res.json();
+      const succeededRows = results.filter((r: any) => r.success);
+      const failedResults = results.filter((r: any) => !r.success);
+
       if (succeeded > 0) {
-        const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
+        const succeededIds = new Set(succeededRows.map((r: any) => r.id));
         onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
+        setPendingDeleteIds({ ids: succeededRows.map((r: any) => r.id), count: succeeded });
       }
 
       if (failed > 0) {
-        const failedResults = results.filter((r: any) => !r.success);
         const allErrors = failedResults.map((r: any) => r.error || "Unknown").join(" || ");
         toast({
           title: `${succeeded} pushed, ${failed} failed`,
           description: allErrors.substring(0, 500),
           variant: "destructive",
         });
-      } else {
-        toast({ title: "Pushed to eBay!", description: `${succeeded} listing(s) are now in your Seller Hub drafts.` });
       }
     } catch (e) {
       toast({ title: "Push failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
     } finally {
       setPublishing(false);
     }
+  };
+
+  const confirmDeletePushed = async () => {
+    if (!pendingDeleteIds) return;
+    const { ids } = pendingDeleteIds;
+    const { error } = await supabase.from("ebay_batch_rows").delete().in("id", ids);
+    if (error) {
+      toast({ title: "Delete failed", description: error.message, variant: "destructive" });
+    } else {
+      onRowsChange(rows.filter((r) => !ids.includes(r.id)));
+      toast({ title: "Deleted", description: `${ids.length} pushed listing(s) removed from the app.` });
+    }
+    setPendingDeleteIds(null);
   };
 
   if (!projectId) {
@@ -1346,24 +1363,26 @@ export function EbayBatchPanel({
             )}
 
             {rows.length > 0 && (
-              <Button
-                variant="outline"
-                onClick={() => bulkEnrichItemSpecifics(false)}
-                disabled={enriching}
-                className="gap-2"
-              >
-                {enriching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {enriching ? "Enriching…" : "Bulk AI Enrich"}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => bulkEnrichItemSpecifics(true)}
-                disabled={enriching}
-                className="gap-2"
-              >
-                {enriching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {enriching ? "Enriching…" : "Force Re-Enrich All"}
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => bulkEnrichItemSpecifics(false)}
+                  disabled={enriching}
+                  className="gap-2"
+                >
+                  {enriching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {enriching ? "Enriching…" : "Bulk AI Enrich"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => bulkEnrichItemSpecifics(true)}
+                  disabled={enriching}
+                  className="gap-2"
+                >
+                  {enriching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {enriching ? "Enriching…" : "Force Re-Enrich All"}
+                </Button>
+              </>
             )}
 
             {rows.length > 0 && (
@@ -1929,6 +1948,30 @@ export function EbayBatchPanel({
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!pendingDeleteIds} onOpenChange={(open) => { if (!open) setPendingDeleteIds(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete pushed listings?</DialogTitle>
+            <DialogDescription>
+              {pendingDeleteIds?.count} listing(s) were pushed to eBay successfully. Verify they appear in your{" "}
+              <a href="https://www.ebay.com/sh/lst/active" target="_blank" rel="noopener noreferrer" className="underline">
+                eBay Seller Hub
+              </a>{" "}
+              before deleting. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setPendingDeleteIds(null)}>
+              Keep them
+            </Button>
+            <Button variant="destructive" onClick={confirmDeletePushed}>
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete {pendingDeleteIds?.count} pushed listing(s)
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
