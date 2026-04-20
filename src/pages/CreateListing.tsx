@@ -45,6 +45,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 import { saveAs } from "file-saver";
 import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
+import { CrossPostPanel } from "@/components/crosspost/CrossPostPanel";
 import { EbayItemSpecificsEditor } from "@/components/ebay/EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "@/components/ebay/EbayShippingSettings";
 import { 
@@ -1896,6 +1897,14 @@ export default function CreateListing() {
               </Button>
             </div>
           </div>
+        )}
+
+        {generatedListing && images.some(i => i.url) && (
+          <CrossPostPanel
+            listing={generatedListing}
+            images={images.filter(i => i.url).map(i => i.url!)}
+            projectId={selectedProject?.id}
+          />
         )}
       </div>
 
