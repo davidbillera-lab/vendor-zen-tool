@@ -46,7 +46,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .select('platform, enabled, display_order')
       .eq('user_id', userId)
       .order('display_order');
-    setUserPlatforms((data as UserPlatform[]) || []);
+    setUserPlatforms((data as unknown as UserPlatform[]) || []);
   };
 
   const refreshPlatforms = async () => {
