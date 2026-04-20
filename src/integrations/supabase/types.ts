@@ -400,6 +400,60 @@ export type Database = {
           },
         ]
       }
+      user_platforms: {
+        Row: {
+          created_at: string
+          display_order: number
+          enabled: boolean
+          id: string
+          platform: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          display_order?: number
+          enabled?: boolean
+          id?: string
+          platform: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          display_order?: number
+          enabled?: boolean
+          id?: string
+          platform?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_profiles: {
+        Row: {
+          business_name: string | null
+          created_at: string
+          id: string
+          is_admin: boolean
+          updated_at: string
+        }
+        Insert: {
+          business_name?: string | null
+          created_at?: string
+          id: string
+          is_admin?: boolean
+          updated_at?: string
+        }
+        Update: {
+          business_name?: string | null
+          created_at?: string
+          id?: string
+          is_admin?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
