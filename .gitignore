@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Agent credentials and session data
+doa-listing-agent/mercari-agent/.env
+doa-listing-agent/mercari-agent/browser-session/
+doa-listing-agent/mercari-agent/tmp/
+doa-listing-agent/poshmark-agent/.env
+doa-listing-agent/poshmark-agent/browser-session/
+doa-listing-agent/poshmark-agent/tmp/
