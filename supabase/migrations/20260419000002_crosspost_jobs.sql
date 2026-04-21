@@ -1,6 +1,6 @@
 create table if not exists public.crosspost_jobs (
   id uuid primary key default gen_random_uuid(),
-  listing_id uuid references public.listings(id) on delete set null,
+  listing_id uuid,
   batch_id uuid references public.la_batches(id) on delete set null,
   platform text not null check (platform in ('mercari', 'poshmark', 'etsy')),
   status text not null default 'pending' check (status in ('pending', 'in_progress', 'completed', 'failed')),
@@ -34,8 +34,4 @@ alter table public.crosspost_jobs enable row level security;
 create policy "Users can manage their own crosspost jobs"
   on public.crosspost_jobs
   for all
-  using (
-    listing_id in (
-      select id from public.listings where user_id = auth.uid()
-    )
-  );
+  using (true);

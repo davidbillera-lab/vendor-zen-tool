@@ -14,6 +14,7 @@
  */
 
 import 'dotenv/config';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import log from './logger.js';
@@ -28,6 +29,7 @@ import {
 } from './queue.js';
 import { runUpload } from './ebayUploader.js';
 import { startScheduler } from './scheduler.js';
+import { sendRunSummary } from './mailer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -67,6 +69,47 @@ function validateConfig() {
   }
 }
 
+// ── SKU deduplication helpers ─────────────────────────────────────────────────
+const UPLOADED_SKUS_PATH = path.join(QUEUE_DIR, 'uploaded-skus.json');
+
+function loadUploadedSkus() {
+  try {
+    return new Set(JSON.parse(fs.readFileSync(UPLOADED_SKUS_PATH, 'utf8')));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveUploadedSkus(skuSet) {
+  fs.writeFileSync(UPLOADED_SKUS_PATH, JSON.stringify([...skuSet], null, 2));
+}
+
+/**
+ * Filters a CSV to only include rows whose SKU (column 1) is NOT in uploadedSkus.
+ * Returns the filtered CSV string, the new SKUs found, and counts.
+ */
+function filterNewRows(csvContent, uploadedSkus) {
+  const lines = csvContent.replace(/\r\n/g, '\n').split('\n');
+  // New format: 1 Info line + 1 header = 2 preamble lines; data starts at line 2
+  const preamble = lines.slice(0, 2);
+  const dataLines = lines.slice(2).filter(l => l.trim());
+
+  const newLines = [];
+  const newSkus  = [];
+
+  for (const line of dataLines) {
+    // Action column (index 0) never contains commas — SKU is the raw second field
+    const sku = line.split(',')[1]?.trim();
+    if (sku && !uploadedSkus.has(sku)) {
+      newLines.push(line);
+      newSkus.push(sku);
+    }
+  }
+
+  const filteredCsv = [...preamble, ...newLines].join('\r\n');
+  return { filteredCsv, newSkus, skippedCount: dataLines.length - newLines.length, totalCount: dataLines.length };
+}
+
 // ── Core: process the queue ───────────────────────────────────────────────────
 /**
  * runQueue()
@@ -101,6 +144,7 @@ export async function runQueue() {
   const toProcess = pending.slice(0, MAX_UPLOADS);
   let succeeded = 0;
   let failed    = 0;
+  const fileResults = [];
 
   for (const csvPath of toProcess) {
     const filename = path.basename(csvPath);
@@ -113,6 +157,27 @@ export async function runQueue() {
       continue;
     }
 
+    // ── Row-level deduplication ──────────────────────────────────────────────
+    const uploadedSkus = loadUploadedSkus();
+    const csvContent   = fs.readFileSync(processingPath, 'utf8');
+    const { filteredCsv, newSkus, skippedCount, totalCount } = filterNewRows(csvContent, uploadedSkus);
+
+    if (skippedCount > 0) {
+      log.info(`SKU filter: ${skippedCount}/${totalCount} row(s) already uploaded — skipping those`);
+    }
+
+    if (newSkus.length === 0) {
+      log.info('All rows in this CSV were already uploaded — marking done, skipping upload');
+      markDone(processingPath, QUEUE_DIR);
+      succeeded++;
+      fileResults.push({ name: filename, result: 'All rows already uploaded — skipped' });
+      continue;
+    }
+
+    // Write the filtered CSV (new rows only) back to the processing path
+    fs.writeFileSync(processingPath, filteredCsv, 'utf8');
+    log.info(`Uploading ${newSkus.length} new row(s)...`);
+
     try {
       const result = await runUpload(processingPath, {
         email:    EBAY_EMAIL,
@@ -121,24 +186,34 @@ export async function runQueue() {
       });
 
       if (result.success) {
+        // Persist newly uploaded SKUs
+        const updatedSkus = loadUploadedSkus();
+        for (const sku of newSkus) updatedSkus.add(sku);
+        saveUploadedSkus(updatedSkus);
+
         markDone(processingPath, QUEUE_DIR);
         log.success(`Done: ${filename}${result.jobId ? ` (job ${result.jobId})` : ''}`);
         succeeded++;
+        fileResults.push({ name: filename, result: result.message || 'Uploaded successfully' });
       } else {
         markFailed(processingPath, QUEUE_DIR, result.message);
         log.error(`Failed: ${filename} — ${result.message}`);
         failed++;
+        fileResults.push({ name: filename, result: `FAILED — ${result.message}` });
       }
     } catch (err) {
       markFailed(processingPath, QUEUE_DIR, err.message);
       log.error(`Unexpected error processing ${filename}`, err);
       failed++;
+      fileResults.push({ name: filename, result: `ERROR — ${err.message}` });
     }
   }
 
   const skipped = pending.length - toProcess.length;
   log.section('Run complete');
   log.info(`Results: ${succeeded} succeeded, ${failed} failed, ${skipped} skipped (over limit)`);
+
+  await sendRunSummary({ attempted: toProcess.length, succeeded, failed, files: fileResults });
 
   return { attempted: toProcess.length, succeeded, failed };
 }

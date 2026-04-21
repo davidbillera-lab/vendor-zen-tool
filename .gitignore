@@ -23,6 +23,12 @@ dist-ssr
 *.sln
 *.sw?
 
+# API keys stored as plain text files
+doa-listing-agent/anthropic*
+doa-listing-agent/college*
+doa-listing-agent/REELFLOW*
+.claude/commands/*.code-workspace
+
 # Agent credentials and session data
 doa-listing-agent/mercari-agent/.env
 doa-listing-agent/mercari-agent/browser-session/
