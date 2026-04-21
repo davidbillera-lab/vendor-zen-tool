@@ -1899,7 +1899,7 @@ export default function CreateListing() {
           </div>
         )}
 
-        {generatedListing && images.some(i => i.url) && (
+        {generatedListing && (
           <CrossPostPanel
             listing={generatedListing}
             images={images.filter(i => i.url).map(i => i.url!)}
