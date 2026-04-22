@@ -6,6 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { EbayOAuthManager } from "@/components/ebay/EbayOAuthManager";
+import { MercariCredentialsCard } from "@/components/credentials/MercariCredentialsCard";
+import { PoshmarkCredentialsCard } from "@/components/credentials/PoshmarkCredentialsCard";
+import { DoaCredentialsCard } from "@/components/credentials/DoaCredentialsCard";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -160,6 +163,36 @@ export default function Settings() {
           </p>
           <Separator className="my-6" />
           <EbayOAuthManager />
+        </div>
+
+        {/* Mercari Connection */}
+        <div className="rounded-xl border border-border bg-card p-6">
+          <h2 className="font-serif text-xl font-semibold text-foreground">Mercari Connection</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Connect your Mercari account. Listings post to your store only.
+          </p>
+          <Separator className="my-6" />
+          <MercariCredentialsCard />
+        </div>
+
+        {/* Poshmark Connection */}
+        <div className="rounded-xl border border-border bg-card p-6">
+          <h2 className="font-serif text-xl font-semibold text-foreground">Poshmark Connection</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Connect your Poshmark account. Listings post to your closet only.
+          </p>
+          <Separator className="my-6" />
+          <PoshmarkCredentialsCard />
+        </div>
+
+        {/* Denver Online Auctions Connection */}
+        <div className="rounded-xl border border-border bg-card p-6">
+          <h2 className="font-serif text-xl font-semibold text-foreground">Denver Online Auctions Connection</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Connect your DOA sub-admin account. Lots post to your auction only.
+          </p>
+          <Separator className="my-6" />
+          <DoaCredentialsCard />
         </div>
 
       </div>

@@ -12,19 +12,34 @@ const SESSION_FILE = path.join(SESSION_DIR, 'poshmark-state.json');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const POSHMARK_EMAIL = process.env.POSHMARK_EMAIL;
-const POSHMARK_PASSWORD = process.env.POSHMARK_PASSWORD;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
   process.exit(1);
 }
-if (!POSHMARK_EMAIL || !POSHMARK_PASSWORD) {
-  console.error('Missing POSHMARK_EMAIL or POSHMARK_PASSWORD in .env');
-  process.exit(1);
-}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+/**
+ * Fetch Poshmark credentials for a user from Supabase.
+ * Falls back to .env values so David's existing setup keeps working.
+ */
+async function fetchCredentials(userId) {
+  if (userId) {
+    const { data } = await supabase
+      .from('user_poshmark_credentials')
+      .select('poshmark_email, poshmark_password')
+      .eq('user_id', userId)
+      .single();
+    if (data) {
+      return { email: data.poshmark_email, password: data.poshmark_password };
+    }
+  }
+  const email = process.env.POSHMARK_EMAIL;
+  const password = process.env.POSHMARK_PASSWORD;
+  if (!email || !password) throw new Error('No Poshmark credentials found in DB or .env');
+  return { email, password };
+}
 
 async function downloadImage(url, destPath) {
   const res = await fetch(url);
@@ -32,15 +47,15 @@ async function downloadImage(url, destPath) {
   fs.writeFileSync(destPath, Buffer.from(await res.arrayBuffer()));
 }
 
-async function ensureLoggedIn(page) {
+async function ensureLoggedIn(page, credentials) {
   await page.goto('https://poshmark.com/', { waitUntil: 'domcontentloaded' });
   const isLoggedIn = await page.locator('[data-et-name="user_avatar"], .user-image, [data-testid="header-avatar"]').count() > 0;
   if (isLoggedIn) { console.log('[poshmark] Already logged in'); return; }
 
   console.log('[poshmark] Logging in...');
   await page.goto('https://poshmark.com/login', { waitUntil: 'networkidle' });
-  await page.fill('input[name="login_form[username_email]"], input[placeholder*="Email"]', POSHMARK_EMAIL);
-  await page.fill('input[name="login_form[password]"], input[placeholder*="Password"]', POSHMARK_PASSWORD);
+  await page.fill('input[name="login_form[username_email]"], input[placeholder*="Email"]', credentials.email);
+  await page.fill('input[name="login_form[password]"], input[placeholder*="Password"]', credentials.password);
   await page.click('button[type="submit"]');
   await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 });
   console.log('[poshmark] Logged in');
@@ -128,38 +143,64 @@ async function run() {
 
   console.log(`[poshmark-agent] Found ${jobs.length} pending job(s)`);
 
+  // Group jobs by user_id so we log in once per user
+  const jobsByUser = {};
+  for (const job of jobs) {
+    const uid = job.user_id || 'default';
+    if (!jobsByUser[uid]) jobsByUser[uid] = [];
+    jobsByUser[uid].push(job);
+  }
+
   if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
-  const storageState = fs.existsSync(SESSION_FILE) ? SESSION_FILE : undefined;
-  const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext({ storageState });
-  const page = await context.newPage();
 
-  try {
-    await ensureLoggedIn(page);
-    await context.storageState({ path: SESSION_FILE });
-
-    for (const job of jobs) {
-      await supabase.from('crosspost_jobs').update({
-        status: 'in_progress', updated_at: new Date().toISOString(),
-      }).eq('id', job.id);
-
-      try {
-        await postListing(page, job);
+  for (const [userId, userJobs] of Object.entries(jobsByUser)) {
+    let credentials;
+    try {
+      credentials = await fetchCredentials(userId === 'default' ? null : userId);
+    } catch (err) {
+      console.error(`[poshmark-agent] No credentials for user ${userId}:`, err.message);
+      for (const job of userJobs) {
         await supabase.from('crosspost_jobs').update({
-          status: 'completed', updated_at: new Date().toISOString(),
-        }).eq('id', job.id);
-        console.log(`[poshmark-agent] ✓ Job ${job.id} completed`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[poshmark-agent] ✗ Job ${job.id} failed:`, msg);
-        await supabase.from('crosspost_jobs').update({
-          status: 'failed', error_log: msg, updated_at: new Date().toISOString(),
+          status: 'failed',
+          error_log: 'No Poshmark credentials configured for this account',
+          updated_at: new Date().toISOString(),
         }).eq('id', job.id);
       }
+      continue;
     }
-  } finally {
-    await context.storageState({ path: SESSION_FILE });
-    await browser.close();
+
+    const storageState = fs.existsSync(SESSION_FILE) ? SESSION_FILE : undefined;
+    const browser = await chromium.launch({ headless: false });
+    const context = await browser.newContext({ storageState });
+    const page = await context.newPage();
+
+    try {
+      await ensureLoggedIn(page, credentials);
+      await context.storageState({ path: SESSION_FILE });
+
+      for (const job of userJobs) {
+        await supabase.from('crosspost_jobs').update({
+          status: 'in_progress', updated_at: new Date().toISOString(),
+        }).eq('id', job.id);
+
+        try {
+          await postListing(page, job);
+          await supabase.from('crosspost_jobs').update({
+            status: 'completed', updated_at: new Date().toISOString(),
+          }).eq('id', job.id);
+          console.log(`[poshmark-agent] ✓ Job ${job.id} completed`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[poshmark-agent] ✗ Job ${job.id} failed:`, msg);
+          await supabase.from('crosspost_jobs').update({
+            status: 'failed', error_log: msg, updated_at: new Date().toISOString(),
+          }).eq('id', job.id);
+        }
+      }
+    } finally {
+      await context.storageState({ path: SESSION_FILE });
+      await browser.close();
+    }
   }
 
   console.log('[poshmark-agent] Done.');

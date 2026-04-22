@@ -23,6 +23,7 @@ import { chromium } from 'playwright';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
+import { createClient } from '@supabase/supabase-js';
 import log from './logger.js';
 import { downloadImages, cleanupImages } from './imageHandler.js';
 
@@ -134,6 +135,36 @@ const SELECTORS = {
 // Increase this if DOA is slow to process images (large files, slow server)
 const UPLOAD_CONFIRM_TIMEOUT_MS = 45_000;
 
+// ── Credentials ───────────────────────────────────────────────────────────────
+
+/**
+ * Fetch DOA credentials for a user from Supabase.
+ * Falls back to .env values so David's existing setup keeps working.
+ */
+async function fetchDoaCredentials(userId) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (userId && supabaseUrl && supabaseKey) {
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    const { data } = await supabase
+      .from('user_doa_credentials')
+      .select('doa_email, doa_password, doa_first_lot_url')
+      .eq('user_id', userId)
+      .single();
+    if (data) {
+      return {
+        email: data.doa_email,
+        password: data.doa_password,
+        firstLotUrl: data.doa_first_lot_url || null,
+      };
+    }
+  }
+  const email = process.env.DOA_EMAIL;
+  const password = process.env.DOA_PASSWORD;
+  if (!email || !password) throw new Error('No DOA credentials found in DB or .env');
+  return { email, password, firstLotUrl: process.env.DOA_FIRST_LOT_URL || null };
+}
+
 // ── How long before declaring a page navigation "too slow" ───────────────────
 const NAV_TIMEOUT_MS = 30_000;
 
@@ -178,7 +209,7 @@ async function findFirst(page, selectorArray) {
  * Navigates to the DOA sub-admin login page, fills credentials, submits.
  * Throws a clear error if login doesn't succeed — this is a fatal failure.
  */
-async function doLogin(page) {
+async function doLogin(page, credentials) {
   log.info('Navigating to DOA sub-admin login page…');
   await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
 
@@ -192,7 +223,7 @@ async function doLogin(page) {
       `  Check that DOA_BASE_URL="${DOA_BASE_URL}" in your .env is correct.`
     );
   }
-  await emailField.locator.fill(DOA_EMAIL);
+  await emailField.locator.fill(credentials.email);
   log.info(`  Filled email (selector: ${emailField.selector})`);
 
   // Fill password
@@ -201,7 +232,7 @@ async function doLogin(page) {
     await takeScreenshot(page, 'login-no-password-field');
     throw new Error('FATAL: Could not find the password input on DOA\'s login page.');
   }
-  await passField.locator.fill(DOA_PASSWORD);
+  await passField.locator.fill(credentials.password);
   log.info('  Filled password');
 
   // Submit
@@ -532,16 +563,18 @@ async function fillCurrentLotForm(page, lot, localImagePaths, currentPageUrl) {
  * @returns {{ succeeded: number, failed: number, skipped: number }}
  */
 export async function runDoaAgent(lots, options = {}, callbacks = {}) {
-  const { firstLotUrl: passedFirstLotUrl } = options;
+  const { firstLotUrl: passedFirstLotUrl, userId } = options;
   const { onStart, onSuccess, onFailure } = callbacks;
 
-  // Resolve first lot URL: per-batch option → .env → error
-  const DOA_FIRST_LOT_URL = passedFirstLotUrl || DOA_FIRST_LOT_URL_ENV;
+  // Fetch credentials: DB (if userId provided) → .env fallback
+  const creds = await fetchDoaCredentials(userId || null);
+
+  // Resolve first lot URL: explicit option → DB row → .env → error
+  const DOA_FIRST_LOT_URL = passedFirstLotUrl || creds.firstLotUrl || DOA_FIRST_LOT_URL_ENV;
   if (!DOA_FIRST_LOT_URL) {
     throw new Error(
       'FATAL: No first lot URL found.\n' +
-      '  Either set DOA_FIRST_LOT_URL in your .env file, or pass firstLotUrl in options.\n' +
-      '  Example: DOA_FIRST_LOT_URL=https://denveronlineauctions.com/sub-admin/EditAuction?id=1678303&PartyId=115'
+      '  Set it in Settings > Denver Online Auctions Connection, or in .env as DOA_FIRST_LOT_URL.'
     );
   }
 
@@ -573,7 +606,7 @@ export async function runDoaAgent(lots, options = {}, callbacks = {}) {
     page = await context.newPage();
 
     // ── Login ─────────────────────────────────────────────────────────────────
-    await doLogin(page);
+    await doLogin(page, creds);
 
     // ── Pre-run health check ──────────────────────────────────────────────────
     // Verifies the form structure matches our selectors before processing any lots.
@@ -595,7 +628,7 @@ export async function runDoaAgent(lots, options = {}, callbacks = {}) {
       // and navigate back to the current lot before continuing.
       if (!await isSessionAlive(page)) {
         log.warn('  Session expired — re-authenticating…');
-        await doLogin(page);
+        await doLogin(page, creds);
         log.info(`  Re-navigating to: ${currentLotUrl}`);
         await page.goto(currentLotUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
         await page.waitForTimeout(2000);

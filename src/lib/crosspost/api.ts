@@ -141,9 +141,18 @@ export async function dispatchPlatform(
     }
 
     if (adapter.publishType === 'queue' || adapter.publishType === 'etsy-api') {
+      // Guard: Mercari and Poshmark require the user to have saved their own credentials
+      if (!await hasCredentials(user.id, platformId)) {
+        return {
+          ok: false,
+          error: `Connect your ${platformId} account in Settings before cross-posting.`,
+        };
+      }
+
       const { error } = await supabase.from('crosspost_jobs').insert({
         listing_id: listingId,
         batch_id: batchId ?? null,
+        user_id: user.id,
         platform: platformId,
         status: 'pending',
         formatted_data: { ...formattedData, imageUrls }, // agents need imageUrls to download and upload photos
@@ -176,6 +185,21 @@ async function getNextLotNumber(table: string, batchId: string): Promise<number>
     .order('lot_number', { ascending: false })
     .limit(1);
   return data?.[0]?.lot_number ? data[0].lot_number + 1 : 1;
+}
+
+async function hasCredentials(userId: string, platform: string): Promise<boolean> {
+  const tableMap: Record<string, string> = {
+    mercari: 'user_mercari_credentials',
+    poshmark: 'user_poshmark_credentials',
+  };
+  const table = tableMap[platform];
+  if (!table) return true;
+  const { data } = await supabase
+    .from(table as any)
+    .select('user_id')
+    .eq('user_id', userId)
+    .single();
+  return data !== null;
 }
 
 async function getOrCreateEbayBatchId(userId: string): Promise<string> {

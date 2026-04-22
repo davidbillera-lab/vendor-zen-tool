@@ -12,19 +12,34 @@ const SESSION_FILE = path.join(SESSION_DIR, 'mercari-state.json');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const MERCARI_EMAIL = process.env.MERCARI_EMAIL;
-const MERCARI_PASSWORD = process.env.MERCARI_PASSWORD;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
   process.exit(1);
 }
-if (!MERCARI_EMAIL || !MERCARI_PASSWORD) {
-  console.error('Missing MERCARI_EMAIL or MERCARI_PASSWORD in .env');
-  process.exit(1);
-}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+/**
+ * Fetch Mercari credentials for a user from Supabase.
+ * Falls back to .env values so David's existing setup keeps working.
+ */
+async function fetchCredentials(userId) {
+  if (userId) {
+    const { data } = await supabase
+      .from('user_mercari_credentials')
+      .select('mercari_email, mercari_password')
+      .eq('user_id', userId)
+      .single();
+    if (data) {
+      return { email: data.mercari_email, password: data.mercari_password };
+    }
+  }
+  const email = process.env.MERCARI_EMAIL;
+  const password = process.env.MERCARI_PASSWORD;
+  if (!email || !password) throw new Error('No Mercari credentials found in DB or .env');
+  return { email, password };
+}
 
 // ── Download image from URL to a temp file ────────────────────────────────────
 async function downloadImage(url, destPath) {
@@ -35,7 +50,7 @@ async function downloadImage(url, destPath) {
 }
 
 // ── Log in to Mercari (only if session is invalid) ───────────────────────────
-async function ensureLoggedIn(page) {
+async function ensureLoggedIn(page, credentials) {
   await page.goto('https://www.mercari.com/', { waitUntil: 'domcontentloaded' });
   const isLoggedIn = await page.locator('[data-testid="avatar-icon"], [aria-label="Account"]').count() > 0;
   if (isLoggedIn) {
@@ -44,8 +59,8 @@ async function ensureLoggedIn(page) {
   }
   console.log('[mercari] Logging in...');
   await page.goto('https://www.mercari.com/login/', { waitUntil: 'networkidle' });
-  await page.fill('input[name="email"]', MERCARI_EMAIL);
-  await page.fill('input[name="password"]', MERCARI_PASSWORD);
+  await page.fill('input[name="email"]', credentials.email);
+  await page.fill('input[name="password"]', credentials.password);
   await page.click('button[type="submit"]');
   await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 });
   console.log('[mercari] Logged in');
@@ -77,7 +92,7 @@ async function postListing(page, job) {
       page.locator('input[type="file"]').first().click(),
     ]);
     await fileChooser.setFiles(imagePaths);
-    await page.waitForTimeout(2000); // let images upload
+    await page.waitForTimeout(2000);
   }
 
   // Fill title (Mercari: char limit 40)
@@ -118,7 +133,6 @@ async function postListing(page, job) {
 async function run() {
   console.log('[mercari-agent] Starting up...');
 
-  // Fetch pending jobs
   const { data: jobs, error } = await supabase
     .from('crosspost_jobs')
     .select('*')
@@ -131,40 +145,64 @@ async function run() {
 
   console.log(`[mercari-agent] Found ${jobs.length} pending job(s)`);
 
+  // Group jobs by user_id so we log in once per user
+  const jobsByUser = {};
+  for (const job of jobs) {
+    const uid = job.user_id || 'default';
+    if (!jobsByUser[uid]) jobsByUser[uid] = [];
+    jobsByUser[uid].push(job);
+  }
+
   if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 
-  const storageState = fs.existsSync(SESSION_FILE) ? SESSION_FILE : undefined;
-  const browser = await chromium.launch({ headless: false }); // headed for visual debugging
-  const context = await browser.newContext({ storageState });
-  const page = await context.newPage();
-
-  try {
-    await ensureLoggedIn(page);
-    await context.storageState({ path: SESSION_FILE }); // save session after login
-
-    for (const job of jobs) {
-      // Mark in_progress
-      await supabase.from('crosspost_jobs').update({
-        status: 'in_progress', updated_at: new Date().toISOString(),
-      }).eq('id', job.id);
-
-      try {
-        await postListing(page, job);
+  for (const [userId, userJobs] of Object.entries(jobsByUser)) {
+    let credentials;
+    try {
+      credentials = await fetchCredentials(userId === 'default' ? null : userId);
+    } catch (err) {
+      console.error(`[mercari-agent] No credentials for user ${userId}:`, err.message);
+      for (const job of userJobs) {
         await supabase.from('crosspost_jobs').update({
-          status: 'completed', updated_at: new Date().toISOString(),
-        }).eq('id', job.id);
-        console.log(`[mercari-agent] ✓ Job ${job.id} completed`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[mercari-agent] ✗ Job ${job.id} failed:`, msg);
-        await supabase.from('crosspost_jobs').update({
-          status: 'failed', error_log: msg, updated_at: new Date().toISOString(),
+          status: 'failed',
+          error_log: 'No Mercari credentials configured for this account',
+          updated_at: new Date().toISOString(),
         }).eq('id', job.id);
       }
+      continue;
     }
-  } finally {
-    await context.storageState({ path: SESSION_FILE }); // always save session
-    await browser.close();
+
+    const storageState = fs.existsSync(SESSION_FILE) ? SESSION_FILE : undefined;
+    const browser = await chromium.launch({ headless: false });
+    const context = await browser.newContext({ storageState });
+    const page = await context.newPage();
+
+    try {
+      await ensureLoggedIn(page, credentials);
+      await context.storageState({ path: SESSION_FILE });
+
+      for (const job of userJobs) {
+        await supabase.from('crosspost_jobs').update({
+          status: 'in_progress', updated_at: new Date().toISOString(),
+        }).eq('id', job.id);
+
+        try {
+          await postListing(page, job);
+          await supabase.from('crosspost_jobs').update({
+            status: 'completed', updated_at: new Date().toISOString(),
+          }).eq('id', job.id);
+          console.log(`[mercari-agent] ✓ Job ${job.id} completed`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[mercari-agent] ✗ Job ${job.id} failed:`, msg);
+          await supabase.from('crosspost_jobs').update({
+            status: 'failed', error_log: msg, updated_at: new Date().toISOString(),
+          }).eq('id', job.id);
+        }
+      }
+    } finally {
+      await context.storageState({ path: SESSION_FILE });
+      await browser.close();
+    }
   }
 
   console.log('[mercari-agent] Done.');
