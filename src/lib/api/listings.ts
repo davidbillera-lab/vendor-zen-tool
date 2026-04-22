@@ -9,7 +9,7 @@ async function getCurrentUserId(): Promise<string> {
   return user.id;
 }
 
-export type Platform = 'ebay' | 'facebook' | 'liveauctioneers' | 'denver';
+export type Platform = 'ebay' | 'facebook' | 'liveauctioneers' | 'denver' | 'cross-post';
 
 export interface GeneratedListing {
   title: string;

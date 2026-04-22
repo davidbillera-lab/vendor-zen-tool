@@ -76,7 +76,7 @@ export function CrossPostPanel({ listing, images, projectId, listingId: initialL
   async function ensureListingSaved(): Promise<string> {
     if (savedListingId) return savedListingId;
     const saved = await saveListing({
-      platform: 'ebay',
+      platform: 'cross-post',
       status: 'draft',
       title: listing.title,
       description: listing.description,
