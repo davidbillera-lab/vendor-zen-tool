@@ -99,11 +99,16 @@ export function EbayBatchPanel({
   const [zapierWebhookUrl, setZapierWebhookUrl] = useState("https://hooks.zapier.com/hooks/catch/26172063/uqfpdh0/");
   const [sendingToZapier, setSendingToZapier] = useState(false);
   const [showZapierConfig, setShowZapierConfig] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [enriching, setEnriching] = useState(false);
   const [shippingProfileName, setShippingProfileName] = useState<string>("");
   const [returnProfileName, setReturnProfileName] = useState<string>("");
   const [paymentProfileName, setPaymentProfileName] = useState<string>("");
   const [fullCsvContent, setFullCsvContent] = useState<string>("");
+
+  // Rows to act on: selected subset, or all if nothing checked
+  const activeRows = selectedIds.size > 0 ? rows.filter(r => selectedIds.has(r.id)) : rows;
+  const allSelected = rows.length > 0 && rows.every(r => selectedIds.has(r.id));
 
   // Persist default category and location per project
   useEffect(() => {
@@ -184,6 +189,7 @@ export function EbayBatchPanel({
     }
     
     onRowsChange(rows.filter(r => r.id !== id));
+    setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     toast({ title: "Listing deleted" });
   };
 
@@ -368,8 +374,8 @@ export function EbayBatchPanel({
   // Get lots missing required item specifics for their category
   const getMissingItemSpecificsLots = (): { lotNumber: number; missing: string[] }[] => {
     const results: { lotNumber: number; missing: string[] }[] = [];
-    
-    rows.forEach((row, idx) => {
+
+    activeRows.forEach((row, idx) => {
       const categoryId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
       const missing: string[] = [];
       
@@ -394,13 +400,13 @@ export function EbayBatchPanel({
 
   // Generate CSV content using eBay's official category listing template format
   // Matches the template downloaded from Seller Hub Reports (Version=1193)
-  const generateCSVContent = (skipImages: boolean = false) => {
+  const generateCSVContent = (skipImages: boolean = false, rowsToExport: EbayRow[] = activeRows) => {
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
-    
+
     // Collect ALL item specifics across rows - ensure required ones come first
     const requiredSpecifics = ["Brand", "Type", "Department", "Size Type", "Size", "Color", "Material", "Style"];
     const allSpecifics = new Set<string>(requiredSpecifics);
-    rows.forEach(r => {
+    rowsToExport.forEach(r => {
       if (r.item_specifics) {
         Object.keys(r.item_specifics).forEach(k => allSpecifics.add(k));
       }
@@ -482,7 +488,7 @@ export function EbayBatchPanel({
       }
     };
 
-    const csvRows = rows.map((row, index) => {
+    const csvRows = rowsToExport.map((row, index) => {
       // Extract numeric category ID
       const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
@@ -562,7 +568,7 @@ export function EbayBatchPanel({
 
   const getMissingCategoryLots = (): number[] => {
     const missing: number[] = [];
-    rows.forEach((row, idx) => {
+    activeRows.forEach((row, idx) => {
       const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
       const categoryId = extractedCategoryId || fallbackCategoryId;
@@ -576,7 +582,7 @@ export function EbayBatchPanel({
   // Get lots with deprecated/remapped categories and auto-fix them
   const getDeprecatedCategoryLots = (): { lotNumber: number; oldCat: number; newCat: number; label: string }[] => {
     const results: { lotNumber: number; oldCat: number; newCat: number; label: string }[] = [];
-    rows.forEach((row, idx) => {
+    activeRows.forEach((row, idx) => {
       const catId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
       if (catId && DEPRECATED_CATEGORIES[catId]) {
         const dep = DEPRECATED_CATEGORIES[catId];
@@ -616,7 +622,7 @@ export function EbayBatchPanel({
 
   // Get lots with titles exceeding 80 characters
   const getOverlongTitleLots = (): number[] => {
-    return rows
+    return activeRows
       .filter(row => (row.title?.length || 0) > 80)
       .map((row, idx) => row.lot_number ?? (idx + 1));
   };
@@ -944,7 +950,7 @@ export function EbayBatchPanel({
     let succeeded = 0;
     let failed = 0;
 
-    for (const row of rows) {
+    for (const row of activeRows) {
       const categoryId = row.category?.match(/\d{3,}/)?.[0] || defaultCategoryId.trim() || "";
       const conditionId = conditionToZapierMap[row.condition || ""] || "3000";
 
@@ -1005,12 +1011,12 @@ export function EbayBatchPanel({
       toast({ title: "Missing Location", description: "Set an Item Location (ZIP or City, ST) before pushing to eBay.", variant: "destructive" });
       return;
     }
-    if (!confirm(`Push ${rows.length} listing(s) as drafts to your eBay Seller Hub?`)) return;
+    if (!confirm(`Push ${activeRows.length} listing(s) as drafts to your eBay Seller Hub?`)) return;
 
     setPublishing(true);
     try {
       const { data, error } = await supabase.functions.invoke("ebay-publish", {
-        body: { rowIds: rows.map(r => r.id), location: loc },
+        body: { rowIds: activeRows.map(r => r.id), location: loc },
       });
 
       if (error) {
@@ -1175,13 +1181,13 @@ export function EbayBatchPanel({
             {rows.length > 0 && (
               <Button variant="gold" onClick={downloadCSV} className="gap-2">
                 <Download className="h-4 w-4" />
-                Download CSV for eBay
+                {selectedIds.size > 0 ? `Download CSV (${activeRows.length})` : "Download CSV for eBay"}
               </Button>
             )}
             {rows.length > 0 && (
               <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
                 {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {publishing ? "Pushing…" : "Push to eBay"}
+                {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push to eBay (${activeRows.length})` : "Push to eBay"}
               </Button>
             )}
             {rows.length > 0 && (
@@ -1225,7 +1231,7 @@ export function EbayBatchPanel({
                 className="gap-2"
               >
                 {sendingToZapier ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {sendingToZapier ? `Sending…` : `Send ${rows.length} to Zapier`}
+                {sendingToZapier ? `Sending…` : `Send ${activeRows.length} to Zapier`}
               </Button>
             </div>
           </div>
@@ -1308,43 +1314,71 @@ export function EbayBatchPanel({
 
         {rows.length > 0 && (
           <div className="border-t border-border pt-4 space-y-2">
-            <div className="flex items-center gap-2 mb-2">
-              <Check className="h-4 w-4 text-green-500" />
-              <span className="text-sm font-medium">{rows.length} listings ready for export</span>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Check className="h-4 w-4 text-green-500" />
+                <span className="text-sm font-medium">
+                  {selectedIds.size > 0
+                    ? `${selectedIds.size} of ${rows.length} selected`
+                    : `${rows.length} listings ready for export`}
+                </span>
+              </div>
+              <button
+                className="text-xs text-muted-foreground hover:text-foreground underline"
+                onClick={() =>
+                  setSelectedIds(allSelected ? new Set() : new Set(rows.map(r => r.id)))
+                }
+              >
+                {allSelected ? "Deselect all" : "Select all"}
+              </button>
             </div>
-            
+
             <div className="max-h-48 overflow-y-auto space-y-1">
               {rows.map((row) => (
-                <div 
-                  key={row.id} 
-                  className="text-xs flex justify-between items-center py-2 px-3 bg-background/50 rounded hover:bg-background/80 transition-colors"
+                <div
+                  key={row.id}
+                  className={cn(
+                    "text-xs flex justify-between items-center py-2 px-3 rounded hover:bg-background/80 transition-colors",
+                    selectedIds.has(row.id) ? "bg-primary/10 border border-primary/20" : "bg-background/50"
+                  )}
                 >
                   <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <Checkbox
+                      checked={selectedIds.has(row.id)}
+                      onCheckedChange={(checked) => {
+                        setSelectedIds(prev => {
+                          const next = new Set(prev);
+                          if (checked) next.add(row.id);
+                          else next.delete(row.id);
+                          return next;
+                        });
+                      }}
+                    />
                     <span className="font-mono text-muted-foreground">#{row.lot_number}</span>
                     <span className="truncate font-medium">{row.title}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-primary font-semibold">${row.price || 0}</span>
                     <span className="text-muted-foreground capitalize">{row.condition || "—"}</span>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0"
                       onClick={() => setViewingRow(row)}
                     >
                       <Eye className="h-3 w-3" />
                     </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0"
                       onClick={() => setEditingRow(row)}
                     >
                       <Edit2 className="h-3 w-3" />
                     </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0 text-destructive hover:text-destructive"
                       onClick={() => handleDelete(row.id)}
                     >
