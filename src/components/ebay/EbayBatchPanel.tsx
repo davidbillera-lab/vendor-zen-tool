@@ -1119,7 +1119,7 @@ export function EbayBatchPanel({
     setPublishing(true);
     try {
       const { data, error } = await supabase.functions.invoke("ebay-publish", {
-        body: { rowIds: activeRows.map(r => r.id), location: loc },
+        body: { rows: activeRows },
       });
 
       if (error) {
