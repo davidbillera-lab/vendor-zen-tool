@@ -105,6 +105,18 @@ export function EbayBatchPanel({
   const [returnProfileName, setReturnProfileName] = useState<string>("");
   const [paymentProfileName, setPaymentProfileName] = useState<string>("");
   const [fullCsvContent, setFullCsvContent] = useState<string>("");
+  const [correctionPrompt, setCorrectionPrompt] = useState("");
+  const [isRefining, setIsRefining] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyReport, setVerifyReport] = useState<{ text: string; passed: boolean } | null>(null);
+
+  // Reset AI state when edit dialog closes
+  useEffect(() => {
+    if (!editingRow) {
+      setCorrectionPrompt("");
+      setVerifyReport(null);
+    }
+  }, [editingRow]);
 
   // Rows to act on: selected subset, or all if nothing checked
   const activeRows = selectedIds.size > 0 ? rows.filter(r => selectedIds.has(r.id)) : rows;
@@ -210,6 +222,97 @@ export function EbayBatchPanel({
     onRowsChange([]);
     onLotNumberChange(1);
     toast({ title: "All eBay listings cleared" });
+  };
+
+  const refineListing = async () => {
+    if (!correctionPrompt.trim() || !editingRow) return;
+    setIsRefining(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          currentListing: {
+            title: editingRow.title,
+            description: editingRow.description,
+            price: editingRow.price,
+            condition: editingRow.condition,
+            itemSpecifics: editingRow.item_specifics,
+          },
+          correctionPrompt: correctionPrompt.trim(),
+          imageUrls: editingRow.image_urls || [],
+          platform: 'ebay',
+          mode: 'refine',
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Refinement failed');
+
+      const refined = data.listing;
+      setEditingRow(prev => prev ? {
+        ...prev,
+        title: (refined.title || prev.title).substring(0, 80),
+        description: refined.description || prev.description,
+        price: refined.price ?? prev.price,
+        condition: refined.condition || prev.condition,
+        item_specifics: refined.itemSpecifics || prev.item_specifics,
+      } : prev);
+      setCorrectionPrompt("");
+      toast({ title: "Listing Updated", description: "AI refined your listing" });
+    } catch (error) {
+      toast({
+        title: "Refinement Failed",
+        description: error instanceof Error ? error.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRefining(false);
+    }
+  };
+
+  const verifyListing = async () => {
+    if (!editingRow) return;
+    setIsVerifying(true);
+    setVerifyReport(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          currentListing: {
+            title: editingRow.title,
+            description: editingRow.description,
+            price: editingRow.price,
+            condition: editingRow.condition,
+            itemSpecifics: editingRow.item_specifics,
+          },
+          correctionPrompt: '',
+          imageUrls: editingRow.image_urls || [],
+          platform: 'ebay',
+          mode: 'verify',
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Verification failed');
+
+      setVerifyReport({ text: data.report, passed: data.passed });
+    } catch (error) {
+      toast({
+        title: "Verification Failed",
+        description: error instanceof Error ? error.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const handleSaveEdit = async () => {
@@ -1744,7 +1847,61 @@ export function EbayBatchPanel({
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-4">
+              {/* AI Verify Result */}
+              {verifyReport && (
+                <div className={cn(
+                  "rounded-lg p-3 text-sm border",
+                  verifyReport.passed
+                    ? "bg-green-950/40 border-green-800 text-green-300"
+                    : "bg-yellow-950/40 border-yellow-700 text-yellow-300"
+                )}>
+                  <div className="flex items-center gap-2 mb-1 font-medium">
+                    {verifyReport.passed ? <Check className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {verifyReport.passed ? "Listing looks good" : "Issues found"}
+                  </div>
+                  <p className="leading-snug">{verifyReport.text}</p>
+                </div>
+              )}
+
+              {/* AI Chat Bar */}
+              <div className="pt-2 border-t border-border">
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Ask AI to make changes</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto h-7 text-xs"
+                    onClick={verifyListing}
+                    disabled={isVerifying || isRefining}
+                  >
+                    {isVerifying ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Eye className="h-3 w-3 mr-1" />
+                    )}
+                    AI Verify
+                  </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="e.g., 'Make title more SEO friendly' or 'Lower price to 25'"
+                    value={correctionPrompt}
+                    onChange={(e) => setCorrectionPrompt(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !isRefining && refineListing()}
+                    disabled={isRefining}
+                  />
+                  <Button
+                    onClick={refineListing}
+                    disabled={!correctionPrompt.trim() || isRefining}
+                    size="icon"
+                  >
+                    {isRefining ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
                 <Button variant="outline" onClick={() => setEditingRow(null)}>
                   Cancel
                 </Button>
