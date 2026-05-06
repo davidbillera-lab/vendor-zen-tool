@@ -9,7 +9,7 @@ async function getCurrentUserId(): Promise<string> {
   return user.id;
 }
 
-export type Platform = 'ebay' | 'facebook' | 'liveauctioneers' | 'denver';
+export type Platform = 'ebay' | 'facebook' | 'liveauctioneers' | 'denver' | 'cross-post' | 'mercari' | 'poshmark' | 'etsy';
 
 export interface GeneratedListing {
   title: string;
@@ -42,7 +42,8 @@ export interface GeneratedListing {
 export async function generateListing(
   platform: Platform,
   imageUrls: string[],
-  additionalContext?: string
+  additionalContext?: string,
+  masterPrompt?: string | null
 ): Promise<GeneratedListing> {
   // Ensure user is authenticated before calling
   const { data: { session } } = await supabase.auth.getSession();
@@ -51,7 +52,7 @@ export async function generateListing(
   }
 
   const { data, error } = await supabase.functions.invoke('generate-listing', {
-    body: { platform, imageUrls, additionalContext }
+    body: { platform, imageUrls, additionalContext, masterPrompt: masterPrompt || undefined }
   });
 
   if (error) {
