@@ -145,6 +145,7 @@ export default function CreateListing() {
   const [denverLots, setDenverLots] = useState<any[]>([]);
   const [editingDenverLot, setEditingDenverLot] = useState<any | null>(null);
   const [loadingDenver, setLoadingDenver] = useState(false);
+  const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
 
   // eBay batch mode
   const [ebayLotNumber, setEbayLotNumber] = useState(1);
@@ -1421,8 +1422,8 @@ export default function CreateListing() {
           </div>
         )}
 
-        {/* eBay Batch Panel - only show when eBay is the active platform */}
-        {activePlatform === 'ebay' && (
+        {/* eBay Batch Panel - show when eBay is active or when project already has eBay rows */}
+        {(activePlatform === 'ebay' || (selectedProject && ebayRows.length > 0)) && (
           <EbayBatchPanel
             projectId={selectedProject?.id || null}
             rows={ebayRows}
