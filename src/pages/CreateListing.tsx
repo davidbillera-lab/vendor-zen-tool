@@ -28,13 +28,18 @@ import {
   AlertTriangle,
   CheckCircle,
   RefreshCw,
-  Clock
+  Clock,
+  Send,
+  ShieldCheck,
+  ShoppingBag,
+  Tag
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { generateListing, uploadImage, saveListing, type Platform, type GeneratedListing } from "@/lib/api/listings";
 import { CameraCapture } from "@/components/CameraCapture";
 import { LiveAuctioneersCaptureMode } from "@/components/LiveAuctioneersCaptureMode";
+import { AIGuardrailPrompt } from "@/components/AIGuardrailPrompt";
 import { ProjectManager, type Project } from "@/components/BatchManager";
 import { LALotEditor } from "@/components/LALotEditor";
 import { DenverLotEditor } from "@/components/DenverLotEditor";
@@ -42,6 +47,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 import { saveAs } from "file-saver";
 import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
+import { CrossPostPanel } from "@/components/crosspost/CrossPostPanel";
 import { EbayItemSpecificsEditor } from "@/components/ebay/EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "@/components/ebay/EbayShippingSettings";
 import { 
@@ -57,6 +63,9 @@ const platforms = [
   { id: "facebook" as Platform, name: "Facebook", icon: Facebook, color: "bg-platform-facebook", description: "Marketplace + groups" },
   { id: "liveauctioneers" as Platform, name: "LiveAuctioneers", icon: Gavel, color: "bg-platform-auction", description: "CSV export" },
   { id: "denver" as Platform, name: "Denver Auctions", icon: Gavel, color: "bg-platform-auction", description: "Copy-paste tool" },
+  { id: "mercari" as Platform, name: "Mercari", icon: ShoppingBag, color: "bg-red-400/20", description: "Queue for Mercari agent" },
+  { id: "poshmark" as Platform, name: "Poshmark", icon: Tag, color: "bg-pink-500/20", description: "Queue for Poshmark agent" },
+  { id: "etsy" as Platform, name: "Etsy", icon: Tag, color: "bg-orange-400/20", description: "Publish via Etsy API" },
 ];
 
 const DEFAULT_FB_GROUPS = [
@@ -149,15 +158,18 @@ export default function CreateListing() {
 
   // eBay batch mode
   const [ebayLotNumber, setEbayLotNumber] = useState(1);
+
+  // Cross-post preselection (Mercari / Poshmark / Etsy paths auto-check the platform in CrossPostPanel)
+  const [crossPostPreselect, setCrossPostPreselect] = useState<string | null>(null);
   const [ebayRows, setEbayRows] = useState<any[]>([]);
   const [loadingEbay, setLoadingEbay] = useState(false);
   const [ebayShippingSettings, setEbayShippingSettings] = useState<ShippingSettings>({
     shippingType: "flat",
-    shippingCost: 0,
-    handlingTime: 3,
+    shippingCost: 9.98,
+    handlingTime: 1,
     returnsAccepted: true,
     returnPeriod: 30,
-    returnShipping: "buyer",
+    returnShipping: "seller",
   });
   const [ebayItemSpecifics, setEbayItemSpecifics] = useState<Record<string, string>>({});
 
@@ -168,6 +180,29 @@ export default function CreateListing() {
   // LiveAuctioneers CSV validation state
   const [csvValidationIssues, setCsvValidationIssues] = useState<ValidationIssue[]>([]);
   const [csvValidated, setCsvValidated] = useState(false);
+
+  // eBay AI verify & refine state
+  const [ebayVerifying, setEbayVerifying] = useState(false);
+  const [ebayRefining, setEbayRefining] = useState(false);
+  const [ebayVerifyResult, setEbayVerifyResult] = useState<{ verified: boolean; confidence: string; notes: string } | null>(null);
+  const [ebayRefinePrompt, setEbayRefinePrompt] = useState("");
+
+  // Master prompt for AI guardrails
+  const [masterPrompt, setMasterPrompt] = useState("");
+  const [masterPromptDraft, setMasterPromptDraft] = useState("");
+  const [masterPromptOpen, setMasterPromptOpen] = useState(false);
+  const [savingMasterPrompt, setSavingMasterPrompt] = useState(false);
+
+  // Load master prompt when project changes
+  useEffect(() => {
+    if (selectedProject?.master_prompt) {
+      setMasterPrompt(selectedProject.master_prompt);
+      setMasterPromptDraft(selectedProject.master_prompt);
+    } else {
+      setMasterPrompt("");
+      setMasterPromptDraft("");
+    }
+  }, [selectedProject?.id]);
 
   // Fetch Denver lots when project changes
   useEffect(() => {
@@ -489,6 +524,10 @@ export default function CreateListing() {
     setActivePlatform(platform);
     setGeneratedListing(null);
 
+    // Mercari / Poshmark / Etsy use the cross-post pipeline (clean base listing, then CrossPostPanel handles dispatch)
+    const isCrossPostOnly = platform === 'mercari' || platform === 'poshmark' || platform === 'etsy';
+    setCrossPostPreselect(isCrossPostOnly ? platform : null);
+
     try {
       // Upload images
       const uploadedImages = await Promise.all(
@@ -501,8 +540,10 @@ export default function CreateListing() {
       setImages(uploadedImages);
       const imageUrls = uploadedImages.map(img => img.url!);
 
-      // Generate listing
-      const listing = await generateListing(platform, imageUrls, additionalContext);
+      // Generate listing — Mercari/Poshmark/Etsy use the 'facebook' prompt as a neutral base listing
+      // (the generate-listing edge function only supports ebay | facebook | liveauctioneers | denver)
+      const generationPlatform: Platform = isCrossPostOnly ? 'facebook' : platform;
+      const listing = await generateListing(generationPlatform, imageUrls, additionalContext, masterPrompt || undefined);
       setGeneratedListing(listing);
 
       // Auto-save eBay to batch for bulk export
@@ -622,7 +663,7 @@ export default function CreateListing() {
         }
       }
 
-      const toastMessages: Record<Platform, { title: string; description: string }> = {
+      const toastMessages: Partial<Record<Platform, { title: string; description: string }>> = {
         liveauctioneers: {
           title: `Lot ${lotNumber} Saved to Cloud`,
           description: `${dbBatchRows.length + 1} lots in batch. Auto-saved.`
@@ -635,10 +676,14 @@ export default function CreateListing() {
           title: `Listing #${ebayLotNumber} Saved`, 
           description: `${ebayRows.length + 1} eBay listings in batch. Export CSV when ready.` 
         },
-        facebook: { title: "Draft Ready!", description: "Review and launch when ready." }
+        facebook: { title: "Draft Ready!", description: "Review and launch when ready." },
+        mercari: { title: "Listing Ready", description: "Select Mercari in the cross-post panel below to queue it." },
+        poshmark: { title: "Listing Ready", description: "Select Poshmark in the cross-post panel below to queue it." },
+        etsy: { title: "Listing Ready", description: "Select Etsy in the cross-post panel below to publish." }
       };
 
-      toast(toastMessages[platform]);
+      const msg = toastMessages[platform];
+      if (msg) toast(msg);
 
     } catch (error) {
       toast({
@@ -689,7 +734,158 @@ export default function CreateListing() {
     }
   };
 
-  // Validate CSV data for LiveAuctioneers
+  // eBay: Verify listing with second LLM
+  const handleEbayVerify = async () => {
+    if (!generatedListing || !activePlatform) return;
+    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    if (!lastEbayRow) return;
+
+    setEbayVerifying(true);
+    setEbayVerifyResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Session expired');
+
+      const { data, error } = await supabase.functions.invoke('refine-listing', {
+        body: {
+          currentListing: {
+            title: lastEbayRow.title,
+            description: lastEbayRow.description,
+            price: lastEbayRow.price,
+            categoryId: lastEbayRow.category,
+            condition: lastEbayRow.condition,
+            itemSpecifics: lastEbayRow.item_specifics,
+          },
+          correctionPrompt: ebayRefinePrompt || '',
+          imageUrls: lastEbayRow.image_urls || [],
+          platform: 'ebay',
+          mode: 'verify',
+          masterPrompt: masterPrompt || undefined
+        }
+      });
+
+      if (error) throw new Error(error.message);
+
+      const refined = data.listing;
+      setEbayVerifyResult({
+        verified: data.verified,
+        confidence: data.confidence,
+        notes: data.notes
+      });
+
+      // Update the DB row with verified/corrected data
+      const updates: any = {};
+      if (refined.title) updates.title = refined.title.substring(0, 80);
+      if (refined.description) updates.description = refined.description;
+      if (refined.price) updates.price = refined.price;
+      if (refined.categoryId) updates.category = String(refined.categoryId);
+      if (refined.condition) updates.condition = refined.condition;
+      if (refined.itemSpecifics) updates.item_specifics = refined.itemSpecifics;
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from('ebay_batch_rows')
+          .update(updates)
+          .eq('id', lastEbayRow.id);
+
+        if (!updateError) {
+          setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
+          // Update generatedListing for preview
+          setGeneratedListing(prev => prev ? {
+            ...prev,
+            title: updates.title || prev.title,
+            description: updates.description || prev.description,
+            price: updates.price || prev.price,
+            condition: updates.condition || prev.condition,
+            itemSpecifics: updates.item_specifics || prev.itemSpecifics,
+          } : prev);
+        }
+      }
+
+      toast({
+        title: data.verified ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
+        description: data.notes || (data.verified ? "AI confirmed the identification is correct" : "Listing updated with corrections"),
+      });
+    } catch (error) {
+      toast({
+        title: "Verification Failed",
+        description: error instanceof Error ? error.message : "Could not verify",
+        variant: "destructive"
+      });
+    } finally {
+      setEbayVerifying(false);
+    }
+  };
+
+  // eBay: Refine listing with prompt
+  const handleEbayRefine = async () => {
+    if (!ebayRefinePrompt.trim()) return;
+    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    if (!lastEbayRow) return;
+
+    setEbayRefining(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('refine-listing', {
+        body: {
+          currentListing: {
+            title: lastEbayRow.title,
+            description: lastEbayRow.description,
+            price: lastEbayRow.price,
+            categoryId: lastEbayRow.category,
+            condition: lastEbayRow.condition,
+            itemSpecifics: lastEbayRow.item_specifics,
+          },
+          correctionPrompt: ebayRefinePrompt,
+          imageUrls: lastEbayRow.image_urls || [],
+          platform: 'ebay',
+          mode: 'refine',
+          masterPrompt: masterPrompt || undefined
+        }
+      });
+
+      if (error) throw new Error(error.message);
+
+      const refined = data.listing;
+      const updates: any = {};
+      if (refined.title) updates.title = String(refined.title).substring(0, 80);
+      if (refined.description) updates.description = refined.description;
+      if (refined.price != null) updates.price = refined.price;
+      if (refined.categoryId) updates.category = String(refined.categoryId);
+      if (refined.condition) updates.condition = refined.condition;
+      if (refined.itemSpecifics) updates.item_specifics = refined.itemSpecifics;
+
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from('ebay_batch_rows')
+          .update(updates)
+          .eq('id', lastEbayRow.id);
+
+        if (!updateError) {
+          setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
+          setGeneratedListing(prev => prev ? {
+            ...prev,
+            title: updates.title || prev.title,
+            description: updates.description || prev.description,
+            price: updates.price ?? prev.price,
+            condition: updates.condition || prev.condition,
+            itemSpecifics: updates.item_specifics || prev.itemSpecifics,
+          } : prev);
+        }
+      }
+
+      setEbayRefinePrompt("");
+      toast({ title: "Listing Refined", description: "Updated based on your feedback" });
+    } catch (error) {
+      toast({
+        title: "Refinement Failed",
+        description: error instanceof Error ? error.message : "Could not refine",
+        variant: "destructive"
+      });
+    } finally {
+      setEbayRefining(false);
+    }
+  };
+
   const validateLACSV = useCallback(() => {
     if (dbBatchRows.length === 0) {
       toast({ title: "No Data", description: "Batch is empty", variant: "destructive" });
@@ -767,64 +963,69 @@ export default function CreateListing() {
       return;
     }
 
+    // Build flat list of all images across all lots
+    const imageItems: { url: string; filename: string }[] = [];
+    for (const row of dbBatchRows) {
+      const urls = (row.image_urls || []) as string[];
+      for (let i = 0; i < urls.length; i++) {
+        const paddedIndex = (i + 1).toString().padStart(2, '0');
+        imageItems.push({ url: urls[i], filename: `${row.lot_number}_${paddedIndex}.jpg` });
+      }
+    }
+
+    if (imageItems.length === 0) {
+      toast({ title: "No Images", description: "None of the lots in this batch have images saved.", variant: "destructive" });
+      return;
+    }
+
     setDownloadingImages(true);
-    const totalImages = dbBatchRows.reduce((sum, r) => sum + ((r.image_urls)?.length || 0), 0);
-    setZipProgress({ current: 0, total: totalImages, failed: 0, phase: 'Building ZIP on server' });
+    setZipProgress({ current: 0, total: imageItems.length, failed: 0, phase: 'Downloading images' });
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast({ title: "Not authenticated", description: "Please log in again", variant: "destructive" });
-        return;
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      let completed = 0;
+      let failed = 0;
+
+      // Fetch images in parallel batches of 8
+      const BATCH = 8;
+      for (let i = 0; i < imageItems.length; i += BATCH) {
+        const batch = imageItems.slice(i, i + BATCH);
+        await Promise.all(batch.map(async ({ url, filename }) => {
+          try {
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const blob = await resp.blob();
+            zip.file(filename, blob);
+            completed++;
+          } catch {
+            failed++;
+          }
+          setZipProgress({ current: completed + failed, total: imageItems.length, failed, phase: 'Downloading images' });
+        }));
       }
 
-      // Determine platform based on which tab has data
-      const platform = activePlatform || 'liveauctioneers';
-
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-images-zip`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          },
-          body: JSON.stringify({ batch_id: selectedProject.id, platform }),
-        }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `Server error ${response.status}`);
-      }
-
-      const successCount = parseInt(response.headers.get('X-Success-Count') || '0');
-      const failedCount = parseInt(response.headers.get('X-Failed-Count') || '0');
-      const failedFiles = response.headers.get('X-Failed-Files') || '';
-
-      setZipProgress({ current: totalImages, total: totalImages, failed: failedCount, phase: 'Complete' });
-
-      const blob = await response.blob();
+      setZipProgress({ current: imageItems.length, total: imageItems.length, failed, phase: 'Building ZIP' });
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
       const dateStr = new Date().toISOString().split('T')[0];
       saveAs(blob, `liveauctioneers-images-${dateStr}.zip`);
 
-      if (failedCount > 0) {
-        toast({ 
-          title: "Images Downloaded (with some failures)", 
-          description: `ZIP contains ${successCount}/${totalImages} images. ${failedCount} failed: ${failedFiles} - extract ZIP first, then upload to LiveAuctioneers`,
+      if (failed > 0) {
+        toast({
+          title: "Images Downloaded (with failures)",
+          description: `${completed} of ${imageItems.length} images included — ${failed} failed. Extract ZIP first, then upload to LiveAuctioneers`,
           variant: "destructive"
         });
       } else {
-        toast({ 
-          title: "Images Downloaded!", 
-          description: `All ${successCount} images included - extract the ZIP first, then upload to LiveAuctioneers`
+        toast({
+          title: "Images Downloaded!",
+          description: `All ${completed} images included — extract the ZIP first, then upload to LiveAuctioneers`
         });
       }
     } catch (error) {
       console.error("Error creating ZIP:", error);
-      toast({ 
-        title: "Download Failed", 
+      toast({
+        title: "Download Failed",
         description: error instanceof Error ? error.message : "Could not create image ZIP file",
         variant: "destructive"
       });
@@ -843,48 +1044,64 @@ export default function CreateListing() {
       toast({ title: "No Project", description: "No batch selected", variant: "destructive" });
       return;
     }
+
+    // Build flat list of all images across all lots
+    const imageItems: { url: string; filename: string }[] = [];
+    for (const lot of denverLots) {
+      const urls = (lot.image_urls || []) as string[];
+      for (let i = 0; i < urls.length; i++) {
+        const paddedIndex = (i + 1).toString().padStart(2, '0');
+        imageItems.push({ url: urls[i], filename: `${lot.lot_number}_${paddedIndex}.jpg` });
+      }
+    }
+
+    if (imageItems.length === 0) {
+      toast({ title: "No Images", description: "None of the lots in this batch have images saved.", variant: "destructive" });
+      return;
+    }
+
     setDownloadingDenverImages(true);
-    const totalImages = denverLots.reduce((sum: number, r: any) => sum + ((r.image_urls)?.length || 0), 0);
-    setDenverZipProgress({ current: 0, total: totalImages, failed: 0, phase: 'Building ZIP on server' });
+    setDenverZipProgress({ current: 0, total: imageItems.length, failed: 0, phase: 'Downloading images' });
+
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast({ title: "Not authenticated", description: "Please log in again", variant: "destructive" });
-        return;
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      let completed = 0;
+      let failed = 0;
+
+      // Fetch images in parallel batches of 8
+      const BATCH = 8;
+      for (let i = 0; i < imageItems.length; i += BATCH) {
+        const batch = imageItems.slice(i, i + BATCH);
+        await Promise.all(batch.map(async ({ url, filename }) => {
+          try {
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const blob = await resp.blob();
+            zip.file(filename, blob);
+            completed++;
+          } catch {
+            failed++;
+          }
+          setDenverZipProgress({ current: completed + failed, total: imageItems.length, failed, phase: 'Downloading images' });
+        }));
       }
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-images-zip`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          },
-          body: JSON.stringify({ batch_id: selectedProject.id, platform: 'denver' }),
-        }
-      );
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `Server error ${response.status}`);
-      }
-      const successCount = parseInt(response.headers.get('X-Success-Count') || '0');
-      const failedCount = parseInt(response.headers.get('X-Failed-Count') || '0');
-      const failedFiles = response.headers.get('X-Failed-Files') || '';
-      setDenverZipProgress({ current: totalImages, total: totalImages, failed: failedCount, phase: 'Complete' });
-      const blob = await response.blob();
+
+      setDenverZipProgress({ current: imageItems.length, total: imageItems.length, failed, phase: 'Building ZIP' });
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
       const dateStr = new Date().toISOString().split('T')[0];
       saveAs(blob, `doa-images-${dateStr}.zip`);
-      if (failedCount > 0) {
+
+      if (failed > 0) {
         toast({
-          title: "Images Downloaded (with some failures)",
-          description: `ZIP contains ${successCount}/${totalImages} images. ${failedCount} failed: ${failedFiles} — upload to DOA Bulk Image Uploader`,
+          title: "Images Downloaded (with failures)",
+          description: `${completed} of ${imageItems.length} images included — ${failed} failed to download`,
           variant: "destructive"
         });
       } else {
         toast({
           title: "Images Downloaded!",
-          description: `All ${successCount} images included — upload to DOA Bulk Image Uploader`
+          description: `All ${completed} images included — drop the ZIP into the DOA Bulk Image Uploader folder`
         });
       }
     } catch (error) {
@@ -1066,6 +1283,7 @@ export default function CreateListing() {
             lotNumber={lotNumber}
             onLotComplete={handleLaQuickCaptureLot}
             onClose={() => setLaQuickCaptureOpen(false)}
+            masterPrompt={masterPrompt}
           />
         )}
 
@@ -1122,6 +1340,19 @@ export default function CreateListing() {
               />
             </div>
           </div>
+
+          {/* Master Prompt / AI Guardrails */}
+          {selectedProject && (
+            <AIGuardrailPrompt
+              projectId={selectedProject.id}
+              masterPrompt={masterPrompt}
+              onMasterPromptChange={(prompt) => {
+                setMasterPrompt(prompt);
+                setMasterPromptDraft(prompt);
+                setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+              }}
+            />
+          )}
 
           {/* Saved batch rows */}
           {dbBatchRows.length > 0 && (
@@ -1327,8 +1558,20 @@ export default function CreateListing() {
                     />
                   </div>
                 </div>
-              )}
+            )}
             </div>
+            {/* AI Guardrail for Denver */}
+            {selectedProject && (
+              <AIGuardrailPrompt
+                projectId={selectedProject.id}
+                masterPrompt={masterPrompt}
+                onMasterPromptChange={(prompt) => {
+                  setMasterPrompt(prompt);
+                  setMasterPromptDraft(prompt);
+                  setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+                }}
+              />
+            )}
 
             {/* Lot List - inline editable like LA */}
             {denverLots.length > 0 && (
@@ -1357,10 +1600,19 @@ export default function CreateListing() {
                   <div className="border border-border rounded-lg p-4 bg-card space-y-3">
                     {denverLots.filter(l => l.lot_number === selectedDenverLot).map((lot) => (
                       <div key={lot.id} className="space-y-3">
-                        <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between">
                           <h3 className="font-semibold">Lot #{lot.lot_number}</h3>
                           <div className="flex items-center gap-2">
                             {getDenverStatusBadge(lot.status)}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-xs gap-1"
+                              onClick={() => setEditingDenverLot(lot)}
+                            >
+                              <Edit className="h-3 w-3" />
+                              Edit
+                            </Button>
                             {lot.status === 'failed' && (
                               <Button
                                 variant="outline"
@@ -1422,10 +1674,23 @@ export default function CreateListing() {
           </div>
         )}
 
-        {/* eBay Batch Panel - show when eBay is active or when project already has eBay rows */}
-        {(activePlatform === 'ebay' || (selectedProject && ebayRows.length > 0)) && (
+        {/* AI Guardrail for eBay */}
+        {selectedProject && (loadingEbay || ebayRows.length > 0 || activePlatform === 'ebay') && (
+          <AIGuardrailPrompt
+            projectId={selectedProject.id}
+            masterPrompt={masterPrompt}
+            onMasterPromptChange={(prompt) => {
+              setMasterPrompt(prompt);
+              setMasterPromptDraft(prompt);
+              setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+            }}
+          />
+        )}
+
+        {/* eBay Batch Panel - keep visible for saved project rows, not only new generation in this session */}
+        {selectedProject && (loadingEbay || ebayRows.length > 0 || activePlatform === 'ebay') && (
           <EbayBatchPanel
-            projectId={selectedProject?.id || null}
+            projectId={selectedProject.id}
             rows={ebayRows}
             onRowsChange={setEbayRows}
             nextLotNumber={ebayLotNumber}
@@ -1535,6 +1800,76 @@ export default function CreateListing() {
 
               {activePlatform === "ebay" && (
                 <div className="space-y-4">
+                  {/* AI Verify & Refine */}
+                  <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-semibold flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4 text-primary" />
+                        AI Verification & Refinement
+                      </h3>
+                      <Button
+                        variant="gold"
+                        size="sm"
+                        onClick={handleEbayVerify}
+                        disabled={ebayVerifying || ebayRefining || ebayRows.length === 0}
+                        className="gap-2"
+                      >
+                        {ebayVerifying ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="h-4 w-4" />
+                        )}
+                        {ebayVerifying ? 'Verifying...' : 'Verify with AI'}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Cross-check the identification with a second AI model, or tell the AI what to fix
+                    </p>
+
+                    {/* Verification result */}
+                    {ebayVerifyResult && (
+                      <div className={cn(
+                        "rounded-lg border p-3 text-sm",
+                        ebayVerifyResult.verified
+                          ? "border-green-500/50 bg-green-500/10 text-green-700"
+                          : "border-amber-500/50 bg-amber-500/10 text-amber-700"
+                      )}>
+                        <div className="flex items-center gap-2 font-medium mb-1">
+                          {ebayVerifyResult.verified ? (
+                            <><CheckCircle className="h-4 w-4" /> Verified ({ebayVerifyResult.confidence} confidence)</>
+                          ) : (
+                            <><RefreshCw className="h-4 w-4" /> Corrections Applied ({ebayVerifyResult.confidence} confidence)</>
+                          )}
+                        </div>
+                        <p className="text-xs">{ebayVerifyResult.notes}</p>
+                      </div>
+                    )}
+
+                    {/* Refinement prompt */}
+                    <div className="flex gap-2">
+                      <Textarea
+                        placeholder="Tell the AI what to fix... e.g. 'That's a Lionel O-gauge locomotive, not HO scale' or 'Add more detail about the patina'"
+                        value={ebayRefinePrompt}
+                        onChange={(e) => setEbayRefinePrompt(e.target.value)}
+                        className="min-h-[60px] text-sm"
+                        rows={2}
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={handleEbayRefine}
+                        disabled={!ebayRefinePrompt.trim() || ebayRefining || ebayVerifying || ebayRows.length === 0}
+                        className="shrink-0 self-end h-10 w-10"
+                      >
+                        {ebayRefining ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+
                   {/* Item Specifics */}
                   <div className="rounded-xl border border-border bg-card p-6">
                     <EbayItemSpecificsEditor
@@ -1602,6 +1937,15 @@ export default function CreateListing() {
             </div>
           </div>
         )}
+
+        {generatedListing && (
+          <CrossPostPanel
+            listing={generatedListing}
+            images={images.filter(i => i.url).map(i => i.url!)}
+            projectId={selectedProject?.id}
+            preselectedPlatform={crossPostPreselect ?? undefined}
+          />
+        )}
       </div>
 
       {/* LA Lot Editor Modal */}
@@ -1615,6 +1959,7 @@ export default function CreateListing() {
           onDelete={(lotId) => {
             setDbBatchRows(prev => prev.filter(r => r.id !== lotId));
           }}
+          masterPrompt={masterPrompt}
         />
       )}
 
@@ -1629,6 +1974,7 @@ export default function CreateListing() {
           onDelete={(lotId) => {
             setDenverLots(prev => prev.filter(r => r.id !== lotId));
           }}
+          masterPrompt={masterPrompt}
         />
       )}
     </MainLayout>
