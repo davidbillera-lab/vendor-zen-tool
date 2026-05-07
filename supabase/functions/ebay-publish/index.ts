@@ -206,6 +206,7 @@ interface EbayRow {
   upc: string | null;
   mpn: string | null;
   subtitle: string | null;
+  promotion_rate: number | null;
 }
 
 function buildAddFixedPriceItemXml(row: EbayRow): string {
@@ -496,6 +497,112 @@ async function publishRow(
   }
 }
 
+/* ──────────── Marketing API — Promoted Listings ──────────── */
+
+async function getMarketingToken(
+  userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null
+): Promise<string | null> {
+  try {
+    const environment = getEnvironment();
+    const clientId = userCreds?.clientId ?? (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim().replace(/^['"]|['"]$/g, "");
+    const clientSecret = userCreds?.clientSecret ?? (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim().replace(/^['"]|['"]$/g, "");
+    const refreshToken = userCreds?.refreshToken ?? (Deno.env.get("EBAY_REFRESH_TOKEN") ?? "").trim().replace(/^['"]|['"]$/g, "");
+    if (!clientId || !clientSecret || !refreshToken) return null;
+    const tokenUrl = EBAY_ENV_CONFIG[environment].oauthTokenUrl;
+    const res = await fetch(tokenUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        scope: "https://api.ebay.com/oauth/api_scope/sell.marketing",
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function applyPromotedListings(
+  listingsByRate: Map<string, string[]>,
+  marketingToken: string
+): Promise<string> {
+  const environment = getEnvironment();
+  const apiBase = environment === "sandbox"
+    ? "https://api.sandbox.ebay.com"
+    : "https://api.ebay.com";
+
+  const messages: string[] = [];
+
+  for (const [rate, listingIds] of listingsByRate) {
+    const campaignName = `JSG Auto-Promote ${rate}%`;
+    let campaignId: string | null = null;
+
+    // Find existing running campaign with this name
+    const campaignsRes = await fetch(
+      `${apiBase}/sell/marketing/v1/ad_campaign?campaign_type=PROMOTED_LISTINGS_STANDARD&limit=50`,
+      { headers: { Authorization: `Bearer ${marketingToken}` } }
+    );
+    if (campaignsRes.ok) {
+      const cData = await campaignsRes.json();
+      const found = (cData.campaigns ?? []).find((c: any) =>
+        c.campaignName === campaignName &&
+        (c.campaignStatus === "RUNNING" || c.campaignStatus === "SCHEDULED")
+      );
+      if (found) campaignId = found.campaignId;
+    }
+
+    if (!campaignId) {
+      const today = new Date().toISOString().split("T")[0];
+      const createRes = await fetch(`${apiBase}/sell/marketing/v1/ad_campaign`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${marketingToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignName,
+          fundingStrategy: { bidPercentage: rate, fundingModel: "COST_PER_SALE" },
+          marketplaceId: "EBAY_US",
+          startDate: today,
+          campaignType: "PROMOTED_LISTINGS_STANDARD",
+        }),
+      });
+      if (!createRes.ok) {
+        const err = await createRes.text();
+        console.error(`[ebay-publish] Failed to create campaign for ${rate}%:`, err);
+        messages.push(`Promotion at ${rate}% failed: could not create campaign`);
+        continue;
+      }
+      const cData = await createRes.json();
+      campaignId = cData.campaignId;
+      console.log(`[ebay-publish] Created campaign ${campaignId} for ${rate}%`);
+    }
+
+    const bulkRes = await fetch(
+      `${apiBase}/sell/marketing/v1/ad_campaign/${campaignId}/bulk_create_ads_by_listing_id`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${marketingToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ requests: listingIds.map(id => ({ listingId: id })) }),
+      }
+    );
+    if (!bulkRes.ok) {
+      const err = await bulkRes.text();
+      console.error(`[ebay-publish] Failed to add ads at ${rate}%:`, err);
+      messages.push(`Promotion at ${rate}% failed: could not add listings`);
+    } else {
+      console.log(`[ebay-publish] Promoted ${listingIds.length} listing(s) at ${rate}%`);
+      messages.push(`Promoted ${listingIds.length} listing(s) at ${rate}%`);
+    }
+  }
+
+  return messages.join("; ");
+}
+
 /* ──────────────────── Main handler ──────────────────── */
 
 Deno.serve(async (req: Request) => {
@@ -546,8 +653,32 @@ Deno.serve(async (req: Request) => {
     const succeeded = results.filter((r) => r.success).length;
     const failed = results.filter((r) => !r.success).length;
 
+    // Apply Promoted Listings for rows that have a promotion_rate set
+    const toPromote = new Map<string, string[]>();
+    for (const row of rows) {
+      const rate = (row as any).promotion_rate;
+      if (rate > 0) {
+        const result = results.find((r) => r.id === row.id);
+        if (result?.success && result.listingId) {
+          const rateStr = String(rate);
+          if (!toPromote.has(rateStr)) toPromote.set(rateStr, []);
+          toPromote.get(rateStr)!.push(result.listingId);
+        }
+      }
+    }
+    let promotionMessage = "";
+    if (toPromote.size > 0) {
+      const mktToken = await getMarketingToken(userCreds);
+      if (mktToken) {
+        promotionMessage = await applyPromotedListings(toPromote, mktToken);
+      } else {
+        promotionMessage = "Re-authorize eBay OAuth with sell.marketing scope to enable auto-promotion.";
+        console.warn("[ebay-publish] sell.marketing token unavailable — skipping promotion");
+      }
+    }
+
     return new Response(
-      JSON.stringify({ succeeded, failed, results }),
+      JSON.stringify({ succeeded, failed, results, promotionMessage: promotionMessage || undefined }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {
