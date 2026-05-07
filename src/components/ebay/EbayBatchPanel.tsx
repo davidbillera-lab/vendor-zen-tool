@@ -75,14 +75,16 @@ interface EbayBatchPanelProps {
   onRowsChange: (rows: EbayRow[]) => void;
   nextLotNumber: number;
   onLotNumberChange: (num: number) => void;
+  masterPrompt?: string | null;
 }
 
-export function EbayBatchPanel({ 
-  projectId, 
-  rows, 
-  onRowsChange, 
-  nextLotNumber, 
-  onLotNumberChange 
+export function EbayBatchPanel({
+  projectId,
+  rows,
+  onRowsChange,
+  nextLotNumber,
+  onLotNumberChange,
+  masterPrompt,
 }: EbayBatchPanelProps) {
   const [editingRow, setEditingRow] = useState<EbayRow | null>(null);
   const [viewingRow, setViewingRow] = useState<EbayRow | null>(null);
@@ -108,7 +110,12 @@ export function EbayBatchPanel({
   const [correctionPrompt, setCorrectionPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [verifyReport, setVerifyReport] = useState<{ text: string; passed: boolean } | null>(null);
+  const [verifyReport, setVerifyReport] = useState<{ text: string; passed: boolean; correctedListing?: Record<string, any> } | null>(null);
+  const [verifyPanel, setVerifyPanel] = useState<{ row: EbayRow; report: string; passed: boolean; correctedListing: Record<string, any> } | null>(null);
+  const [toolbarPrompt, setToolbarPrompt] = useState("");
+  const [isToolbarRefining, setIsToolbarRefining] = useState(false);
+  const [hasPublished, setHasPublished] = useState(false);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
   // Reset AI state when edit dialog closes
   useEffect(() => {
@@ -224,9 +231,17 @@ export function EbayBatchPanel({
     toast({ title: "All eBay listings cleared" });
   };
 
-  const refineListing = async () => {
-    if (!correctionPrompt.trim() || !editingRow) return;
-    setIsRefining(true);
+  const refineListing = async (targetRow?: EbayRow, prompt?: string) => {
+    const row = targetRow || editingRow;
+    const promptText = prompt ?? correctionPrompt;
+    if (!promptText.trim() || !row) return;
+
+    if (targetRow) {
+      setIsToolbarRefining(true);
+    } else {
+      setIsRefining(true);
+    }
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
@@ -236,14 +251,14 @@ export function EbayBatchPanel({
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({
           currentListing: {
-            title: editingRow.title,
-            description: editingRow.description,
-            price: editingRow.price,
-            condition: editingRow.condition,
-            itemSpecifics: editingRow.item_specifics,
+            title: row.title,
+            description: row.description,
+            price: row.price,
+            condition: row.condition,
+            itemSpecifics: row.item_specifics,
           },
-          correctionPrompt: correctionPrompt.trim(),
-          imageUrls: editingRow.image_urls || [],
+          correctionPrompt: promptText.trim(),
+          imageUrls: row.image_urls || [],
           platform: 'ebay',
           mode: 'refine',
         }),
@@ -253,15 +268,27 @@ export function EbayBatchPanel({
       if (!response.ok) throw new Error(data.error || 'Refinement failed');
 
       const refined = data.listing;
-      setEditingRow(prev => prev ? {
-        ...prev,
-        title: (refined.title || prev.title).substring(0, 80),
-        description: refined.description || prev.description,
-        price: refined.price ?? prev.price,
-        condition: refined.condition || prev.condition,
-        item_specifics: refined.itemSpecifics || prev.item_specifics,
-      } : prev);
-      setCorrectionPrompt("");
+      if (targetRow) {
+        onRowsChange(prev => prev.map(r => r.id === row.id ? {
+          ...r,
+          title: (refined.title || r.title).substring(0, 80),
+          description: refined.description || r.description,
+          price: refined.price ?? r.price,
+          condition: refined.condition || r.condition,
+          item_specifics: refined.itemSpecifics || r.item_specifics,
+        } : r));
+        setToolbarPrompt("");
+      } else {
+        setEditingRow(prev => prev ? {
+          ...prev,
+          title: (refined.title || prev.title).substring(0, 80),
+          description: refined.description || prev.description,
+          price: refined.price ?? prev.price,
+          condition: refined.condition || prev.condition,
+          item_specifics: refined.itemSpecifics || prev.item_specifics,
+        } : prev);
+        setCorrectionPrompt("");
+      }
       toast({ title: "Listing Updated", description: "AI refined your listing" });
     } catch (error) {
       toast({
@@ -270,12 +297,17 @@ export function EbayBatchPanel({
         variant: "destructive",
       });
     } finally {
-      setIsRefining(false);
+      if (targetRow) {
+        setIsToolbarRefining(false);
+      } else {
+        setIsRefining(false);
+      }
     }
   };
 
-  const verifyListing = async () => {
-    if (!editingRow) return;
+  const verifyListing = async (targetRow?: EbayRow) => {
+    const row = targetRow || editingRow;
+    if (!row) return;
     setIsVerifying(true);
     setVerifyReport(null);
     try {
@@ -287,23 +319,29 @@ export function EbayBatchPanel({
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({
           currentListing: {
-            title: editingRow.title,
-            description: editingRow.description,
-            price: editingRow.price,
-            condition: editingRow.condition,
-            itemSpecifics: editingRow.item_specifics,
+            title: row.title,
+            description: row.description,
+            price: row.price,
+            condition: row.condition,
+            itemSpecifics: row.item_specifics,
           },
           correctionPrompt: '',
-          imageUrls: editingRow.image_urls || [],
+          imageUrls: row.image_urls || [],
           platform: 'ebay',
           mode: 'verify',
+          masterPrompt: masterPrompt || undefined,
         }),
       });
 
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Verification failed');
 
-      setVerifyReport({ text: data.report, passed: data.passed });
+      setVerifyPanel({
+        row,
+        report: data.report,
+        passed: data.passed,
+        correctedListing: data.correctedListing || {},
+      });
     } catch (error) {
       toast({
         title: "Verification Failed",
@@ -313,6 +351,49 @@ export function EbayBatchPanel({
     } finally {
       setIsVerifying(false);
     }
+  };
+
+  const handleToolbarVerify = () => {
+    const target = activeRows[0];
+    if (!target) {
+      toast({ title: "No row selected", description: "Select a row to verify", variant: "destructive" });
+      return;
+    }
+    verifyListing(target);
+  };
+
+  const handleToolbarRefine = () => {
+    const target = activeRows[0];
+    if (!target) {
+      toast({ title: "No row selected", description: "Select a row to edit", variant: "destructive" });
+      return;
+    }
+    refineListing(target, toolbarPrompt);
+  };
+
+  const handleAcceptVerify = () => {
+    if (!verifyPanel) return;
+    const cl = verifyPanel.correctedListing;
+    onRowsChange(prev => prev.map(r => r.id === verifyPanel.row.id ? {
+      ...r,
+      title: cl.title ? String(cl.title).substring(0, 80) : r.title,
+      description: cl.description || r.description,
+      price: cl.price ?? r.price,
+      condition: cl.condition || r.condition,
+      item_specifics: cl.itemSpecifics || r.item_specifics,
+    } : r));
+    if (editingRow?.id === verifyPanel.row.id) {
+      setEditingRow(prev => prev ? {
+        ...prev,
+        title: cl.title ? String(cl.title).substring(0, 80) : prev.title,
+        description: cl.description || prev.description,
+        price: cl.price ?? prev.price,
+        condition: cl.condition || prev.condition,
+        item_specifics: cl.itemSpecifics || prev.item_specifics,
+      } : prev);
+    }
+    setVerifyPanel(null);
+    toast({ title: "Listing Updated", description: "AI corrections applied" });
   };
 
   const handleSaveEdit = async () => {
@@ -1131,10 +1212,31 @@ export function EbayBatchPanel({
       if (succeeded > 0) {
         const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
         onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
+        setHasPublished(true);
+        setTimeout(() => {
+          onRowsChange(prev => prev.filter(r => r.status !== "published"));
+          setHasPublished(false);
+        }, 3000);
       }
 
       if (failed > 0) {
         const firstError = results.find((r: any) => !r.success)?.error || "Unknown";
+        // Parse missing item specifics from eBay error messages and auto-add as empty fields
+        const newErrors: Record<string, string> = {};
+        for (const result of results.filter((r: any) => !r.success)) {
+          const err = result.error || "";
+          const match = err.match(/item\s+specific[s]?\s+["']?([^"'.]+?)["']?\s+(is\s+missing|required)/i)
+                     || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
+          if (match && result.id) {
+            const missingSpec = match[1].trim();
+            onRowsChange(prev => prev.map(r => r.id === result.id
+              ? { ...r, status: "error", item_specifics: { ...r.item_specifics, [missingSpec]: "" } }
+              : r
+            ));
+          }
+          if (result.id) newErrors[result.id] = err;
+        }
+        setRowErrors(prev => ({ ...prev, ...newErrors }));
         toast({
           title: `${succeeded} pushed, ${failed} failed`,
           description: `First error: ${firstError.substring(0, 120)}`,
@@ -1145,6 +1247,39 @@ export function EbayBatchPanel({
       }
     } catch (e) {
       toast({ title: "Push failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const handleRetrySingleRow = async (row: EbayRow) => {
+    setPublishing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("ebay-publish", {
+        body: { rows: [row] },
+      });
+      if (error) { toast({ title: "Retry failed", description: error.message, variant: "destructive" }); return; }
+      const { succeeded, failed, results } = data;
+      if (succeeded > 0) {
+        onRowsChange(prev => prev.filter(r => r.id !== row.id));
+        setRowErrors(prev => { const next = { ...prev }; delete next[row.id]; return next; });
+        toast({ title: "Pushed!", description: "Listing is now in your Seller Hub drafts." });
+        if (editingRow?.id === row.id) setEditingRow(null);
+      } else {
+        const err = results?.[0]?.error || "Unknown";
+        const match = err.match(/item\s+specific[s]?\s+["']?([^"'.]+?)["']?\s+(is\s+missing|required)/i)
+                   || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
+        if (match) {
+          const missingSpec = match[1].trim();
+          const updated = { ...row, item_specifics: { ...row.item_specifics, [missingSpec]: "" } };
+          onRowsChange(prev => prev.map(r => r.id === row.id ? updated : r));
+          if (editingRow?.id === row.id) setEditingRow(updated);
+        }
+        setRowErrors(prev => ({ ...prev, [row.id]: err }));
+        toast({ title: "Retry failed", description: err.substring(0, 120), variant: "destructive" });
+      }
+    } catch (e) {
+      toast({ title: "Retry failed", description: e instanceof Error ? e.message : "Unknown", variant: "destructive" });
     } finally {
       setPublishing(false);
     }
@@ -1268,6 +1403,40 @@ export function EbayBatchPanel({
             )}
 
             {rows.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={handleToolbarVerify}
+                disabled={isVerifying || activeRows.length === 0}
+                className="gap-2"
+              >
+                {isVerifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+                {isVerifying ? "Verifying…" : "AI Verify"}
+              </Button>
+            )}
+
+            {rows.length > 0 && (
+              <div className="flex items-center gap-1">
+                <Input
+                  placeholder="AI edit selected row…"
+                  value={toolbarPrompt}
+                  onChange={(e) => setToolbarPrompt(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !isToolbarRefining && handleToolbarRefine()}
+                  disabled={isToolbarRefining}
+                  className="h-9 w-52 text-xs"
+                />
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={handleToolbarRefine}
+                  disabled={!toolbarPrompt.trim() || isToolbarRefining || activeRows.length === 0}
+                  className="h-9 w-9 shrink-0"
+                >
+                  {isToolbarRefining ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </Button>
+              </div>
+            )}
+
+            {rows.length > 0 && (
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="exclude-images"
@@ -1301,6 +1470,16 @@ export function EbayBatchPanel({
               >
                 <ExternalLink className="h-4 w-4" />
                 Zapier
+              </Button>
+            )}
+            {hasPublished && (
+              <Button
+                variant="outline"
+                className="gap-2 border-green-500 text-green-600 hover:bg-green-50"
+                onClick={() => { onRowsChange(prev => prev.filter(r => r.status !== "published")); setHasPublished(false); }}
+              >
+                <Check className="h-4 w-4" />
+                Clear Published
               </Button>
             )}
             {rows.length > 0 && (
@@ -1442,6 +1621,7 @@ export function EbayBatchPanel({
                   key={row.id}
                   className={cn(
                     "text-xs flex justify-between items-center py-2 px-3 rounded hover:bg-background/80 transition-colors",
+                    rowErrors[row.id] ? "bg-red-500/10 border border-red-500/30" :
                     selectedIds.has(row.id) ? "bg-primary/10 border border-primary/20" : "bg-background/50"
                   )}
                 >
@@ -1459,6 +1639,9 @@ export function EbayBatchPanel({
                     />
                     <span className="font-mono text-muted-foreground">#{row.lot_number}</span>
                     <span className="truncate font-medium">{row.title}</span>
+                    {rowErrors[row.id] && (
+                      <span className="text-red-400 text-xs shrink-0" title={rowErrors[row.id]}>⚠ Push failed — click Edit to fix</span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-primary font-semibold">${row.price || 0}</span>
@@ -1901,6 +2084,26 @@ export function EbayBatchPanel({
                 </div>
               </div>
 
+              {/* Push error banner with retry */}
+              {editingRow && rowErrors[editingRow.id] && (
+                <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-3 text-sm text-red-400">
+                  <p className="font-medium mb-1">Push failed</p>
+                  <p className="text-xs mb-2 opacity-80">{rowErrors[editingRow.id].substring(0, 200)}</p>
+                  {Object.entries(editingRow.item_specifics || {}).some(([, v]) => v === "") && (
+                    <p className="text-xs mb-2 text-yellow-400">Fill in the highlighted fields below, then retry.</p>
+                  )}
+                  <Button
+                    size="sm"
+                    className="gap-2 bg-red-600 hover:bg-red-700 text-white"
+                    disabled={publishing}
+                    onClick={() => handleRetrySingleRow(editingRow)}
+                  >
+                    {publishing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                    Retry This Listing
+                  </Button>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="outline" onClick={() => setEditingRow(null)}>
                   Cancel
@@ -1912,6 +2115,39 @@ export function EbayBatchPanel({
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* AI Verify Panel — standalone Accept/Reject dialog */}
+      <Dialog open={!!verifyPanel} onOpenChange={(open) => { if (!open) setVerifyPanel(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {verifyPanel?.passed ? (
+                <Check className="h-5 w-5 text-green-400" />
+              ) : (
+                <Eye className="h-5 w-5 text-yellow-400" />
+              )}
+              AI Verification — {verifyPanel?.row.title?.substring(0, 40)}
+            </DialogTitle>
+          </DialogHeader>
+          <div className={cn(
+            "rounded-lg p-3 text-sm border",
+            verifyPanel?.passed
+              ? "bg-green-950/40 border-green-800 text-green-300"
+              : "bg-yellow-950/40 border-yellow-700 text-yellow-300"
+          )}>
+            <p className="leading-snug whitespace-pre-wrap">{verifyPanel?.report}</p>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setVerifyPanel(null)}>
+              Reject
+            </Button>
+            <Button variant="gold" onClick={handleAcceptVerify}>
+              <Check className="h-4 w-4 mr-1" />
+              Accept Changes
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </>

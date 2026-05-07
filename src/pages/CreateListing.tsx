@@ -1232,6 +1232,21 @@ export default function CreateListing() {
           </div>
         )}
 
+        {/* AI Guardrail — shared for Facebook, Mercari, Poshmark, Etsy */}
+        {selectedProject && images.length > 0 && (
+          ['facebook', 'mercari', 'poshmark', 'etsy'].includes(activePlatform || '') || !activePlatform
+        ) && (
+          <AIGuardrailPrompt
+            projectId={selectedProject.id}
+            masterPrompt={masterPrompt}
+            onMasterPromptChange={(prompt) => {
+              setMasterPrompt(prompt);
+              setMasterPromptDraft(prompt);
+              setSelectedProject(prev => prev ? { ...prev, master_prompt: prompt || null } : prev);
+            }}
+          />
+        )}
+
         {/* Platform Buttons */}
         {!selectedProject && (
           <div className="rounded-xl border-2 border-dashed border-amber-500/50 bg-amber-500/10 p-6 text-center">
@@ -1695,6 +1710,7 @@ export default function CreateListing() {
             onRowsChange={setEbayRows}
             nextLotNumber={ebayLotNumber}
             onLotNumberChange={setEbayLotNumber}
+            masterPrompt={masterPrompt}
           />
         )}
 

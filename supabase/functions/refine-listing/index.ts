@@ -12,6 +12,7 @@ interface RefineRequest {
   imageUrls: string[];
   platform?: 'ebay' | 'liveauctioneers' | 'denver';
   mode?: 'refine' | 'verify';
+  masterPrompt?: string;
 }
 
 serve(async (req) => {
@@ -49,7 +50,7 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
-    const { currentListing, correctionPrompt, imageUrls, platform = 'liveauctioneers', mode = 'refine' } = await req.json() as RefineRequest;
+    const { currentListing, correctionPrompt, imageUrls, platform = 'liveauctioneers', mode = 'refine', masterPrompt } = await req.json() as RefineRequest;
 
     console.log(`Mode: ${mode}, Platform: ${platform}`);
 
@@ -65,66 +66,97 @@ serve(async (req) => {
     }
 
     if (mode === 'verify') {
-      console.log('Running listing verification...');
+      console.log('Running listing verification with Claude...');
 
-      const verifySystemPrompt = `You are an expert eBay listing quality auditor.
+      const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
+      if (!ANTHROPIC_API_KEY) {
+        throw new Error('ANTHROPIC_API_KEY is not configured');
+      }
+
+      const masterPromptSection = masterPrompt
+        ? `\nBUSINESS CONTEXT (apply to all evaluations):\n${masterPrompt}\n`
+        : '';
+
+      const verifySystemPrompt = `You are an expert eBay listing quality auditor with deep knowledge of current market prices.${masterPromptSection}
+
 Analyze the listing title, description, price, condition, and item specifics for quality and accuracy.
 
 Check for:
 1. Title clarity and keyword optimization (eBay limit: 80 characters)
 2. Description completeness and accuracy based on images
-3. Price reasonableness (if visible from context)
-4. Condition accuracy vs. what images show
-5. Item specifics completeness
+3. Condition accuracy vs. what images show
+4. Item specifics completeness
 
-Return a JSON object: { "passed": true/false, "report": "your detailed findings" }
-- passed: true if the listing is solid and ready to post, false if issues found
-- report: 2-5 sentences summarizing quality, flagging any problems, and suggesting improvements
+PRICING VERIFICATION (CRITICAL):
+- Research recent eBay SOLD listings (last 90 days) for this exact item or close equivalents.
+- If the listed price is more than 20% below the median sold price, flag as UNDERPRICED.
+- If the listed price is more than 50% above median sold price, flag as OVERPRICED.
+- State the specific median sold comp price you found and your reasoning.
+- A price that would sell within minutes indicates underpricing — treat suspiciously low prices as a red flag.
+
+Return a JSON object with exactly these fields:
+{
+  "passed": true/false,
+  "report": "2-5 sentences summarizing quality, flagging problems, and citing specific sold comp prices found",
+  "correctedListing": { ...the full listing JSON with any corrections applied, or original values if no changes needed }
+}
 
 No markdown fences. Return only the JSON object.`;
 
-      content.push({
+      const anthropicContent: any[] = [];
+      for (const url of imageUrls) {
+        anthropicContent.push({ type: "image", source: { type: "url", url } });
+      }
+      anthropicContent.push({
         type: "text",
         text: `Listing to verify:\n${JSON.stringify(currentListing, null, 2)}\n\nPlease audit this listing and return your assessment as JSON.`
       });
 
-      const verifyResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      const verifyResponse = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'google/gemini-2.5-flash-lite',
-          messages: [
-            { role: 'system', content: verifySystemPrompt },
-            { role: 'user', content }
-          ],
-          max_tokens: 600,
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1500,
+          system: verifySystemPrompt,
+          messages: [{ role: 'user', content: anthropicContent }],
         }),
       });
 
       if (!verifyResponse.ok) {
         const errorText = await verifyResponse.text();
-        console.error('AI gateway error:', verifyResponse.status, errorText);
+        console.error('Anthropic API error:', verifyResponse.status, errorText);
         if (verifyResponse.status === 429) {
           return new Response(
             JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
             { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
         }
-        throw new Error(`AI gateway error: ${verifyResponse.status}`);
+        throw new Error(`Anthropic API error: ${verifyResponse.status}`);
       }
 
       const verifyData = await verifyResponse.json();
-      const verifyAiResponse = verifyData.choices?.[0]?.message?.content ?? '';
+      const verifyAiResponse = verifyData.content?.[0]?.text ?? '';
 
-      let verifyResult = { passed: false, report: verifyAiResponse };
+      let verifyResult: { passed: boolean; report: string; correctedListing?: Record<string, any> } = {
+        passed: false,
+        report: verifyAiResponse,
+        correctedListing: currentListing,
+      };
       try {
         const jsonMatch = verifyAiResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, verifyAiResponse];
-        verifyResult = JSON.parse(jsonMatch[1].trim());
+        const parsed = JSON.parse(jsonMatch[1].trim());
+        verifyResult = {
+          passed: parsed.passed ?? false,
+          report: parsed.report ?? verifyAiResponse,
+          correctedListing: parsed.correctedListing ?? currentListing,
+        };
       } catch {
-        // If JSON parse fails, use the raw text as the report
+        // If JSON parse fails, use the raw text as the report with original listing as correctedListing
       }
 
       return new Response(
