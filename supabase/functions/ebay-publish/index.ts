@@ -356,6 +356,131 @@ async function getCategoryFromTaxonomy(title: string): Promise<{ id: string; nam
   }
 }
 
+/* ──────────── Taxonomy API — required aspects for a category ──────────── */
+
+async function getRequiredAspectsForCategory(categoryId: string): Promise<string[]> {
+  try {
+    const clientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+    const clientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+    if (!clientId || !clientSecret) return [];
+
+    const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      },
+      body: new URLSearchParams({ grant_type: "client_credentials", scope: "https://api.ebay.com/oauth/api_scope" }),
+    });
+    if (!tokenRes.ok) return [];
+    const { access_token } = await tokenRes.json();
+
+    const res = await fetch(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_aspects_for_category?category_id=${categoryId}`,
+      { headers: { Authorization: `Bearer ${access_token}` } }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+
+    return (data.aspects ?? [])
+      .filter((a: any) => a.aspectConstraint?.aspectRequired === true || a.aspectConstraint?.aspectUsage === "REQUIRED")
+      .map((a: any) => String(a.localizedAspectName));
+  } catch {
+    return [];
+  }
+}
+
+/* ──────────── Pre-publish QA agent ──────────── */
+
+async function runPrePublishQA(
+  row: EbayRow,
+  categoryId: string,
+  categoryName: string,
+  requiredAspects: string[]
+): Promise<{ correctedCategoryId?: string; correctedCategoryName?: string; filledSpecifics: Record<string, string>; qaLog: string }> {
+  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!apiKey) {
+    return { filledSpecifics: {}, qaLog: "QA skipped: ANTHROPIC_API_KEY not configured" };
+  }
+
+  const images = (row.image_urls || []).slice(0, 4);
+  const content: any[] = [];
+
+  for (const url of images) {
+    content.push({ type: "image", source: { type: "url", url } });
+  }
+
+  const currentSpecifics = row.item_specifics ?? {};
+  const missingAspects = requiredAspects.filter(a => !currentSpecifics[a]);
+
+  content.push({
+    type: "text",
+    text: `You are a pre-publish QA agent for an eBay seller. Review this listing and return corrections.
+
+Title: ${row.title}
+Description: ${(row.description || "").substring(0, 400)}
+Assigned eBay Category: "${categoryName}" (ID: ${categoryId})
+Current Item Specifics: ${JSON.stringify(currentSpecifics)}
+Required Specifics Missing Values: ${missingAspects.length > 0 ? missingAspects.join(", ") : "none"}
+
+RULES:
+1. CATEGORY: Only set categoryOk=false if you are VERY confident the category is wrong (e.g. a tank model kit in "Women's Makeup" is clearly wrong; a lamp in "Lamps & Shades" is fine). When in doubt, leave it alone (categoryOk=true). If you correct it, describe the item in 4-6 words — the system will resolve the eBay category ID from your description.
+2. ITEM SPECIFICS: For missing required specifics, fill only values you can confidently determine from the title, description, or images. Omit anything uncertain.
+
+Return ONLY valid JSON, no markdown:
+{
+  "categoryOk": true,
+  "itemDescription": null,
+  "filledSpecifics": {},
+  "reasoning": "one sentence summary"
+}`,
+  });
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 350,
+        messages: [{ role: "user", content }],
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn(`[ebay-publish] QA agent API error ${res.status} (non-fatal)`);
+      return { filledSpecifics: {}, qaLog: `QA skipped: API ${res.status}` };
+    }
+
+    const data = await res.json();
+    const text = (data.content?.[0]?.text ?? "").trim();
+    const qa = JSON.parse(text);
+
+    if (qa.categoryOk === false && qa.itemDescription) {
+      // Resolve correct category ID via Taxonomy API using Claude's item description
+      const corrected = await getCategoryFromTaxonomy(qa.itemDescription);
+      return {
+        correctedCategoryId: corrected?.id,
+        correctedCategoryName: corrected?.name,
+        filledSpecifics: qa.filledSpecifics ?? {},
+        qaLog: qa.reasoning ?? "Category overridden by QA agent",
+      };
+    }
+
+    return {
+      filledSpecifics: qa.filledSpecifics ?? {},
+      qaLog: qa.reasoning ?? "QA passed",
+    };
+  } catch (e) {
+    console.warn("[ebay-publish] QA agent error (non-fatal):", e);
+    return { filledSpecifics: {}, qaLog: "QA error — continuing with original data" };
+  }
+}
+
 /* ──────────── Call Trading API ──────────── */
 
 async function publishRow(
@@ -374,7 +499,24 @@ async function publishRow(
       };
     }
 
-    const xml = buildAddFixedPriceItemXml({ ...row, category: categoryId });
+    // ── Pre-publish QA agent: category + item specifics validation ──
+    const categoryName = row.category || categoryId;
+    const requiredAspects = await getRequiredAspectsForCategory(categoryId);
+    const qa = await runPrePublishQA(row, categoryId, categoryName, requiredAspects);
+
+    if (qa.correctedCategoryId && qa.correctedCategoryId !== categoryId) {
+      console.log(`[ebay-publish] LOT-${row.lot_number}: QA OVERRIDE category ${categoryId} (${categoryName}) → ${qa.correctedCategoryId} (${qa.correctedCategoryName}). Reason: ${qa.qaLog}`);
+      categoryId = qa.correctedCategoryId;
+    } else {
+      console.log(`[ebay-publish] LOT-${row.lot_number}: QA OK — ${qa.qaLog}`);
+    }
+
+    // Merge QA-filled specifics (never overwrite existing user values)
+    const qaRow: EbayRow = Object.keys(qa.filledSpecifics).length > 0
+      ? { ...row, item_specifics: { ...(row.item_specifics || {}), ...qa.filledSpecifics } }
+      : row;
+
+    const xml = buildAddFixedPriceItemXml({ ...qaRow, category: categoryId });
 
     const res = await fetch(tradingApiUrl, {
       method: "POST",
