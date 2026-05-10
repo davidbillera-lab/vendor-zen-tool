@@ -119,35 +119,6 @@ function mapConditionId(condition: string | null): number {
   return map[condition || ""] ?? 3000;
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   KEYWORD → CATEGORY MAP
-   First match wins. Applied to every listing to catch AI-hallucinated IDs.
-   When a title matches, that category is used regardless of what the AI chose.
-   Order: specific patterns first (e.g. "ship model kit") before broad ones
-   (e.g. generic "model kit") so narrower categories win.
-─────────────────────────────────────────────────────────────────────────── */
-
-const KEYWORD_CATEGORY_MAP: Array<{ pattern: RegExp; categoryId: string; name: string }> = [
-  // Kitchen knives & cutlery → Kitchen & Steak Knives (leaf under 20637)
-  { pattern: /knife|knives|cleaver|slicer|santoku|boning|paring|cutlery/i,                               categoryId: "177005", name: "Kitchen & Steak Knives" },
-  // Model trains — scale-specific (must come before generic "model kit")
-  { pattern: /ho[ -]?scale|ho[ -]?gauge/i,                                                               categoryId: "262318", name: "HO Scale Model Trains" },
-  { pattern: /\bn[ -]?scale\b.*train|\bn[ -]?gauge\b.*train/i,                                           categoryId: "47006",  name: "N Scale Model Trains" },
-  { pattern: /\bo[ -]?scale\b.*train|\bo[ -]?gauge\b.*train|lionel.*train/i,                             categoryId: "47004",  name: "O Scale Model Trains" },
-  { pattern: /\bg[ -]?scale\b.*train|\bg[ -]?gauge\b.*train/i,                                           categoryId: "47002",  name: "G Scale Model Trains" },
-  // Model kits — specific subcategories before the broad fallback
-  { pattern: /ship.*model.*kit|boat.*model.*kit|submarine.*kit|warship.*kit|destroyer.*kit/i,            categoryId: "37278",  name: "Ship/Boat Model Kits" },
-  { pattern: /car.*model.*kit|truck.*model.*kit|dragster.*kit|stock.*car.*kit/i,                         categoryId: "51023",  name: "Car/Truck Model Kits" },
-  { pattern: /figure.*kit|figurine.*kit|gundam/i,                                                        categoryId: "19063",  name: "Figure Model Kits" },
-  // Broad model kit fallback (military/aircraft) — revell, tamiya, monogram, airfix brand matches
-  { pattern: /model[ -]?kit|scale[ -]?model|plastic[ -]?kit|tank.*kit|aircraft.*kit|tamiya|revell|monogram|airfix/i, categoryId: "31787", name: "Military & Aircraft Model Kits" },
-  // Blankets & throws
-  { pattern: /\bblanket\b|fleece.*throw|throw.*blanket|sherpa.*blanket/i,                                categoryId: "20668",  name: "Blankets & Throws" },
-  // Cameras
-  { pattern: /film.*camera|35mm.*camera|vintage.*camera|slr.*film|rangefinder.*camera/i,                categoryId: "15230",  name: "Vintage Cameras" },
-  { pattern: /camcorder|handycam/i,                                                                      categoryId: "11724",  name: "Camcorders & Video Cameras" },
-];
-
 /* ──────────── Category learning helpers ──────────── */
 
 function extractKeywords(title: string): string {
@@ -401,17 +372,6 @@ async function publishRow(
         success: false,
         error: `Lot ${row.lot_number}: No eBay category ID found. Category field is: "${row.category || "empty"}". Set a numeric eBay category ID in the app before pushing.`,
       };
-    }
-
-    // Apply keyword-based category fix — catches AI-hallucinated IDs, first match wins
-    for (const entry of KEYWORD_CATEGORY_MAP) {
-      if (entry.pattern.test(row.title || "")) {
-        if (categoryId !== entry.categoryId) {
-          console.log(`[ebay-publish] LOT-${row.lot_number}: keyword match "${entry.name}", overriding category ${categoryId} -> ${entry.categoryId}`);
-        }
-        categoryId = entry.categoryId;
-        break;
-      }
     }
 
     const xml = buildAddFixedPriceItemXml({ ...row, category: categoryId });
