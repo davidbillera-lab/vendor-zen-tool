@@ -118,6 +118,7 @@ export function EbayBatchPanel({
   const [showRemovePublishedDialog, setShowRemovePublishedDialog] = useState(false);
   const [publishedCount, setPublishedCount] = useState(0);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [inlineEdit, setInlineEdit] = useState<{ id: string; field: 'title' | 'price'; value: string } | null>(null);
 
   // Reset AI state when edit dialog closes
   useEffect(() => {
@@ -212,6 +213,23 @@ export function EbayBatchPanel({
     onRowsChange(rows.filter(r => r.id !== id));
     setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     toast({ title: "Listing deleted" });
+  };
+
+  const saveInlineEdit = async () => {
+    if (!inlineEdit) return;
+    const row = rows.find(r => r.id === inlineEdit.id);
+    if (!row) return;
+    const updates: Partial<EbayRow> = {};
+    if (inlineEdit.field === 'title') {
+      updates.title = inlineEdit.value.trim().substring(0, 80) || row.title;
+    }
+    if (inlineEdit.field === 'price') {
+      const parsed = parseFloat(inlineEdit.value);
+      updates.price = isNaN(parsed) ? row.price : parsed;
+    }
+    await supabase.from('ebay_batch_rows').update(updates).eq('id', inlineEdit.id);
+    onRowsChange(prev => prev.map(r => r.id === inlineEdit.id ? { ...r, ...updates } : r));
+    setInlineEdit(null);
   };
 
   const handleClearAll = async () => {
@@ -1672,13 +1690,53 @@ export function EbayBatchPanel({
                       }}
                     />
                     <span className="font-mono text-muted-foreground">#{row.lot_number}</span>
-                    <span className="truncate font-medium">{row.title}</span>
+                    {inlineEdit?.id === row.id && inlineEdit.field === 'title' ? (
+                      <input
+                        autoFocus
+                        className="flex-1 min-w-0 bg-background border border-primary rounded px-1 py-0 text-xs font-medium focus:outline-none"
+                        value={inlineEdit.value}
+                        maxLength={80}
+                        onChange={e => setInlineEdit(prev => prev ? { ...prev, value: e.target.value } : prev)}
+                        onBlur={saveInlineEdit}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); saveInlineEdit(); }
+                          if (e.key === 'Escape') setInlineEdit(null);
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="truncate font-medium cursor-text hover:underline decoration-dotted"
+                        title="Click to edit title"
+                        onClick={() => setInlineEdit({ id: row.id, field: 'title', value: row.title || '' })}
+                      >{row.title}</span>
+                    )}
                     {rowErrors[row.id] && (
                       <span className="text-red-400 text-xs shrink-0" title={rowErrors[row.id]}>⚠ Push failed — click Edit to fix</span>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-primary font-semibold">${row.price || 0}</span>
+                    {inlineEdit?.id === row.id && inlineEdit.field === 'price' ? (
+                      <input
+                        autoFocus
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="w-16 bg-background border border-primary rounded px-1 py-0 text-xs font-semibold text-primary focus:outline-none"
+                        value={inlineEdit.value}
+                        onChange={e => setInlineEdit(prev => prev ? { ...prev, value: e.target.value } : prev)}
+                        onBlur={saveInlineEdit}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); saveInlineEdit(); }
+                          if (e.key === 'Escape') setInlineEdit(null);
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="text-primary font-semibold cursor-text hover:underline decoration-dotted"
+                        title="Click to edit price"
+                        onClick={() => setInlineEdit({ id: row.id, field: 'price', value: String(row.price || 0) })}
+                      >${row.price || 0}</span>
+                    )}
                     <span className="text-muted-foreground capitalize">{row.condition || "—"}</span>
                     <Button
                       variant="ghost"
