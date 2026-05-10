@@ -115,6 +115,8 @@ export function EbayBatchPanel({
   const [toolbarPrompt, setToolbarPrompt] = useState("");
   const [isToolbarRefining, setIsToolbarRefining] = useState(false);
   const [hasPublished, setHasPublished] = useState(false);
+  const [showRemovePublishedDialog, setShowRemovePublishedDialog] = useState(false);
+  const [publishedCount, setPublishedCount] = useState(0);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
   // Reset AI state when edit dialog closes
@@ -1213,10 +1215,8 @@ export function EbayBatchPanel({
         const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
         onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
         setHasPublished(true);
-        setTimeout(() => {
-          onRowsChange(prev => prev.filter(r => r.status !== "published"));
-          setHasPublished(false);
-        }, 3000);
+        setPublishedCount(succeeded);
+        setShowRemovePublishedDialog(true);
       }
 
       if (failed > 0) {
@@ -1476,10 +1476,10 @@ export function EbayBatchPanel({
               <Button
                 variant="outline"
                 className="gap-2 border-green-500 text-green-600 hover:bg-green-50"
-                onClick={() => { onRowsChange(prev => prev.filter(r => r.status !== "published")); setHasPublished(false); }}
+                onClick={() => setShowRemovePublishedDialog(true)}
               >
                 <Check className="h-4 w-4" />
-                Clear Published
+                {publishedCount} Published
               </Button>
             )}
             {rows.length > 0 && (
@@ -1489,6 +1489,40 @@ export function EbayBatchPanel({
             )}
           </div>
         </div>
+
+        {/* Post-publish remove dialog */}
+        <Dialog open={showRemovePublishedDialog} onOpenChange={setShowRemovePublishedDialog}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>
+                <Check className="inline h-5 w-5 text-green-500 mr-2" />
+                {publishedCount} listing{publishedCount !== 1 ? "s" : ""} pushed to eBay
+              </DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Remove them from this view? They'll stay in the database and remain visible in your other apps.
+            </p>
+            <div className="flex gap-3 pt-2">
+              <Button
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => {
+                  onRowsChange(prev => prev.filter(r => r.status !== "published"));
+                  setHasPublished(false);
+                  setShowRemovePublishedDialog(false);
+                }}
+              >
+                Remove from View
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setShowRemovePublishedDialog(false)}
+              >
+                Keep in View
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Zapier Webhook Config */}
         {showZapierConfig && (
