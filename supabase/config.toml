@@ -1,4 +1,4 @@
-project_id = "mwspcagajlkanpfdbuqc"
+project_id = "atgrxqfxysvppqoyvjdd"
 
 [functions.generate-listing]
 verify_jwt = false
