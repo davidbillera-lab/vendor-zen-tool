@@ -3,11 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { 
-  Download, 
-  Loader2, 
-  Check, 
-  Store, 
+import {
+  Download,
+  Loader2,
+  Check,
+  Store,
   Trash2,
   Edit2,
   Eye,
@@ -17,6 +17,7 @@ import {
   ImagePlus,
   Send,
   Sparkles,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -119,6 +120,8 @@ export function EbayBatchPanel({
   const [publishedCount, setPublishedCount] = useState(0);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [inlineEdit, setInlineEdit] = useState<{ id: string; field: 'title' | 'price'; value: string } | null>(null);
+  // specFixes[rowId][specKey] = current draft value for an empty item_specific
+  const [specFixes, setSpecFixes] = useState<Record<string, Record<string, string>>>({});
 
   // Reset AI state when edit dialog closes
   useEffect(() => {
@@ -1281,6 +1284,7 @@ export function EbayBatchPanel({
       if (succeeded > 0) {
         onRowsChange(prev => prev.filter(r => r.id !== row.id));
         setRowErrors(prev => { const next = { ...prev }; delete next[row.id]; return next; });
+        setSpecFixes(prev => { const next = { ...prev }; delete next[row.id]; return next; });
         toast({ title: "Pushed!", description: "Listing is now in your Seller Hub drafts." });
         if (editingRow?.id === row.id) setEditingRow(null);
       } else {
@@ -1672,11 +1676,11 @@ export function EbayBatchPanel({
                 <div
                   key={row.id}
                   className={cn(
-                    "text-xs flex justify-between items-center py-2 px-3 rounded hover:bg-background/80 transition-colors",
+                    "text-xs py-2 px-3 rounded hover:bg-background/80 transition-colors",
                     rowErrors[row.id] ? "bg-red-500/10 border border-red-500/30" :
                     selectedIds.has(row.id) ? "bg-primary/10 border border-primary/20" : "bg-background/50"
                   )}
-                >
+                ><div className="flex justify-between items-center">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <Checkbox
                       checked={selectedIds.has(row.id)}
@@ -1763,6 +1767,49 @@ export function EbayBatchPanel({
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
+                </div>
+                {/* Inline fix for missing item specifics after a failed push */}
+                {rowErrors[row.id] && (() => {
+                  const emptySpecs = Object.entries(row.item_specifics || {}).filter(([, v]) => v === '');
+                  if (emptySpecs.length === 0) return null;
+                  return (
+                    <div className="mt-1 flex flex-wrap items-center gap-2 pt-1 border-t border-red-500/20">
+                      {emptySpecs.map(([key]) => (
+                        <label key={key} className="flex items-center gap-1">
+                          <span className="text-muted-foreground">{key}:</span>
+                          <input
+                            className="w-24 bg-background border border-border rounded px-1 py-0 text-xs focus:outline-none focus:border-primary"
+                            placeholder="required"
+                            value={specFixes[row.id]?.[key] ?? ''}
+                            onChange={e => setSpecFixes(prev => ({
+                              ...prev,
+                              [row.id]: { ...(prev[row.id] || {}), [key]: e.target.value },
+                            }))}
+                          />
+                        </label>
+                      ))}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-xs gap-1 border-red-500/50 text-red-400 hover:text-red-300"
+                        disabled={publishing}
+                        onClick={() => {
+                          const fixes = specFixes[row.id] || {};
+                          const updatedRow = {
+                            ...row,
+                            item_specifics: { ...row.item_specifics, ...fixes },
+                          };
+                          onRowsChange(prev => prev.map(r => r.id === row.id ? updatedRow : r));
+                          setSpecFixes(prev => { const n = { ...prev }; delete n[row.id]; return n; });
+                          handleRetrySingleRow(updatedRow);
+                        }}
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Fix & Retry
+                      </Button>
+                    </div>
+                  );
+                })()}
                 </div>
               ))}
             </div>
