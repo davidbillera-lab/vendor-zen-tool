@@ -395,8 +395,11 @@ async function setTinyMceDescription(page, lotNumber, description) {
         const body = iframe.contentDocument.body;
         if (body) {
           body.innerHTML = desc.replace(/\n/g, '<br>');
-          strategies.push('iframe.body.innerHTML');
-          return { ok: true, strategy: 'iframe.body.innerHTML' };
+          if (window.tinymce) { try { window.tinymce.triggerSave(); } catch(e) {} }
+          const ta2 = document.getElementById('EditorDescription') || document.querySelector('textarea[id*="EditorDescription" i]');
+          if (ta2) { ta2.value = body.innerHTML; ta2.dispatchEvent(new Event('input', { bubbles: true })); ta2.dispatchEvent(new Event('change', { bubbles: true })); }
+          strategies.push('iframe.body.innerHTML+sync');
+          return { ok: true, strategy: 'iframe.body.innerHTML+sync' };
         }
       }
     } catch (e) {

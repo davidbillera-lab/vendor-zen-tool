@@ -115,9 +115,9 @@ serve(async (req) => {
       );
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+    if (!ANTHROPIC_API_KEY) {
+      throw new Error("ANTHROPIC_API_KEY is not configured");
     }
 
     // Build the user prompt with all row data
@@ -139,8 +139,8 @@ serve(async (req) => {
       if (imageCount >= 8) break;
       if (row.image_urls && row.image_urls.length > 0) {
         content.push({
-          type: "image_url",
-          image_url: { url: row.image_urls[0] },
+          type: "image",
+          source: { type: "url", url: row.image_urls[0] },
         });
         imageCount++;
       }
@@ -149,46 +149,36 @@ serve(async (req) => {
 
     console.log(`[enrich-ebay-batch] Enriching ${rows.length} rows for user ${user.id}`);
 
-    const response = await fetch(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content },
-          ],
-          max_tokens: 4000,
-          temperature: 0.2,
-        }),
-      }
-    );
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4000,
+        temperature: 0.2,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: "user", content }],
+      }),
+    });
 
     if (!response.ok) {
       const err = await response.text();
-      console.error("AI gateway error:", response.status, err);
+      console.error("Anthropic API error:", response.status, err);
       if (response.status === 429) {
         return new Response(
           JSON.stringify({ error: "Rate limit hit. Please wait a moment and try again." }),
           { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI credits exhausted. Please add credits." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      throw new Error(`AI gateway error: ${response.status}`);
+      throw new Error(`Anthropic API error: ${response.status}`);
     }
 
     const data = await response.json();
-    const aiResponse = data.choices?.[0]?.message?.content;
+    const aiResponse = data.content?.[0]?.text ?? "";
 
     // Parse JSON
     let enrichedRows: any[];

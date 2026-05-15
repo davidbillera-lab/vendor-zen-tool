@@ -54,24 +54,19 @@ serve(async (req) => {
 
     console.log(`Mode: ${mode}, Platform: ${platform}`);
 
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
+    const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
+    if (!ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY is not configured');
     }
 
-    // Build content with images for reference
-    const content: any[] = [];
+    // Build Anthropic content with images for reference
+    const imageContent: any[] = [];
     for (const url of imageUrls) {
-      content.push({ type: "image_url", image_url: { url } });
+      imageContent.push({ type: "image", source: { type: "url", url } });
     }
 
     if (mode === 'verify') {
       console.log('Running listing verification with Claude...');
-
-      const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
-      if (!ANTHROPIC_API_KEY) {
-        throw new Error('ANTHROPIC_API_KEY is not configured');
-      }
 
       const masterPromptSection = masterPrompt
         ? `\nBUSINESS CONTEXT (apply to all evaluations):\n${masterPrompt}\n`
@@ -104,9 +99,7 @@ Return a JSON object with exactly these fields:
 No markdown fences. Return only the JSON object.`;
 
       const anthropicContent: any[] = [];
-      for (const url of imageUrls) {
-        anthropicContent.push({ type: "image", source: { type: "url", url } });
-      }
+      anthropicContent.push(...imageContent);
       anthropicContent.push({
         type: "text",
         text: `Listing to verify:\n${JSON.stringify(currentListing, null, 2)}\n\nPlease audit this listing and return your assessment as JSON.`
@@ -190,32 +183,32 @@ ${platformRules}
 
 ALWAYS return valid JSON with the same structure as the input, no markdown, no explanation.`;
 
+    const content = [...imageContent];
     content.push({
       type: "text",
       text: `Current listing JSON:\n${JSON.stringify(currentListing, null, 2)}\n\nUser's correction request: "${correctionPrompt}"\n\nPlease update the listing based on the user's request and return the complete updated JSON. Remember to keep fields the user didn't mention unchanged.`
     });
 
-    console.log('Calling Lovable AI for refinement...');
+    console.log('Calling Anthropic API for refinement...');
 
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-lite',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content }
-        ],
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1500,
+        system: systemPrompt,
+        messages: [{ role: 'user', content }],
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('AI gateway error:', response.status, errorText);
+      console.error('Anthropic API error:', response.status, errorText);
 
       if (response.status === 429) {
         return new Response(
@@ -223,18 +216,11 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: 'AI credits exhausted. Please add credits to continue.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      throw new Error(`AI gateway error: ${response.status}`);
+      throw new Error(`Anthropic API error: ${response.status}`);
     }
 
     const data = await response.json();
-    const aiResponse = data.choices?.[0]?.message?.content;
+    const aiResponse = data.content?.[0]?.text ?? '';
 
     console.log('AI Response received for refinement');
 
