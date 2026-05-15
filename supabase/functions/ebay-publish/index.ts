@@ -178,6 +178,7 @@ interface EbayRow {
   mpn: string | null;
   subtitle: string | null;
   promotion_rate: number | null;
+  custom_sku: string | null;
 }
 
 function buildAddFixedPriceItemXml(row: EbayRow): string {
@@ -287,6 +288,7 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
   <WarningLevel>High</WarningLevel>
   <Item>
     <Title>${title}</Title>
+    <SKU>${(row.custom_sku?.trim() || row.lot_number?.toString() || "").replace(/&/g, "&amp;")}</SKU>
     ${subtitleXml}
     <Description><![CDATA[${description}]]></Description>
     <PrimaryCategory><CategoryID>${categoryId}</CategoryID></PrimaryCategory>
@@ -325,10 +327,10 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
 
 /* ──────────── Taxonomy API — fallback category lookup ──────────── */
 
-async function getCategoryFromTaxonomy(title: string): Promise<{ id: string; name: string } | null> {
+async function getCategoryFromTaxonomy(title: string, userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null): Promise<{ id: string; name: string } | null> {
   try {
-    const clientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
-    const clientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+    const clientId = userCreds?.clientId ?? (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+    const clientSecret = userCreds?.clientSecret ?? (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
     if (!clientId || !clientSecret) return null;
 
     const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
@@ -358,10 +360,10 @@ async function getCategoryFromTaxonomy(title: string): Promise<{ id: string; nam
 
 /* ──────────── Taxonomy API — required aspects for a category ──────────── */
 
-async function getRequiredAspectsForCategory(categoryId: string): Promise<string[]> {
+async function getRequiredAspectsForCategory(categoryId: string, userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null): Promise<string[]> {
   try {
-    const clientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
-    const clientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+    const clientId = userCreds?.clientId ?? (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+    const clientSecret = userCreds?.clientSecret ?? (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
     if (!clientId || !clientSecret) return [];
 
     const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
@@ -396,7 +398,8 @@ async function runPrePublishQA(
   row: EbayRow,
   categoryId: string,
   categoryName: string,
-  requiredAspects: string[]
+  requiredAspects: string[],
+  userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null
 ): Promise<{ correctedCategoryId?: string; correctedCategoryName?: string; filledSpecifics: Record<string, string>; qaLog: string }> {
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) {
@@ -462,7 +465,7 @@ Return ONLY valid JSON, no markdown:
 
     if (qa.categoryOk === false && qa.itemDescription) {
       // Resolve correct category ID via Taxonomy API using Claude's item description
-      const corrected = await getCategoryFromTaxonomy(qa.itemDescription);
+      const corrected = await getCategoryFromTaxonomy(qa.itemDescription, userCreds);
       return {
         correctedCategoryId: corrected?.id,
         correctedCategoryName: corrected?.name,
@@ -487,7 +490,8 @@ async function publishRow(
   row: EbayRow,
   accessToken: string,
   tradingApiUrl: string,
-  environment: EbayEnvironment
+  environment: EbayEnvironment,
+  userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null
 ): Promise<{ success: boolean; error?: string; details?: string[]; listingId?: string; usedCategoryId?: string; categoryName?: string }> {
   try {
     // Guard: reject rows with no valid eBay category ID before hitting the API
@@ -501,8 +505,8 @@ async function publishRow(
 
     // ── Pre-publish QA agent: category + item specifics validation ──
     const categoryName = row.category || categoryId;
-    const requiredAspects = await getRequiredAspectsForCategory(categoryId);
-    const qa = await runPrePublishQA(row, categoryId, categoryName, requiredAspects);
+    const requiredAspects = await getRequiredAspectsForCategory(categoryId, userCreds);
+    const qa = await runPrePublishQA(row, categoryId, categoryName, requiredAspects, userCreds);
 
     if (qa.correctedCategoryId && qa.correctedCategoryId !== categoryId) {
       console.log(`[ebay-publish] LOT-${row.lot_number}: QA OVERRIDE category ${categoryId} (${categoryName}) → ${qa.correctedCategoryId} (${qa.correctedCategoryName}). Reason: ${qa.qaLog}`);
@@ -563,7 +567,7 @@ async function publishRow(
     const hasCategoryError = realErrors.some(b => categoryErrorCodes.has(extract(b, "ErrorCode")));
     if (hasCategoryError) {
       console.log(`[ebay-publish] LOT-${row.lot_number}: category error detected, querying Taxonomy API for "${row.title}"`);
-      const corrected = await getCategoryFromTaxonomy(row.title || "");
+      const corrected = await getCategoryFromTaxonomy(row.title || "", userCreds);
       if (corrected && corrected.id !== categoryId) {
         console.log(`[ebay-publish] LOT-${row.lot_number}: retrying with Taxonomy category ${corrected.id} (${corrected.name})`);
         const retryXml = buildAddFixedPriceItemXml({ ...row, category: corrected.id });
@@ -744,7 +748,7 @@ Deno.serve(async (req: Request) => {
     // Process each row
     const results = [];
     for (const row of rows) {
-      const result = await publishRow(row as unknown as EbayRow, accessToken, tradingApiUrl, environment);
+      const result = await publishRow(row as unknown as EbayRow, accessToken, tradingApiUrl, environment, userCreds);
       results.push({ id: row.id, lot_number: row.lot_number, ...result });
       // Save category learning for every successful push
       if (result.success && result.usedCategoryId) {

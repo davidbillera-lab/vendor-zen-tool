@@ -68,6 +68,7 @@ interface EbayRow {
   upc: string | null;
   brand: string | null;
   mpn: string | null;
+  custom_sku: string | null;
 }
 
 interface EbayBatchPanelProps {
@@ -454,6 +455,7 @@ export function EbayBatchPanel({
         upc: editingRow.upc,
         brand: editingRow.brand,
         mpn: editingRow.mpn,
+        custom_sku: editingRow.custom_sku,
       })
       .eq('id', editingRow.id);
     
@@ -1324,17 +1326,25 @@ export function EbayBatchPanel({
         "rounded-xl border p-4 space-y-4 transition-colors",
         rows.length > 0 ? "border-blue-500/50 bg-blue-500/5" : "border-border bg-card"
       )}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Store className="h-5 w-5 text-blue-500" />
-            <div>
-              <span className="font-semibold text-foreground">eBay Batch</span>
-              <span className="text-muted-foreground ml-2">
-                {rows.length} listings • Next: #{nextLotNumber}
-              </span>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Store className="h-5 w-5 text-blue-500" />
+              <div>
+                <span className="font-semibold text-foreground">eBay Batch</span>
+                <span className="text-muted-foreground ml-2">
+                  {rows.length} listings • Next: #{nextLotNumber}
+                </span>
+              </div>
             </div>
+            {rows.length > 0 && (
+              <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
+                {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push to eBay (${activeRows.length})` : "Push to eBay"}
+              </Button>
+            )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Input
               type="number"
               value={nextLotNumber}
@@ -1479,14 +1489,8 @@ export function EbayBatchPanel({
               </Button>
             )}
             {rows.length > 0 && (
-              <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
-                {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push to eBay (${activeRows.length})` : "Push to eBay"}
-              </Button>
-            )}
-            {rows.length > 0 && (
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setShowZapierConfig(!showZapierConfig)}
                 className="gap-2"
               >
@@ -1998,10 +2002,10 @@ export function EbayBatchPanel({
               </div>
 
               {/* Product Identifiers */}
-              <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
+              <div className="grid grid-cols-4 gap-4 pt-3 border-t border-border">
                 <div>
                   <Label>Brand</Label>
-                  <Input 
+                  <Input
                     value={editingRow.brand || ""}
                     onChange={(e) => setEditingRow({ ...editingRow, brand: e.target.value })}
                     placeholder="e.g. Nike, Handmade"
@@ -2009,7 +2013,7 @@ export function EbayBatchPanel({
                 </div>
                 <div>
                   <Label>UPC</Label>
-                  <Input 
+                  <Input
                     value={editingRow.upc || ""}
                     onChange={(e) => setEditingRow({ ...editingRow, upc: e.target.value })}
                     placeholder="12-digit barcode"
@@ -2017,10 +2021,18 @@ export function EbayBatchPanel({
                 </div>
                 <div>
                   <Label>MPN</Label>
-                  <Input 
+                  <Input
                     value={editingRow.mpn || ""}
                     onChange={(e) => setEditingRow({ ...editingRow, mpn: e.target.value })}
                     placeholder="Manufacturer Part #"
+                  />
+                </div>
+                <div>
+                  <Label>Custom SKU</Label>
+                  <Input
+                    value={editingRow.custom_sku || ""}
+                    onChange={(e) => setEditingRow({ ...editingRow, custom_sku: e.target.value })}
+                    placeholder="Your internal SKU"
                   />
                 </div>
               </div>
