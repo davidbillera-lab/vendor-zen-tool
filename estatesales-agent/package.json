@@ -1,0 +1,19 @@
+{
+  "name": "estatesales-agent",
+  "version": "1.0.0",
+  "description": "Playwright agent that scrapes lot data from DOA and uploads to EstateSales.net",
+  "type": "module",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node runAgent.js",
+    "dev":   "node agent.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js":            "^2.49.0",
+    "dotenv":                           "^16.3.0",
+    "playwright":                       "npm:rebrowser-playwright@^1.42.0",
+    "playwright-core":                  "npm:rebrowser-playwright-core@^1.42.0",
+    "playwright-extra":                 "^4.3.6",
+    "puppeteer-extra-plugin-stealth":   "^2.11.2"
+  }
+}

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { GripVertical, X, RotateCw, Loader2, ZoomIn } from "lucide-react";
+import { GripVertical, X, RotateCw, Loader2, ZoomIn, Pencil } from "lucide-react";
+import { PhotoStudio } from "./PhotoStudio";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ImageEnhancer } from "./ImageEnhancer";
@@ -18,20 +19,23 @@ interface DraggableImageGridProps {
   onEnhance?: (index: number, newUrl: string) => void;
   showEnhance?: boolean;
   size?: 'sm' | 'md' | 'lg';
+  onEditPhoto?: (index: number, newUrls: string[]) => void;
 }
  
- export function DraggableImageGrid({ 
-   images, 
-   onReorder, 
+ export function DraggableImageGrid({
+   images,
+   onReorder,
    onRemove,
    onEnhance,
    showEnhance = true,
-   size = 'md'
+   size = 'md',
+   onEditPhoto,
 }: DraggableImageGridProps) {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [rotatingIndex, setRotatingIndex] = useState<number | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
+  const [studioIndex, setStudioIndex] = useState<number | null>(null);
 
   const sizeClasses = {
     sm: 'w-16 h-16',
@@ -180,6 +184,18 @@ interface DraggableImageGridProps {
 
             {/* Quick action buttons (visible on hover) */}
             <div className="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              {onEditPhoto && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setStudioIndex(i);
+                  }}
+                  className="h-6 w-6 bg-primary rounded-full flex items-center justify-center hover:bg-primary/80 shadow-md"
+                  title="Edit in Photo Studio"
+                >
+                  <Pencil className="h-3 w-3 text-white" />
+                </button>
+              )}
               {onRemove && (
                 <button
                   onClick={(e) => {
@@ -196,6 +212,18 @@ interface DraggableImageGridProps {
           </div>
         ))}
       </div>
+
+      {studioIndex !== null && onEditPhoto && (
+        <PhotoStudio
+          images={images}
+          initialIndex={studioIndex}
+          onSave={(updated) => {
+            onEditPhoto(studioIndex, updated);
+            setStudioIndex(null);
+          }}
+          onCancel={() => setStudioIndex(null)}
+        />
+      )}
 
       {/* Lightbox Dialog for editing */}
       <Dialog open={selectedImageIndex !== null} onOpenChange={(open) => !open && setSelectedImageIndex(null)}>

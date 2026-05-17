@@ -9,6 +9,7 @@ import { EbayOAuthManager } from "@/components/ebay/EbayOAuthManager";
 import { MercariCredentialsCard } from "@/components/credentials/MercariCredentialsCard";
 import { PoshmarkCredentialsCard } from "@/components/credentials/PoshmarkCredentialsCard";
 import { DoaCredentialsCard } from "@/components/credentials/DoaCredentialsCard";
+import { EstateSalesCredentialsCard } from "@/components/credentials/EstateSalesCredentialsCard";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -193,6 +194,16 @@ export default function Settings() {
           </p>
           <Separator className="my-6" />
           <DoaCredentialsCard />
+        </div>
+
+        {/* EstateSales.net Connection */}
+        <div className="rounded-xl border border-border bg-card p-6">
+          <h2 className="font-serif text-xl font-semibold text-foreground">EstateSales.net Connection</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Connect your EstateSales.net account. The upload agent posts lots on your behalf.
+          </p>
+          <Separator className="my-6" />
+          <EstateSalesCredentialsCard />
         </div>
 
       </div>

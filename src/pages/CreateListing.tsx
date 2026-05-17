@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,8 @@ import {
   Send,
   ShieldCheck,
   ShoppingBag,
-  Tag
+  Tag,
+  Pencil
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -44,6 +45,7 @@ import { ProjectManager, type Project } from "@/components/BatchManager";
 import { LALotEditor } from "@/components/LALotEditor";
 import { DenverLotEditor } from "@/components/DenverLotEditor";
 import { supabase } from "@/integrations/supabase/client";
+import { PhotoStudio } from "@/components/PhotoStudio";
 
 import { saveAs } from "file-saver";
 import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
@@ -117,6 +119,8 @@ export default function CreateListing() {
   const [savingLot, setSavingLot] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [initialProjectLoaded, setInitialProjectLoaded] = useState(false);
+  const [photoStudioOpen, setPhotoStudioOpen] = useState(false);
+  const [photoStudioIndex, setPhotoStudioIndex] = useState(0);
   
   // Load project from URL parameter
   useEffect(() => {
@@ -501,6 +505,28 @@ export default function CreateListing() {
     setAdditionalContext("");
   };
 
+  function dataURLtoFile(dataUrl: string, filename: string): File {
+    const [header, data] = dataUrl.split(',');
+    const mime = header.match(/:(.*?);/)![1];
+    const binary = atob(data);
+    const array = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+    return new File([array], filename, { type: mime });
+  }
+
+  function handlePhotoStudioSave(updatedUrls: string[]) {
+    setImages(prev => {
+      prev.forEach(img => { if (img.preview.startsWith('blob:')) URL.revokeObjectURL(img.preview); });
+      return updatedUrls.map((url, i) => {
+        const original = prev[i];
+        const filename = original?.file?.name ?? `photo-${i + 1}.jpg`;
+        const newFile = dataURLtoFile(url, filename);
+        return { file: newFile, preview: url, url: original?.url };
+      });
+    });
+    setPhotoStudioOpen(false);
+  }
+
   const handlePlatformClick = async (platform: Platform) => {
     if (!selectedProject?.id) {
       toast({
@@ -738,7 +764,6 @@ export default function CreateListing() {
   const handleEbayVerify = async () => {
     if (!generatedListing || !activePlatform) return;
     const lastEbayRow = ebayRows[ebayRows.length - 1];
-    if (!lastEbayRow) return;
 
     setEbayVerifying(true);
     setEbayVerifyResult(null);
@@ -749,15 +774,15 @@ export default function CreateListing() {
       const { data, error } = await supabase.functions.invoke('refine-listing', {
         body: {
           currentListing: {
-            title: lastEbayRow.title,
-            description: lastEbayRow.description,
-            price: lastEbayRow.price,
-            categoryId: lastEbayRow.category,
-            condition: lastEbayRow.condition,
-            itemSpecifics: lastEbayRow.item_specifics,
+            title: generatedListing.title,
+            description: generatedListing.description,
+            price: generatedListing.price,
+            categoryId: lastEbayRow?.category,
+            condition: generatedListing.condition,
+            itemSpecifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics,
           },
           correctionPrompt: ebayRefinePrompt || '',
-          imageUrls: lastEbayRow.image_urls || [],
+          imageUrls: lastEbayRow?.image_urls || images.map(i => i.url).filter(Boolean),
           platform: 'ebay',
           mode: 'verify',
           masterPrompt: masterPrompt || undefined
@@ -773,7 +798,7 @@ export default function CreateListing() {
         notes: data.notes
       });
 
-      // Update the DB row with verified/corrected data
+      // Update generatedListing with verified/corrected data
       const updates: any = {};
       if (refined.title) updates.title = refined.title.substring(0, 80);
       if (refined.description) updates.description = refined.description;
@@ -783,22 +808,24 @@ export default function CreateListing() {
       if (refined.itemSpecifics) updates.item_specifics = refined.itemSpecifics;
 
       if (Object.keys(updates).length > 0) {
-        const { error: updateError } = await supabase
-          .from('ebay_batch_rows')
-          .update(updates)
-          .eq('id', lastEbayRow.id);
+        setGeneratedListing(prev => prev ? {
+          ...prev,
+          title: updates.title || prev.title,
+          description: updates.description || prev.description,
+          price: updates.price || prev.price,
+          condition: updates.condition || prev.condition,
+          itemSpecifics: updates.item_specifics || prev.itemSpecifics,
+        } : prev);
 
-        if (!updateError) {
-          setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
-          // Update generatedListing for preview
-          setGeneratedListing(prev => prev ? {
-            ...prev,
-            title: updates.title || prev.title,
-            description: updates.description || prev.description,
-            price: updates.price || prev.price,
-            condition: updates.condition || prev.condition,
-            itemSpecifics: updates.item_specifics || prev.itemSpecifics,
-          } : prev);
+        // Sync to DB row if one exists
+        if (lastEbayRow) {
+          const { error: updateError } = await supabase
+            .from('ebay_batch_rows')
+            .update(updates)
+            .eq('id', lastEbayRow.id);
+          if (!updateError) {
+            setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
+          }
         }
       }
 
@@ -819,24 +846,23 @@ export default function CreateListing() {
 
   // eBay: Refine listing with prompt
   const handleEbayRefine = async () => {
-    if (!ebayRefinePrompt.trim()) return;
+    if (!ebayRefinePrompt.trim() || !generatedListing) return;
     const lastEbayRow = ebayRows[ebayRows.length - 1];
-    if (!lastEbayRow) return;
 
     setEbayRefining(true);
     try {
       const { data, error } = await supabase.functions.invoke('refine-listing', {
         body: {
           currentListing: {
-            title: lastEbayRow.title,
-            description: lastEbayRow.description,
-            price: lastEbayRow.price,
-            categoryId: lastEbayRow.category,
-            condition: lastEbayRow.condition,
-            itemSpecifics: lastEbayRow.item_specifics,
+            title: generatedListing.title,
+            description: generatedListing.description,
+            price: generatedListing.price,
+            categoryId: lastEbayRow?.category,
+            condition: generatedListing.condition,
+            itemSpecifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics,
           },
           correctionPrompt: ebayRefinePrompt,
-          imageUrls: lastEbayRow.image_urls || [],
+          imageUrls: lastEbayRow?.image_urls || images.map(i => i.url).filter(Boolean),
           platform: 'ebay',
           mode: 'refine',
           masterPrompt: masterPrompt || undefined
@@ -855,21 +881,24 @@ export default function CreateListing() {
       if (refined.itemSpecifics) updates.item_specifics = refined.itemSpecifics;
 
       if (Object.keys(updates).length > 0) {
-        const { error: updateError } = await supabase
-          .from('ebay_batch_rows')
-          .update(updates)
-          .eq('id', lastEbayRow.id);
+        setGeneratedListing(prev => prev ? {
+          ...prev,
+          title: updates.title || prev.title,
+          description: updates.description || prev.description,
+          price: updates.price ?? prev.price,
+          condition: updates.condition || prev.condition,
+          itemSpecifics: updates.item_specifics || prev.itemSpecifics,
+        } : prev);
 
-        if (!updateError) {
-          setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
-          setGeneratedListing(prev => prev ? {
-            ...prev,
-            title: updates.title || prev.title,
-            description: updates.description || prev.description,
-            price: updates.price ?? prev.price,
-            condition: updates.condition || prev.condition,
-            itemSpecifics: updates.item_specifics || prev.itemSpecifics,
-          } : prev);
+        // Sync to DB row if one exists
+        if (lastEbayRow) {
+          const { error: updateError } = await supabase
+            .from('ebay_batch_rows')
+            .update(updates)
+            .eq('id', lastEbayRow.id);
+          if (!updateError) {
+            setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
+          }
         }
       }
 
@@ -946,6 +975,23 @@ export default function CreateListing() {
     setCsvValidated(false);
     setCsvValidationIssues([]);
   }, [dbBatchRows]);
+
+  // Debounced eBay DB sync — keeps the ebay_batch_rows row in sync as user edits inline
+  const ebayDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!generatedListing) return;
+    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    if (!lastEbayRow) return;
+    if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current);
+    ebayDebounceRef.current = setTimeout(async () => {
+      await supabase.from('ebay_batch_rows').update({
+        title: generatedListing.title,
+        description: generatedListing.description,
+        price: generatedListing.price,
+      }).eq('id', lastEbayRow.id);
+    }, 600);
+    return () => { if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current); };
+  }, [generatedListing, ebayRows]);
 
   const [downloadingImages, setDownloadingImages] = useState(false);
   const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
@@ -1192,14 +1238,31 @@ export default function CreateListing() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">{images.length} photo(s)</span>
-                <Button variant="ghost" size="sm" onClick={clearAll}>
-                  Clear All
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { setPhotoStudioIndex(0); setPhotoStudioOpen(true); }}
+                  >
+                    <Pencil className="h-3 w-3 mr-1" />
+                    Prep Photos
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={clearAll}>
+                    Clear All
+                  </Button>
+                </div>
               </div>
               <div className="grid gap-2 grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
                 {images.map((img, index) => (
                   <div key={index} className="relative aspect-square rounded-lg overflow-hidden border border-border group">
                     <img src={img.preview} alt="" className="w-full h-full object-cover" />
+                    <button
+                      onClick={() => { setPhotoStudioIndex(index); setPhotoStudioOpen(true); }}
+                      className="absolute top-1 left-1 p-1 bg-primary/80 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Edit in Photo Studio"
+                    >
+                      <Pencil className="h-3 w-3 text-white" />
+                    </button>
                     <button
                       onClick={() => removeImage(index)}
                       className="absolute top-1 right-1 p-1 bg-background/80 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
@@ -1737,7 +1800,11 @@ export default function CreateListing() {
                       </Button>
                     )}
                   </div>
-                  <p className="font-medium">{generatedListing.title}</p>
+                  <Input
+                    value={generatedListing.title}
+                    onChange={e => setGeneratedListing(prev => prev ? { ...prev, title: e.target.value } : prev)}
+                    className="font-medium"
+                  />
                   <span className="text-xs text-muted-foreground">{generatedListing.title.length} chars</span>
                 </div>
 
@@ -1750,9 +1817,11 @@ export default function CreateListing() {
                       </Button>
                     )}
                   </div>
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap max-h-32 overflow-y-auto">
-                    {generatedListing.description}
-                  </p>
+                  <Textarea
+                    value={generatedListing.description}
+                    onChange={e => setGeneratedListing(prev => prev ? { ...prev, description: e.target.value } : prev)}
+                    className="text-sm text-muted-foreground min-h-[8rem] resize-none"
+                  />
                 </div>
 
                 {(generatedListing.price || generatedListing.lowEst) && (
@@ -1760,7 +1829,14 @@ export default function CreateListing() {
                     {generatedListing.price && (
                       <div>
                         <Label className="text-xs text-muted-foreground">PRICE</Label>
-                        <p className="font-semibold text-primary">${generatedListing.price}</p>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={generatedListing.price ?? ''}
+                          onChange={e => setGeneratedListing(prev => prev ? { ...prev, price: parseFloat(e.target.value) || 0 } : prev)}
+                          className="font-semibold text-primary w-28"
+                        />
                       </div>
                     )}
                     {generatedListing.lowEst && (
@@ -1778,7 +1854,11 @@ export default function CreateListing() {
                     {generatedListing.condition && (
                       <div>
                         <Label className="text-xs text-muted-foreground">CONDITION</Label>
-                        <p className="text-sm">{generatedListing.condition}</p>
+                        <Input
+                          value={generatedListing.condition ?? ''}
+                          onChange={e => setGeneratedListing(prev => prev ? { ...prev, condition: e.target.value } : prev)}
+                          className="text-sm"
+                        />
                       </div>
                     )}
                   </div>
@@ -1827,7 +1907,7 @@ export default function CreateListing() {
                         variant="gold"
                         size="sm"
                         onClick={handleEbayVerify}
-                        disabled={ebayVerifying || ebayRefining || ebayRows.length === 0}
+                        disabled={ebayVerifying || ebayRefining || !generatedListing}
                         className="gap-2"
                       >
                         {ebayVerifying ? (
@@ -1991,6 +2071,15 @@ export default function CreateListing() {
             setDenverLots(prev => prev.filter(r => r.id !== lotId));
           }}
           masterPrompt={masterPrompt}
+        />
+      )}
+
+      {photoStudioOpen && (
+        <PhotoStudio
+          images={images.map(img => img.preview)}
+          initialIndex={photoStudioIndex}
+          onSave={handlePhotoStudioSave}
+          onCancel={() => setPhotoStudioOpen(false)}
         />
       )}
     </MainLayout>
