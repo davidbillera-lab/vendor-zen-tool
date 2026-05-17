@@ -97,14 +97,12 @@ async function run() {
     console.log('\n[agent] ── Phase 1: DOA Scrape ──────────────────────────────');
 
     console.log('[agent] Logging into DOA...');
-    await page.goto('https://denveronlineauctions.com/login', { waitUntil: 'domcontentloaded' });
+    await page.goto('https://denveronlineauctions.com/Account/Login', { waitUntil: 'domcontentloaded' });
 
-    // TODO: Fill in actual DOA login selectors
-    // The selectors below are placeholders — observe the live DOA login page
-    // and update them to match the actual input IDs/names.
-    await page.fill('#email', DOA_EMAIL);          // TODO: verify selector
-    await page.fill('#password', DOA_PASSWORD);    // TODO: verify selector
-    await page.click('[type="submit"]');           // TODO: verify selector
+    // #MainContent_Email is used specifically to avoid the newsletter popup email input
+    await page.fill('#MainContent_Email', DOA_EMAIL);
+    await page.fill('#MainContent_Password', DOA_PASSWORD);
+    await page.click('button[type="submit"]');
     await page.waitForNavigation({ waitUntil: 'domcontentloaded' });
 
     console.log('[agent] Navigating to DOA auction page...');

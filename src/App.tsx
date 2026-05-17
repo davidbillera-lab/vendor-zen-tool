@@ -15,6 +15,8 @@ import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import { AIChatPanel } from "@/components/AIChatPanel";
+import DenverBatches from "./pages/DenverBatches";
+import EstateSalesUpload from "./pages/EstateSalesUpload";
 
 const queryClient = new QueryClient();
 
@@ -34,6 +36,8 @@ const App = () => (
             <Route path="/orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
             <Route path="/platforms" element={<ProtectedRoute><Platforms /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+            <Route path="/denver-batches" element={<ProtectedRoute><DenverBatches /></ProtectedRoute>} />
+            <Route path="/estatesales-upload" element={<ProtectedRoute><EstateSalesUpload /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
           <AIChatPanel />

@@ -10,7 +10,8 @@ import {
   Store,
   Truck,
   X,
-  FolderOpen
+  FolderOpen,
+  Upload
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,8 @@ const navItems = [
   { icon: Package, label: "Inventory", path: "/inventory" },
   { icon: ShoppingCart, label: "Orders", path: "/orders" },
   { icon: Link2, label: "Platforms", path: "/platforms" },
+  { icon: Gavel, label: "Denver Batches", path: "/denver-batches" },
+  { icon: Upload, label: "EstateSales", path: "/estatesales-upload" },
   { icon: Settings, label: "Settings", path: "/settings" },
 ];
 
