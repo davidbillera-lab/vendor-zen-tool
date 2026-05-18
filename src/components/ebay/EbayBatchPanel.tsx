@@ -18,6 +18,7 @@ import {
   Send,
   Sparkles,
   RefreshCw,
+  Share2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -123,6 +124,7 @@ export function EbayBatchPanel({
   const [inlineEdit, setInlineEdit] = useState<{ id: string; field: 'title' | 'price'; value: string } | null>(null);
   // specFixes[rowId][specKey] = current draft value for an empty item_specific
   const [specFixes, setSpecFixes] = useState<Record<string, Record<string, string>>>({});
+  const [crossPostRowId, setCrossPostRowId] = useState<string | null>(null);
 
   // Reset AI state when edit dialog closes
   useEffect(() => {
@@ -217,6 +219,40 @@ export function EbayBatchPanel({
     onRowsChange(rows.filter(r => r.id !== id));
     setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     toast({ title: "Listing deleted" });
+  };
+
+  const handleCrossPost = async (row: EbayRow, platforms: string[]) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { toast({ title: "Not authenticated", variant: "destructive" }); return; }
+
+    const formattedData = {
+      title: row.title,
+      description: row.description,
+      price: row.price,
+      imageUrls: row.image_urls || [],
+      item_specifics: row.item_specifics || {},
+    };
+
+    let failed = false;
+    for (const platform of platforms) {
+      const { error } = await (supabase as any).from('crosspost_jobs').insert({
+        listing_id: null,
+        batch_id: row.batch_id ?? null,
+        user_id: user.id,
+        platform,
+        status: 'pending',
+        formatted_data: formattedData,
+      });
+      if (error) {
+        toast({ title: `Failed to queue ${platform}`, variant: "destructive" });
+        failed = true;
+        break;
+      }
+    }
+    if (!failed) {
+      toast({ title: `Queued for ${platforms.join(' + ')} — launch the desktop agent to post` });
+    }
+    setCrossPostRowId(null);
   };
 
   const saveInlineEdit = async () => {
@@ -1765,12 +1801,42 @@ export function EbayBatchPanel({
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="h-7 w-7 p-0 text-blue-400 hover:text-blue-300"
+                      title="Cross-post to Poshmark / Mercari"
+                      onClick={() => setCrossPostRowId(crossPostRowId === row.id ? null : row.id)}
+                    >
+                      <Share2 className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0 text-destructive hover:text-destructive"
                       onClick={() => handleDelete(row.id)}
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
+                  {crossPostRowId === row.id && (
+                    <div className="mt-1 flex items-center gap-2 pt-1 border-t border-border">
+                      <span className="text-xs text-muted-foreground">Cross-post to:</span>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['poshmark'])}>
+                        Poshmark
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['mercari'])}>
+                        Mercari
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['poshmark', 'mercari'])}>
+                        Both
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-6 text-xs"
+                        onClick={() => setCrossPostRowId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
                 </div>
                 {/* Inline fix for missing item specifics after a failed push */}
                 {rowErrors[row.id] && (() => {
