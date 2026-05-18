@@ -1,4 +1,4 @@
-project_id = "mwspcagajlkanpfdbuqc"
+project_id = "atgrxqfxysvppqoyvjdd"
 
 [functions.generate-listing]
 verify_jwt = false
@@ -25,4 +25,25 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ebay-oauth]
+verify_jwt = false
+
+[functions.generate-denver-listing]
+verify_jwt = false
+
+[functions.trigger-doa-agent]
+verify_jwt = false
+
+[functions.etsy-publish]
+verify_jwt = false
+
+[functions.reformat-listing]
+verify_jwt = false
+
+[functions.suggest-ebay-category]
+verify_jwt = false
+
+[functions.sync-ebay-categories]
+verify_jwt = false
+
+[functions.trigger-estatesales-agent]
 verify_jwt = false
