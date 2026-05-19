@@ -49,6 +49,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           USER_ID: ${{ github.event.client_payload.user_id || inputs.user_id }}
           BATCH_ID: ${{ github.event.client_payload.batch_id || inputs.batch_id }}
         run: node runAgent.js
