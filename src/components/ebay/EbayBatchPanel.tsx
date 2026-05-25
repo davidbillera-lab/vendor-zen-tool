@@ -34,7 +34,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { EbayItemSpecificsEditor } from "./EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "./EbayShippingSettings";
 import { DraggableImageGrid } from "../DraggableImageGrid";
-import { ImageEnhancer } from "../ImageEnhancer";
+import { AIGenerateButton } from "../AIGenerateButton";
 
 interface EbayRow {
   id: string;
@@ -278,17 +278,17 @@ export function EbayBatchPanel({
     
     const { error } = await supabase
       .from('ebay_batch_rows')
-      .delete()
+      .update({ status: 'archived' })
       .eq('batch_id', projectId);
-    
+
     if (error) {
       toast({ title: "Clear failed", variant: "destructive" });
       return;
     }
-    
+
     onRowsChange([]);
     onLotNumberChange(1);
-    toast({ title: "All eBay listings cleared" });
+    toast({ title: "Listings archived" });
   };
 
   const refineListing = async (targetRow?: EbayRow, prompt?: string) => {
@@ -1960,10 +1960,10 @@ export function EbayBatchPanel({
                   <Label className="text-xs text-muted-foreground uppercase">
                     Images (drag to reorder, hover for AI)
                   </Label>
-                  <ImageEnhancer
-                    onImageGenerated={(url) => setEditingRow({ 
-                      ...editingRow, 
-                      image_urls: [...(editingRow.image_urls || []), url] 
+                  <AIGenerateButton
+                    onImageGenerated={(url) => setEditingRow({
+                      ...editingRow,
+                      image_urls: [...(editingRow.image_urls || []), url]
                     })}
                     trigger={
                       <Button variant="outline" size="sm" className="gap-1 h-7">

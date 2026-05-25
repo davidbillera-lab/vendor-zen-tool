@@ -45,7 +45,7 @@ import { ProjectManager, type Project } from "@/components/BatchManager";
 import { LALotEditor } from "@/components/LALotEditor";
 import { DenverLotEditor } from "@/components/DenverLotEditor";
 import { supabase } from "@/integrations/supabase/client";
-import { PhotoStudio } from "@/components/PhotoStudio";
+import { ImageEditor } from "@/components/ImageEditor";
 
 import { saveAs } from "file-saver";
 import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
@@ -119,8 +119,8 @@ export default function CreateListing() {
   const [savingLot, setSavingLot] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [initialProjectLoaded, setInitialProjectLoaded] = useState(false);
-  const [photoStudioOpen, setPhotoStudioOpen] = useState(false);
-  const [photoStudioIndex, setPhotoStudioIndex] = useState(0);
+  const [imageEditorOpen, setImageEditorOpen] = useState(false);
+  const [imageEditorIndex, setImageEditorIndex] = useState(0);
   
   // Load project from URL parameter
   useEffect(() => {
@@ -302,6 +302,7 @@ export default function CreateListing() {
           .from('ebay_batch_rows')
           .select('*')
           .eq('batch_id', selectedProject.id)
+          .neq('status', 'archived')
           .order('lot_number', { ascending: true });
         
         if (error) throw error;
@@ -514,7 +515,7 @@ export default function CreateListing() {
     return new File([array], filename, { type: mime });
   }
 
-  function handlePhotoStudioSave(updatedUrls: string[]) {
+  function handleImageEditorSave(updatedUrls: string[]) {
     setImages(prev => {
       prev.forEach(img => { if (img.preview.startsWith('blob:')) URL.revokeObjectURL(img.preview); });
       return updatedUrls.map((url, i) => {
@@ -524,7 +525,7 @@ export default function CreateListing() {
         return { file: newFile, preview: url, url: original?.url };
       });
     });
-    setPhotoStudioOpen(false);
+    setImageEditorOpen(false);
   }
 
   const handlePlatformClick = async (platform: Platform) => {
@@ -1242,7 +1243,7 @@ export default function CreateListing() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => { setPhotoStudioIndex(0); setPhotoStudioOpen(true); }}
+                    onClick={() => { setImageEditorIndex(0); setImageEditorOpen(true); }}
                   >
                     <Pencil className="h-3 w-3 mr-1" />
                     Prep Photos
@@ -1257,7 +1258,7 @@ export default function CreateListing() {
                   <div key={index} className="relative aspect-square rounded-lg overflow-hidden border border-border group">
                     <img src={img.preview} alt="" className="w-full h-full object-cover" />
                     <button
-                      onClick={() => { setPhotoStudioIndex(index); setPhotoStudioOpen(true); }}
+                      onClick={() => { setImageEditorIndex(index); setImageEditorOpen(true); }}
                       className="absolute top-1 left-1 p-1 bg-primary/80 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
                       title="Edit in Photo Studio"
                     >
@@ -2074,12 +2075,12 @@ export default function CreateListing() {
         />
       )}
 
-      {photoStudioOpen && (
-        <PhotoStudio
+      {imageEditorOpen && (
+        <ImageEditor
           images={images.map(img => img.preview)}
-          initialIndex={photoStudioIndex}
-          onSave={handlePhotoStudioSave}
-          onCancel={() => setPhotoStudioOpen(false)}
+          initialIndex={imageEditorIndex}
+          onSave={handleImageEditorSave}
+          onCancel={() => setImageEditorOpen(false)}
         />
       )}
     </MainLayout>

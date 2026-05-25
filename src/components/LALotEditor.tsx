@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { DraggableImageGrid } from "./DraggableImageGrid";
-import { ImageEnhancer } from "./ImageEnhancer";
+import { AIGenerateButton } from "./AIGenerateButton";
 
 interface LALotEditorProps {
   lot: {
@@ -201,7 +201,7 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
               <Label className="text-xs text-muted-foreground uppercase">
                 Images (drag to reorder, hover for AI enhance)
               </Label>
-              <ImageEnhancer
+              <AIGenerateButton
                 onImageGenerated={(url) => setImageUrls(prev => [...prev, url])}
                 trigger={
                   <Button variant="outline" size="sm" className="gap-1 h-7">

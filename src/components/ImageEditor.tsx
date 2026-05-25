@@ -1,17 +1,26 @@
 import { useState, useRef } from 'react';
 import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
-import { RotateCcw, RotateCw, Loader2, X, Check } from 'lucide-react';
+import {
+  RotateCcw, RotateCw, Loader2, X, Check,
+  Sparkles, ChevronRight, ChevronLeft, Wand2, ImagePlus, RefreshCw,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from '@/hooks/use-toast';
 
-export interface PhotoStudioProps {
+export interface ImageEditorProps {
   images: string[];
   initialIndex?: number;
-  onSave: (images: string[]) => void;
+  onSave: (updatedImages: string[]) => void;
   onCancel: () => void;
 }
+
+type AiMode = 'enhance' | 'generate' | 'edit';
+type AiProvider = 'gpt-image-2' | 'nano-banana';
 
 interface ImageEdit {
   rotation: number;
@@ -21,7 +30,7 @@ interface ImageEdit {
   src: string;
 }
 
-export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: PhotoStudioProps) {
+export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: ImageEditorProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [edits, setEdits] = useState<ImageEdit[]>(() =>
     images.map(src => ({ rotation: 0, crop: null, bgRemoved: false, bgColor: null, src }))
@@ -30,8 +39,16 @@ export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: Phot
   const [activeCropRatio, setActiveCropRatio] = useState<string>('free');
   const [removingBg, setRemovingBg] = useState(false);
   const [applying, setApplying] = useState(false);
-  const imgRef = useRef<HTMLImageElement>(null);
 
+  // AI Studio panel state
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiMode, setAiMode] = useState<AiMode>('enhance');
+  const [aiProvider, setAiProvider] = useState<AiProvider>('gpt-image-2');
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiProcessing, setAiProcessing] = useState(false);
+  const [aiResult, setAiResult] = useState<string | null>(null);
+
+  const imgRef = useRef<HTMLImageElement>(null);
   const currentEdit = edits[currentIndex];
 
   function updateEdit(index: number, patch: Partial<ImageEdit>) {
@@ -78,6 +95,7 @@ export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: Phot
       updateEdit(currentIndex, { bgRemoved: true, bgColor: null, src: url });
     } catch (e) {
       console.error('BG removal failed:', e);
+      toast({ title: 'Background removal failed', variant: 'destructive' });
     } finally {
       setRemovingBg(false);
     }
@@ -91,9 +109,76 @@ export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: Phot
 
   async function handleApply() {
     setApplying(true);
-    const result = edits.map(e => e.src);
-    onSave(result);
+    onSave(edits.map(e => e.src));
     setApplying(false);
+  }
+
+  // ── AI Studio ──────────────────────────────────────────────────────────────
+
+  async function handleAiGenerate() {
+    if (aiMode === 'generate' && !aiPrompt.trim()) {
+      toast({ title: 'Enter a description first', variant: 'destructive' });
+      return;
+    }
+
+    setAiProcessing(true);
+    setAiResult(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/enhance-image`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            imageUrl: aiMode !== 'generate' ? currentEdit.src : '',
+            prompt: aiPrompt.trim(),
+            mode: aiMode,
+            provider: aiProvider,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Failed to process image');
+      }
+
+      const data = await response.json();
+      setAiResult(data.imageUrl);
+    } catch (error) {
+      console.error('AI processing error:', error);
+      toast({
+        title: 'AI processing failed',
+        description: error instanceof Error ? error.message : 'Something went wrong',
+        variant: 'destructive',
+      });
+    } finally {
+      setAiProcessing(false);
+    }
+  }
+
+  function handleUseAiResult() {
+    if (!aiResult) return;
+    // AI results add as a NEW image, never overwriting the original
+    const newEdit: ImageEdit = { rotation: 0, crop: null, bgRemoved: false, bgColor: null, src: aiResult };
+    setEdits(prev => [...prev, newEdit]);
+    setCurrentIndex(edits.length); // jump to the new image
+    setAiResult(null);
+    setAiPrompt('');
+    toast({ title: 'AI image added to your set' });
+  }
+
+  function switchImage(i: number) {
+    setCurrentIndex(i);
+    setCrop(undefined);
+    setActiveCropRatio('free');
   }
 
   return (
@@ -167,6 +252,19 @@ export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: Phot
             </>
           )}
 
+          <div className="w-px h-5 bg-border mx-1" />
+
+          <Button
+            size="sm"
+            variant={aiOpen ? 'default' : 'ghost'}
+            className="h-7 px-2 text-xs gap-1"
+            onClick={() => setAiOpen(v => !v)}
+          >
+            <Sparkles className="h-3 w-3" />
+            AI Studio
+            {aiOpen ? <ChevronRight className="h-3 w-3" /> : <ChevronLeft className="h-3 w-3" />}
+          </Button>
+
           <div className="flex-1" />
 
           <Button
@@ -183,17 +281,139 @@ export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: Phot
           </Button>
         </div>
 
-        {/* Canvas */}
-        <div className="flex-1 bg-[#111] flex items-center justify-center overflow-hidden min-h-0">
-          <ReactCrop crop={crop} onChange={c => setCrop(c)} aspect={cropRatios[activeCropRatio]}>
-            <img
-              ref={imgRef}
-              src={currentEdit.src}
-              alt="editing"
-              className="max-h-full max-w-full object-contain"
-              crossOrigin="anonymous"
-            />
-          </ReactCrop>
+        {/* Body: canvas + optional AI panel */}
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+
+          {/* Canvas */}
+          <div className="flex-1 bg-[#111] flex items-center justify-center overflow-hidden min-h-0">
+            <ReactCrop crop={crop} onChange={c => setCrop(c)} aspect={cropRatios[activeCropRatio]}>
+              <img
+                ref={imgRef}
+                src={currentEdit.src}
+                alt="editing"
+                className="max-h-full max-w-full object-contain"
+                crossOrigin="anonymous"
+              />
+            </ReactCrop>
+          </div>
+
+          {/* AI Studio panel */}
+          {aiOpen && (
+            <div className="w-72 flex-shrink-0 bg-[#1a1a1a] border-l border-border flex flex-col overflow-y-auto">
+              <div className="p-3 space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">AI Studio</p>
+
+                {/* Provider toggle */}
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    variant={aiProvider === 'gpt-image-2' ? 'default' : 'ghost'}
+                    className="h-6 px-2 text-xs flex-1"
+                    onClick={() => setAiProvider('gpt-image-2')}
+                  >
+                    GPT-Image-2
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={aiProvider === 'nano-banana' ? 'default' : 'ghost'}
+                    className="h-6 px-2 text-xs flex-1"
+                    onClick={() => setAiProvider('nano-banana')}
+                  >
+                    Nano Banana
+                  </Button>
+                </div>
+
+                {/* Mode selector */}
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    variant={aiMode === 'enhance' ? 'default' : 'ghost'}
+                    className="h-6 px-2 text-xs flex-1"
+                    onClick={() => setAiMode('enhance')}
+                    title="Auto-enhance this image"
+                  >
+                    <Wand2 className="h-3 w-3 mr-1" />
+                    Enhance
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={aiMode === 'edit' ? 'default' : 'ghost'}
+                    className="h-6 px-2 text-xs flex-1"
+                    onClick={() => setAiMode('edit')}
+                    title="Edit with a prompt"
+                  >
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={aiMode === 'generate' ? 'default' : 'ghost'}
+                    className="h-6 px-2 text-xs flex-1"
+                    onClick={() => setAiMode('generate')}
+                    title="Generate a new image"
+                  >
+                    <ImagePlus className="h-3 w-3 mr-1" />
+                    New
+                  </Button>
+                </div>
+
+                {/* Prompt */}
+                <Textarea
+                  value={aiPrompt}
+                  onChange={e => setAiPrompt(e.target.value)}
+                  placeholder={
+                    aiMode === 'generate'
+                      ? 'Describe the image to create…'
+                      : aiMode === 'enhance'
+                        ? 'Optional: enhancement notes…'
+                        : 'Describe the changes you want…'
+                  }
+                  className="text-xs min-h-[72px] resize-none bg-[#111] border-border"
+                />
+
+                <Button
+                  size="sm"
+                  className="w-full h-7 text-xs gap-1"
+                  onClick={handleAiGenerate}
+                  disabled={aiProcessing || (aiMode === 'generate' && !aiPrompt.trim())}
+                >
+                  {aiProcessing
+                    ? <><Loader2 className="h-3 w-3 animate-spin" />Processing…</>
+                    : <><Sparkles className="h-3 w-3" />Generate</>}
+                </Button>
+
+                {/* AI result preview */}
+                {aiResult && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">Result preview:</p>
+                    <img
+                      src={aiResult}
+                      alt="AI result"
+                      className="w-full rounded border border-primary object-contain"
+                    />
+                    <div className="flex gap-1">
+                      <Button
+                        size="sm"
+                        className="h-6 px-2 text-xs flex-1 bg-green-600 hover:bg-green-700 text-white"
+                        onClick={handleUseAiResult}
+                      >
+                        Use This
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-xs flex-1"
+                        onClick={() => { setAiResult(null); handleAiGenerate(); }}
+                        disabled={aiProcessing}
+                      >
+                        Refine
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Filmstrip */}
@@ -201,7 +421,7 @@ export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: Phot
           {edits.map((edit, i) => (
             <button
               key={i}
-              onClick={() => { setCurrentIndex(i); setCrop(undefined); setActiveCropRatio('free'); }}
+              onClick={() => switchImage(i)}
               className={cn(
                 'w-10 h-10 flex-shrink-0 rounded overflow-hidden border-2 transition-all',
                 i === currentIndex ? 'border-primary' : 'border-transparent hover:border-border'
@@ -211,7 +431,7 @@ export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: Phot
             </button>
           ))}
           <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">
-            {images.length} photo{images.length !== 1 ? 's' : ''}
+            {edits.length} photo{edits.length !== 1 ? 's' : ''}
           </span>
         </div>
       </DialogContent>
@@ -219,7 +439,7 @@ export function PhotoStudio({ images, initialIndex = 0, onSave, onCancel }: Phot
   );
 }
 
-// ── Canvas helpers ──────────────────────────────────────────────────────────
+// ── Canvas helpers ────────────────────────────────────────────────────────────
 
 async function rotateSrc(src: string, degrees: number): Promise<string> {
   return new Promise((resolve, reject) => {

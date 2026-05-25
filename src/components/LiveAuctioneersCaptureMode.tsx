@@ -7,7 +7,7 @@ import { uploadImage, generateListing, type GeneratedListing } from "@/lib/api/l
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { DraggableImageGrid } from "./DraggableImageGrid";
-import { ImageEnhancer } from "./ImageEnhancer";
+import { AIGenerateButton } from "./AIGenerateButton";
 
 interface LiveAuctioneersCaptureProps {
   lotNumber: number;
@@ -390,7 +390,7 @@ export function LiveAuctioneersCaptureMode({
               <span className="text-xs text-muted-foreground uppercase">
                 Images (drag to reorder, hover for AI)
               </span>
-              <ImageEnhancer
+              <AIGenerateButton
                 onImageGenerated={(url) => setUploadedUrls(prev => [...prev, url])}
                 trigger={
                   <Button variant="outline" size="sm" className="gap-1 h-7">
