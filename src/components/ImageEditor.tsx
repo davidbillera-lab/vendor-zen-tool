@@ -31,6 +31,7 @@ interface ImageEdit {
 }
 
 export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: ImageEditorProps) {
+  const [isOpen, setIsOpen] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [edits, setEdits] = useState<ImageEdit[]>(() =>
     images.map(src => ({ rotation: 0, crop: null, bgRemoved: false, bgColor: null, src }))
@@ -111,9 +112,21 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
     setApplying(true);
     onSave(edits.map(e => e.src));
     setApplying(false);
+    setIsOpen(false);
   }
 
   // ── AI Studio ──────────────────────────────────────────────────────────────
+
+  async function blobUrlToDataUrl(url: string): Promise<string> {
+    if (!url.startsWith('blob:')) return url;
+    const resp = await fetch(url);
+    const blob = await resp.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(blob);
+    });
+  }
 
   async function handleAiGenerate() {
     if (aiMode === 'generate' && !aiPrompt.trim()) {
@@ -128,6 +141,10 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not authenticated');
 
+      const imageUrl = aiMode !== 'generate'
+        ? await blobUrlToDataUrl(currentEdit.src)
+        : '';
+
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/enhance-image`,
         {
@@ -137,7 +154,7 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
             'Authorization': `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({
-            imageUrl: aiMode !== 'generate' ? currentEdit.src : '',
+            imageUrl,
             prompt: aiPrompt.trim(),
             mode: aiMode,
             provider: aiProvider,
@@ -182,7 +199,7 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
   }
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onCancel()}>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onCancel()}>
       <DialogContent className="max-w-screen-lg w-full h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
 
         {/* Toolbar */}
