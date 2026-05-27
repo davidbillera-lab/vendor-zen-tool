@@ -1801,10 +1801,11 @@ export default function CreateListing() {
                       </Button>
                     )}
                   </div>
-                  <Input
+                  <Textarea
                     value={generatedListing.title}
                     onChange={e => setGeneratedListing(prev => prev ? { ...prev, title: e.target.value } : prev)}
-                    className="font-medium"
+                    className="font-medium resize-none"
+                    rows={2}
                   />
                   <span className="text-xs text-muted-foreground">{generatedListing.title.length} chars</span>
                 </div>

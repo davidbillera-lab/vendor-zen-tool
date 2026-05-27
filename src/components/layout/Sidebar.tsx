@@ -1,17 +1,18 @@
 import { NavLink } from "@/components/NavLink";
-import { 
-  LayoutDashboard, 
-  Package, 
-  ListPlus, 
-  ShoppingCart, 
-  Link2, 
+import {
+  LayoutDashboard,
+  Package,
+  ListPlus,
+  ShoppingCart,
+  Link2,
   Settings,
   Gavel,
   Store,
   Truck,
   X,
   FolderOpen,
-  Upload
+  Upload,
+  Bot
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -120,6 +121,16 @@ function SidebarContent({ onNavigate, showClose, onClose }: SidebarContentProps)
             {item.label}
           </NavLink>
         ))}
+        <button
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent("vzt:open-chat"));
+            onNavigate?.();
+          }}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all duration-200 hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <Bot className="h-5 w-5" />
+          Ask Claude
+        </button>
       </nav>
 
       {/* Platform Status */}
