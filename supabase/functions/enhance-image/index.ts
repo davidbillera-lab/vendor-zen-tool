@@ -114,7 +114,7 @@ serve(async (req) => {
   }
 });
 
-// ── Provider: OpenAI gpt-image-1 ────────────────────────────────────────────
+// ── Provider: OpenAI gpt-image-2 ────────────────────────────────────────────
 
 async function callGptImage2(imageUrl: string, prompt: string, mode: string): Promise<string> {
   const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -135,7 +135,7 @@ async function callGptImage2(imageUrl: string, prompt: string, mode: string): Pr
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-image-1',
+        model: 'gpt-image-2',
         prompt: effectivePrompt,
         n: 1,
         size: '1024x1024',
@@ -146,7 +146,7 @@ async function callGptImage2(imageUrl: string, prompt: string, mode: string): Pr
     // Edit or enhance: edits endpoint (multipart)
     const imgBytes = await fetchImageBytes(imageUrl);
     const form = new FormData();
-    form.append('model', 'gpt-image-1');
+    form.append('model', 'gpt-image-2');
     form.append('prompt', effectivePrompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
