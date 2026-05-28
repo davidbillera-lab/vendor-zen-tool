@@ -10,7 +10,7 @@ interface EnhanceRequest {
   imageUrl: string;
   prompt: string;
   mode: 'enhance' | 'generate' | 'edit';
-  provider: 'gpt-image-2' | 'nano-banana';
+  provider: 'gpt-image-2' | 'gemini';
 }
 
 serve(async (req) => {
@@ -52,8 +52,8 @@ serve(async (req) => {
 
     let base64Image: string;
 
-    if (provider === 'nano-banana') {
-      base64Image = await callNanoBanana(imageUrl, prompt, mode);
+    if (provider === 'gemini') {
+      base64Image = await callGemini(imageUrl, prompt, mode);
     } else {
       base64Image = await callGptImage2(imageUrl, prompt, mode);
     }
@@ -139,7 +139,6 @@ async function callGptImage2(imageUrl: string, prompt: string, mode: string): Pr
         prompt: effectivePrompt,
         n: 1,
         size: '1024x1024',
-        output_format: 'b64_json',
       }),
     });
   } else {
@@ -150,7 +149,6 @@ async function callGptImage2(imageUrl: string, prompt: string, mode: string): Pr
     form.append('prompt', effectivePrompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
-    form.append('output_format', 'b64_json');
     form.append('image', new Blob([imgBytes], { type: 'image/png' }), 'image.png');
 
     response = await fetch('https://api.openai.com/v1/images/edits', {
@@ -178,51 +176,49 @@ async function extractOpenAIBase64(response: Response): Promise<string> {
   return b64;
 }
 
-// ── Provider: Nano Banana 2 Pro ──────────────────────────────────────────────
+// ── Provider: Google Gemini image generation ─────────────────────────────────
 
-async function callNanoBanana(imageUrl: string, prompt: string, mode: string): Promise<string> {
-  const NANO_BANANA_API_KEY = Deno.env.get('NANO_BANANA_API_KEY');
-  if (!NANO_BANANA_API_KEY) throw new Error('NANO_BANANA_API_KEY is not configured');
+async function callGemini(imageUrl: string, prompt: string, mode: string): Promise<string> {
+  const GOOGLE_AI_API_KEY = Deno.env.get('GOOGLE_AI_API_KEY');
+  if (!GOOGLE_AI_API_KEY) throw new Error('GOOGLE_AI_API_KEY is not configured');
 
   const effectivePrompt = mode === 'enhance'
-    ? `Professional e-commerce product photo, clean background, good lighting, sharp details. ${prompt || ''}`
+    ? `Enhance this product image for e-commerce listing. Make it look professional with good lighting, clean background, clear details, and appealing presentation. ${prompt || 'Improve overall quality and appeal.'}`
     : prompt;
 
-  const body: Record<string, unknown> = {
-    prompt: effectivePrompt,
-    output_format: 'b64_json',
-    width: 1024,
-    height: 1024,
-  };
+  const parts: unknown[] = [{ text: effectivePrompt }];
 
   if (mode !== 'generate' && imageUrl) {
     const imgBytes = await fetchImageBytes(imageUrl);
-    body.init_image = btoa(String.fromCharCode(...imgBytes));
-    body.init_image_mode = 'IMAGE_STRENGTH';
-    body.image_strength = mode === 'enhance' ? 0.35 : 0.65;
+    const b64 = btoa(String.fromCharCode(...imgBytes));
+    parts.push({ inlineData: { mimeType: 'image/png', data: b64 } });
   }
 
-  const response = await fetch('https://api.nanobanana.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${NANO_BANANA_API_KEY}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${GOOGLE_AI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+      }),
+    }
+  );
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('Nano Banana API error:', response.status, errorText);
+    console.error('Gemini API error:', response.status, errorText);
     if (response.status === 429) throw new Error('Rate limit exceeded. Please try again later.');
-    throw new Error(`Nano Banana API error: ${response.status}`);
+    throw new Error(`Gemini API error: ${response.status}`);
   }
 
   const data = await response.json();
-  const b64 = data?.artifacts?.[0]?.base64 ?? data?.data?.[0]?.b64_json;
-  if (!b64) throw new Error('No image returned from Nano Banana');
-  return b64;
+  const imagePart = data?.candidates?.[0]?.content?.parts?.find(
+    (p: { inlineData?: { data: string } }) => p.inlineData?.data
+  );
+  if (!imagePart?.inlineData?.data) throw new Error('No image returned from Gemini');
+  return imagePart.inlineData.data;
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────

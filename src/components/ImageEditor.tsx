@@ -20,7 +20,7 @@ export interface ImageEditorProps {
 }
 
 type AiMode = 'enhance' | 'generate' | 'edit';
-type AiProvider = 'gpt-image-2' | 'nano-banana';
+type AiProvider = 'gpt-image-2' | 'gemini';
 
 interface ImageEdit {
   rotation: number;
@@ -332,11 +332,11 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
                   </Button>
                   <Button
                     size="sm"
-                    variant={aiProvider === 'nano-banana' ? 'default' : 'ghost'}
+                    variant={aiProvider === 'gemini' ? 'default' : 'ghost'}
                     className="h-6 px-2 text-xs flex-1"
-                    onClick={() => setAiProvider('nano-banana')}
+                    onClick={() => setAiProvider('gemini')}
                   >
-                    Nano Banana
+                    Gemini
                   </Button>
                 </div>
 
