@@ -35,7 +35,8 @@ function getEnvironment(): EbayEnvironment {
   return configured === "sandbox" ? "sandbox" : "production";
 }
 
-// Look up per-user eBay credentials from DB. Returns null if not found (fall back to shared secrets).
+// Look up per-user eBay credentials from DB. Returns null if user has not connected eBay.
+// SaaS model: EBAY_CLIENT_ID/SECRET are shared app creds (env vars); only refresh_token is per-user.
 async function getUserEbayCreds(authHeader: string | null): Promise<{ clientId: string; clientSecret: string; refreshToken: string } | null> {
   if (!authHeader?.startsWith("Bearer ")) return null;
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -44,7 +45,6 @@ async function getUserEbayCreds(authHeader: string | null): Promise<{ clientId: 
 
   try {
     const jwt = authHeader.slice(7);
-    // Decode user_id from JWT payload (base64 middle segment)
     const payload = JSON.parse(atob(jwt.split(".")[1]));
     const userId = payload.sub as string;
     if (!userId) return null;
@@ -52,12 +52,15 @@ async function getUserEbayCreds(authHeader: string | null): Promise<{ clientId: 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
     const { data } = await supabase
       .from("user_ebay_credentials")
-      .select("client_id, client_secret, refresh_token")
+      .select("refresh_token")
       .eq("user_id", userId)
-      .single();
+      .maybeSingle();
 
-    if (!data?.client_id || !data?.client_secret || !data?.refresh_token) return null;
-    return { clientId: data.client_id, clientSecret: data.client_secret, refreshToken: data.refresh_token };
+    if (!data?.refresh_token) return null;
+    const clientId = sanitizeSecret("EBAY_CLIENT_ID");
+    const clientSecret = sanitizeSecret("EBAY_CLIENT_SECRET");
+    if (!clientId || !clientSecret) return null;
+    return { clientId, clientSecret, refreshToken: data.refresh_token };
   } catch {
     return null;
   }
@@ -67,7 +70,7 @@ async function getAccessToken(userCreds?: { clientId: string; clientSecret: stri
   const environment = getEnvironment();
   const clientId = userCreds?.clientId ?? sanitizeSecret("EBAY_CLIENT_ID");
   const clientSecret = userCreds?.clientSecret ?? sanitizeSecret("EBAY_CLIENT_SECRET");
-  const refreshToken = userCreds?.refreshToken ?? sanitizeSecret("EBAY_REFRESH_TOKEN");
+  const refreshToken = userCreds?.refreshToken ?? "";
 
   const b64Auth = btoa(`${clientId}:${clientSecret}`);
 
@@ -202,6 +205,7 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
   if (row.brand && !specifics["Brand"]) specifics["Brand"] = row.brand;
   if (row.mpn && !specifics["MPN"]) specifics["MPN"] = row.mpn;
   if (row.upc && !specifics["UPC"]) specifics["UPC"] = row.upc;
+  if (row.custom_sku?.trim()) specifics["Custom Label"] = row.custom_sku.trim();
 
   // Universal fallback — eBay requires Compatible Brand for many categories
   if (!specifics["Compatible Brand"]) specifics["Compatible Brand"] = "Does Not Apply";
@@ -612,7 +616,7 @@ async function getMarketingToken(
     const environment = getEnvironment();
     const clientId = userCreds?.clientId ?? (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim().replace(/^['"]|['"]$/g, "");
     const clientSecret = userCreds?.clientSecret ?? (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim().replace(/^['"]|['"]$/g, "");
-    const refreshToken = userCreds?.refreshToken ?? (Deno.env.get("EBAY_REFRESH_TOKEN") ?? "").trim().replace(/^['"]|['"]$/g, "");
+    const refreshToken = userCreds?.refreshToken ?? "";
     if (!clientId || !clientSecret || !refreshToken) return null;
     const tokenUrl = EBAY_ENV_CONFIG[environment].oauthTokenUrl;
     const res = await fetch(tokenUrl, {
@@ -720,9 +724,13 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const authHeader = req.headers.get("authorization");
 
-    // Resolve credentials: per-user DB row first, fall back to shared secrets
     const userCreds = await getUserEbayCreds(authHeader);
-    console.log(userCreds ? "[ebay-publish] Using per-user eBay credentials" : "[ebay-publish] Using shared eBay credentials (fallback)");
+    if (!userCreds) {
+      return new Response(
+        JSON.stringify({ error: "Connect your eBay account in Settings → Platforms before publishing." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // Quick auth test mode
     if (body.test_auth_only) {

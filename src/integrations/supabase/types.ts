@@ -292,6 +292,8 @@ export type Database = {
       }
       la_batches: {
         Row: {
+          consignor_email: string | null
+          consignor_name: string | null
           created_at: string
           created_by: string | null
           id: string
@@ -302,6 +304,8 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          consignor_email?: string | null
+          consignor_name?: string | null
           created_at?: string
           created_by?: string | null
           id?: string
@@ -312,6 +316,8 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          consignor_email?: string | null
+          consignor_name?: string | null
           created_at?: string
           created_by?: string | null
           id?: string
