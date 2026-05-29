@@ -48,6 +48,30 @@ serve(async (req) => {
 
     const { imageUrl, prompt, mode, provider = 'gpt-image-2' } = await req.json() as EnhanceRequest;
 
+    // Service client used for usage tracking and storage upload
+    const serviceClient = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    );
+
+    // Check current billing-period usage (soft cap: 300 images/month)
+    const billingPeriod = new Date().toISOString().substring(0, 7); // 'YYYY-MM'
+    const SOFT_CAP = 300;
+
+    const { data: usageRow } = await serviceClient
+      .from('tenant_usage')
+      .select('enhancement_count')
+      .eq('user_id', user.id)
+      .eq('billing_period', billingPeriod)
+      .maybeSingle();
+
+    const currentCount = usageRow?.enhancement_count ?? 0;
+    if (currentCount >= SOFT_CAP) {
+      console.warn(
+        `[enhance-image] SOFT_CAP: user=${user.id} count=${currentCount} period=${billingPeriod} — proceeding (soft cap only)`
+      );
+    }
+
     console.log(`Image ${mode} request via ${provider}: ${prompt}`);
 
     let base64Image: string;
@@ -58,14 +82,15 @@ serve(async (req) => {
       base64Image = await callGptImage2(imageUrl, prompt, mode);
     }
 
+    // Increment usage atomically now that the image was generated successfully
+    await serviceClient.rpc('increment_enhancement_count', {
+      p_user_id: user.id,
+      p_billing_period: billingPeriod,
+    });
+
     // Upload to Supabase storage
     const imageBuffer = Uint8Array.from(atob(base64Image), c => c.charCodeAt(0));
     const fileName = `enhanced-${Date.now()}-${Math.random().toString(36).substring(7)}.png`;
-
-    const serviceClient = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    );
 
     const { error: uploadError } = await serviceClient.storage
       .from('listing-images')
