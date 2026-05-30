@@ -30,7 +30,22 @@ export default function Platforms() {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const code = params.get("code");
-    if (code) {
+    const oauthError = params.get("error");
+    if (oauthError) {
+      // eBay bounced back with an error instead of a code (e.g. user declined,
+      // or a requested scope isn't authorized). Surface it instead of silently
+      // swallowing the redirect.
+      navigate("/platforms", { replace: true });
+      const desc = params.get("error_description");
+      const message =
+        oauthError === "access_denied"
+          ? "eBay connection was cancelled."
+          : oauthError === "invalid_scope"
+          ? "eBay rejected the connection — a requested permission isn't enabled. Please contact support."
+          : desc || `eBay connection failed: ${oauthError}`;
+      toast.error(message);
+      checkEbayStatus();
+    } else if (code) {
       navigate("/platforms", { replace: true });
       handleOAuthCallback(code);
     } else {
@@ -38,10 +53,47 @@ export default function Platforms() {
     }
   }, []);
 
+  // After the eBay redirect the app cold-boots, and the Supabase client restores
+  // the user's session from storage ASYNCHRONOUSLY. functions.invoke does not wait
+  // for that — so the very first edge call on mount can go out with the anon key
+  // instead of the user's JWT. That makes exchange_code hit the "Authentication
+  // required" 401 ("Edge Function returned a non-2xx status code" in the UI), and
+  // makes get_status report Not Connected for a connected user. getSession() awaits
+  // initialization; we also pass the token explicitly so the right identity is used.
+  const getAuthHeaders = async (): Promise<Record<string, string> | undefined> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session ? { Authorization: `Bearer ${session.access_token}` } : undefined;
+  };
+
+  // supabase-js collapses any non-2xx response into a generic
+  // "Edge Function returned a non-2xx status code" and throws away the JSON body.
+  // The original Response is on error.context — read it so real eBay errors surface.
+  const extractEdgeError = async (error: any, fallback: string): Promise<string> => {
+    const ctx = error?.context;
+    if (ctx && typeof ctx.text === "function") {
+      try {
+        const raw = await ctx.text();
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            return parsed.error || parsed.details || raw;
+          } catch {
+            return raw;
+          }
+        }
+      } catch {
+        // fall through
+      }
+    }
+    return error?.message || fallback;
+  };
+
   const checkEbayStatus = async () => {
     try {
+      const headers = await getAuthHeaders();
       const { data, error } = await supabase.functions.invoke("ebay-oauth", {
         body: { action: "get_status" },
+        headers,
       });
       if (!error && data) {
         setEbayConnected(data.connected ?? false);
@@ -57,11 +109,21 @@ export default function Platforms() {
   const handleOAuthCallback = async (code: string) => {
     setEbayAction("connecting");
     try {
+      const headers = await getAuthHeaders();
+      if (!headers) {
+        toast.error("Please sign in before connecting your eBay account.");
+        return;
+      }
       const { data, error } = await supabase.functions.invoke("ebay-oauth", {
         body: { action: "exchange_code", code },
+        headers,
       });
-      if (error || data?.error) {
-        toast.error(data?.error || error?.message || "Failed to connect eBay account");
+      if (error) {
+        toast.error(await extractEdgeError(error, "Failed to connect eBay account"));
+        return;
+      }
+      if (data?.error) {
+        toast.error(data.error);
         return;
       }
       setEbayConnected(true);
@@ -77,8 +139,10 @@ export default function Platforms() {
   const handleEbayConnect = async () => {
     setEbayAction("connecting");
     try {
+      const headers = await getAuthHeaders();
       const { data, error } = await supabase.functions.invoke("ebay-oauth", {
         body: { action: "get_auth_url" },
+        headers,
       });
       if (error || data?.error) {
         toast.error(data?.error || error?.message || "Failed to get eBay auth URL");
@@ -95,8 +159,10 @@ export default function Platforms() {
   const handleEbayDisconnect = async () => {
     setEbayAction("disconnecting");
     try {
+      const headers = await getAuthHeaders();
       const { data, error } = await supabase.functions.invoke("ebay-oauth", {
         body: { action: "disconnect" },
+        headers,
       });
       if (error || data?.error) {
         toast.error(data?.error || error?.message || "Failed to disconnect eBay account");

@@ -30,13 +30,18 @@ const EBAY_SANDBOX = {
   apiBase: "https://api.sandbox.ebay.com",
 };
 
+// NOTE: commerce.media.upload was removed — the eBay app keyset
+// (DavidBil-zapier-PRD-*) is not provisioned for it, so including it made
+// eBay reject the consent request with error=invalid_scope. Nothing in the
+// publish pipeline uses the Media API, so it was dead weight. Do not re-add
+// it unless the eBay Developer app is granted that scope AND the Media API is
+// actually used. (2026-05-30)
 const REQUIRED_SCOPES = [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.account",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
   "https://api.ebay.com/oauth/api_scope/sell.marketing",
-  "https://api.ebay.com/oauth/api_scope/commerce.media.upload",
 ];
 
 function getSecret(name: string): string {
