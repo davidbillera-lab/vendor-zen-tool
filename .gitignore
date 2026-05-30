@@ -24,3 +24,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Agent scratch (brainstorm sessions, not project source)
+.superpowers/
