@@ -1265,7 +1265,12 @@ export function EbayBatchPanel({
       });
 
       if (error) {
-        toast({ title: "Push failed", description: error.message, variant: "destructive" });
+        let description = error.message;
+        try {
+          const body = await (error as any).context?.json?.();
+          if (body?.error) description = body.error;
+        } catch {}
+        toast({ title: "Push failed", description, variant: "destructive" });
         return;
       }
 
@@ -1317,7 +1322,15 @@ export function EbayBatchPanel({
       const { data, error } = await supabase.functions.invoke("ebay-publish", {
         body: { rows: [row] },
       });
-      if (error) { toast({ title: "Retry failed", description: error.message, variant: "destructive" }); return; }
+      if (error) {
+        let description = error.message;
+        try {
+          const body = await (error as any).context?.json?.();
+          if (body?.error) description = body.error;
+        } catch {}
+        toast({ title: "Retry failed", description, variant: "destructive" });
+        return;
+      }
       const { succeeded, failed, results } = data;
       if (succeeded > 0) {
         onRowsChange(prev => prev.filter(r => r.id !== row.id));
