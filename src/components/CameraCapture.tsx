@@ -107,6 +107,10 @@ export function CameraCapture({
         }]);
       }
     }, "image/jpeg", 0.9);
+
+    // iOS Safari freezes the live feed after drawing a frame to canvas.
+    // Nudge the video back into playback so the next shot isn't a frozen frame.
+    video.play().catch(() => { /* ignore — feed will resume on its own */ });
   }, []);
 
   const removePhoto = useCallback((index: number) => {
