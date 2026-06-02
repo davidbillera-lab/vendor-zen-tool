@@ -11,9 +11,21 @@ interface CapturedPhoto {
 interface CameraCaptureProps {
   onCapture: (files: File[]) => void;
   disabled?: boolean;
+  /** Visual size of the trigger button. Defaults to "lg" (the empty-state look). */
+  size?: "sm" | "lg";
+  /** Trigger button label. Defaults to "Take Photos". */
+  label?: string;
+  /** Trigger button variant. Defaults to "outline". */
+  variant?: "outline" | "default";
 }
 
-export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
+export function CameraCapture({
+  onCapture,
+  disabled,
+  size = "lg",
+  label = "Take Photos",
+  variant = "outline",
+}: CameraCaptureProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
@@ -145,14 +157,17 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
   if (!isOpen) {
     return (
       <Button
-        variant="outline"
-        size="lg"
+        variant={variant}
+        size={size}
         onClick={() => setIsOpen(true)}
         disabled={disabled}
-        className="flex items-center gap-2 border-primary/30 hover:bg-primary/10"
+        className={cn(
+          "flex items-center gap-2",
+          variant === "outline" && "border-primary/30 hover:bg-primary/10"
+        )}
       >
-        <Camera className="h-5 w-5" />
-        Take Photos
+        <Camera className={size === "sm" ? "h-4 w-4" : "h-5 w-5"} />
+        {label}
       </Button>
     );
   }

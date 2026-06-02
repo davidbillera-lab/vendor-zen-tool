@@ -1206,10 +1206,11 @@ export default function CreateListing() {
                 {isDragging ? "Drop photos here!" : "Add Photos"}
               </h3>
               <p className="text-muted-foreground text-sm mb-4">
-                Drop files, browse, or take a photo
+                Snap several photos in a row, or upload from your library
               </p>
               <div className="flex gap-3">
-                <CameraCapture 
+                <CameraCapture
+                  variant="default"
                   onCapture={(files) => {
                     const newImages = files.map(file => ({
                       file,
@@ -1240,6 +1241,16 @@ export default function CreateListing() {
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">{images.length} photo(s)</span>
                 <div className="flex items-center gap-2">
+                  <CameraCapture
+                    size="sm"
+                    onCapture={(files) => {
+                      const newImages = files.map(file => ({
+                        file,
+                        preview: URL.createObjectURL(file)
+                      }));
+                      setImages(prev => [...prev, ...newImages]);
+                    }}
+                  />
                   <Button
                     variant="outline"
                     size="sm"
