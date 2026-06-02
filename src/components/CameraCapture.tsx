@@ -32,6 +32,10 @@ export function CameraCapture({
   const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Mirrors of stream/photos so the unmount cleanup can read the latest values
+  // WITHOUT re-running (and stopping the camera) every time a photo is taken.
+  const streamRef = useRef<MediaStream | null>(null);
+  const capturedPhotosRef = useRef<CapturedPhoto[]>([]);
 
   const startCamera = useCallback(async (facing: "user" | "environment") => {
     try {
@@ -148,15 +152,20 @@ export function CameraCapture({
     }
   }, [isOpen, stream, facingMode, startCamera]);
 
-  // Cleanup on unmount
+  // Keep refs in sync with the latest state for the unmount cleanup below.
+  useEffect(() => { streamRef.current = stream; }, [stream]);
+  useEffect(() => { capturedPhotosRef.current = capturedPhotos; }, [capturedPhotos]);
+
+  // Cleanup ONLY on unmount. Reads from refs so taking a photo (which changes
+  // capturedPhotos) no longer triggers this and stops the live camera stream.
   useEffect(() => {
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
       }
-      capturedPhotos.forEach(photo => URL.revokeObjectURL(photo.preview));
+      capturedPhotosRef.current.forEach(photo => URL.revokeObjectURL(photo.preview));
     };
-  }, [stream, capturedPhotos]);
+  }, []);
 
   if (!isOpen) {
     return (
