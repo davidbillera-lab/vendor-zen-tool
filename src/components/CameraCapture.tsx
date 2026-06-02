@@ -243,24 +243,34 @@ export function CameraCapture({
       )}
 
       {/* Controls */}
-      <div className="p-6 bg-black/50 flex items-center justify-center gap-8">
-        <button
-          onClick={capturePhoto}
-          className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/10 transition-colors"
-        >
-          <div className="w-16 h-16 rounded-full bg-white" />
-        </button>
-        
-        {capturedPhotos.length > 0 && (
-          <Button
-            size="lg"
-            onClick={confirmPhotos}
-            className="bg-primary hover:bg-primary/90"
+      <div className="p-6 bg-black/50">
+        {/* Hint — makes it obvious the shutter is tapped repeatedly */}
+        <p className="text-center text-white/70 text-xs mb-3">
+          {capturedPhotos.length > 0
+            ? "Tap to keep adding — hit Done when you're finished"
+            : "Tap the shutter. You can take several in a row."}
+        </p>
+        <div className="relative flex items-center justify-center">
+          {/* Shutter — the primary, repeated action */}
+          <button
+            onClick={capturePhoto}
+            className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/10 transition-colors"
           >
-            <Check className="h-5 w-5 mr-2" />
-            Use {capturedPhotos.length} Photo{capturedPhotos.length > 1 ? 's' : ''}
-          </Button>
-        )}
+            <div className="w-16 h-16 rounded-full bg-white" />
+          </button>
+
+          {/* Done — only the exit, parked in the corner so it doesn't read as "Use Photo" */}
+          {capturedPhotos.length > 0 && (
+            <Button
+              size="sm"
+              onClick={confirmPhotos}
+              className="absolute right-0 bg-primary hover:bg-primary/90"
+            >
+              <Check className="h-4 w-4 mr-1" />
+              Done · {capturedPhotos.length}
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Hidden canvas for capture */}
