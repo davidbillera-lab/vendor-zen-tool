@@ -182,12 +182,35 @@ export default function Platforms() {
 
   const otherPlatforms = [
     {
+      id: "denver",
+      name: "Denver Online Auctions",
+      description: "Set up your DOA login in Settings, then push a batch from Denver Batches.",
+      icon: Gavel,
+      color: "text-platform-auction",
+      bgColor: "bg-platform-auction/20",
+      available: true,
+      route: "/denver-batches",
+      cta: "Open Denver Batches",
+    },
+    {
+      id: "estate",
+      name: "EstateSales.net",
+      description: "Set up your EstateSales.net login in Settings, then build an ad from EstateSales Upload.",
+      icon: Truck,
+      color: "text-platform-estate",
+      bgColor: "bg-platform-estate/20",
+      available: true,
+      route: "/estatesales-upload",
+      cta: "Open EstateSales Upload",
+    },
+    {
       id: "facebook",
       name: "Facebook Marketplace",
       description: "Personal and business listings on Facebook Marketplace",
       icon: Facebook,
       color: "text-platform-facebook",
       bgColor: "bg-platform-facebook/20",
+      available: false,
     },
     {
       id: "liveauctioneers",
@@ -196,22 +219,7 @@ export default function Platforms() {
       icon: Gavel,
       color: "text-platform-auction",
       bgColor: "bg-platform-auction/20",
-    },
-    {
-      id: "denver",
-      name: "Denver Online Auctions",
-      description: "Regional online auction house for estate sales",
-      icon: Gavel,
-      color: "text-platform-auction",
-      bgColor: "bg-platform-auction/20",
-    },
-    {
-      id: "estate",
-      name: "EstateSales.net",
-      description: "Estate sale listing and management platform",
-      icon: Truck,
-      color: "text-platform-estate",
-      bgColor: "bg-platform-estate/20",
+      available: false,
     },
   ];
 
@@ -313,19 +321,33 @@ export default function Platforms() {
                   <div>
                     <div className="flex items-center gap-3">
                       <h3 className="font-serif text-xl font-semibold text-foreground">{platform.name}</h3>
-                      <Badge variant="outline" className="gap-1 border-muted-foreground/30 bg-muted/10 text-muted-foreground">
-                        <Clock className="h-3 w-3" />
-                        Coming Soon
-                      </Badge>
+                      {platform.available ? (
+                        <Badge variant="outline" className="gap-1 border-success/30 bg-success/10 text-success">
+                          <CheckCircle2 className="h-3 w-3" />
+                          Available
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="gap-1 border-muted-foreground/30 bg-muted/10 text-muted-foreground">
+                          <Clock className="h-3 w-3" />
+                          Coming Soon
+                        </Badge>
+                      )}
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">{platform.description}</p>
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" disabled>
-                    <Settings className="mr-2 h-4 w-4" />
-                    Configure
-                  </Button>
+                  {platform.available ? (
+                    <Button variant="outline" size="sm" onClick={() => navigate(platform.route!)}>
+                      <Settings className="mr-2 h-4 w-4" />
+                      {platform.cta}
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" disabled>
+                      <Settings className="mr-2 h-4 w-4" />
+                      Configure
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>
