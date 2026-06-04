@@ -747,7 +747,7 @@ export function EbayBatchPanel({
       
       const base = [
         "Add",                                                           // *Action
-        row.lot_number?.toString() || (index + 1).toString(),            // Custom Label (SKU)
+        row.custom_sku?.trim() || row.lot_number?.toString() || (index + 1).toString(), // Custom Label (SKU) — prefer user SKU, else lot #
         categoryId,                                                      // Category (numeric leaf ID)
         sanitizeForCSV((row.title || "").substring(0, 80)),              // Title
         "",                                                              // Relationship (empty for non-variation)
@@ -2081,7 +2081,7 @@ export function EbayBatchPanel({
               </div>
 
               {/* Product Identifiers */}
-              <div className="grid grid-cols-4 gap-4 pt-3 border-t border-border">
+              <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
                 <div>
                   <Label>Brand</Label>
                   <Input
@@ -2106,20 +2106,25 @@ export function EbayBatchPanel({
                     placeholder="Manufacturer Part #"
                   />
                 </div>
-                <div>
-                  <Label>Custom SKU</Label>
-                  <Input
-                    value={editingRow.custom_sku || ""}
-                    onChange={(e) => setEditingRow({ ...editingRow, custom_sku: e.target.value })}
-                    placeholder="Your internal SKU"
-                  />
-                </div>
               </div>
 
               <EbayItemSpecificsEditor
                 itemSpecifics={editingRow.item_specifics || {}}
                 onChange={(specifics) => setEditingRow({ ...editingRow, item_specifics: specifics })}
               />
+
+              {/* Custom SKU — shown as the last item specific. Optional, never blocks a push. */}
+              <div className="pt-3 border-t border-border">
+                <Label>Custom SKU (optional)</Label>
+                <Input
+                  value={editingRow.custom_sku || ""}
+                  onChange={(e) => setEditingRow({ ...editingRow, custom_sku: e.target.value })}
+                  placeholder="Your internal SKU — leave blank to skip"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Maps to eBay's "Custom Label (SKU)". Optional.
+                </p>
+              </div>
 
               {/* Best Offer Settings */}
               <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">

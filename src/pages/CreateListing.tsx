@@ -108,6 +108,8 @@ export default function CreateListing() {
   // eBay specific
   const [promotionRate, setPromotionRate] = useState("2.1");
   const [promotionType, setPromotionType] = useState<"flat" | "fluctuating">("flat");
+  // Optional internal/Custom SKU — lands in eBay's "Custom Label (SKU)". Never required, never blocks a push.
+  const [customSku, setCustomSku] = useState("");
   
   // Facebook specific
   const [selectedGroups, setSelectedGroups] = useState<string[]>(DEFAULT_FB_GROUPS);
@@ -614,6 +616,7 @@ export default function CreateListing() {
               return_shipping: ebayShippingSettings.returnShipping,
               promotion_rate: parseFloat(promotionRate),
               promotion_type: promotionType,
+              custom_sku: customSku.trim() || null,
               created_by: user?.id
             })
             .select()
@@ -622,6 +625,7 @@ export default function CreateListing() {
           if (!error && data) {
             setEbayRows(prev => [...prev, data]);
             setEbayLotNumber(prev => prev + 1);
+            setCustomSku("");
           }
         }
       }
@@ -989,10 +993,11 @@ export default function CreateListing() {
         title: generatedListing.title,
         description: generatedListing.description,
         price: generatedListing.price,
+        custom_sku: customSku.trim() || null,
       }).eq('id', lastEbayRow.id);
     }, 600);
     return () => { if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current); };
-  }, [generatedListing, ebayRows]);
+  }, [generatedListing, ebayRows, customSku]);
 
   const [downloadingImages, setDownloadingImages] = useState(false);
   const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
@@ -1996,6 +2001,18 @@ export default function CreateListing() {
                       itemSpecifics={ebayItemSpecifics}
                       onChange={setEbayItemSpecifics}
                     />
+                    {/* Custom SKU — shown as the last item specific. Optional, never blocks a push. */}
+                    <div className="mt-4 pt-4 border-t border-border">
+                      <Label className="text-xs">Custom SKU (optional)</Label>
+                      <Input
+                        value={customSku}
+                        onChange={(e) => setCustomSku(e.target.value)}
+                        placeholder="Your internal SKU — leave blank to skip"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Maps to eBay's "Custom Label (SKU)". Optional.
+                      </p>
+                    </div>
                   </div>
 
                   {/* Shipping & Returns */}

@@ -30,6 +30,7 @@ export function buildEbayBatchRow(
     return_shipping: 'seller',
     promotion_rate: 2.1,
     promotion_type: 'flat',
+    custom_sku: data.customSku?.trim() || null,
   };
 }
 

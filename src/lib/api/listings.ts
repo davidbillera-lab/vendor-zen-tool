@@ -250,6 +250,7 @@ export async function deleteListing(id: string) {
 export function generateEbayCSV(listings: any[]): string {
   const headers = [
     'Action(SiteID=US|Country=US|Currency=USD|Version=1193)',
+    'CustomLabel',
     'Title',
     'Description',
     'StartPrice',
@@ -262,6 +263,7 @@ export function generateEbayCSV(listings: any[]): string {
 
   const rows = listings.map(l => [
     'Add',
+    (l.custom_sku && String(l.custom_sku).trim()) || (l.lot_number ?? '') , // Custom Label (SKU) — prefer user SKU, else lot #
     l.title || '',
     l.description || '',
     l.price || '',
