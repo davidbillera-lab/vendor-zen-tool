@@ -711,6 +711,50 @@ serve(async (req) => {
       systemPrompt = `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY — OVERRIDE DEFAULTS) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${systemPrompt}`;
     }
 
+    // Inject learned corrections (self-improving loop): prepend the caller's
+    // recent human corrections so the model stops repeating identification
+    // mistakes. RAG-lite — most-recent deduped corrections, eBay only. Zero
+    // behavior change when there are none. Non-blocking on any failure.
+    if (platform === 'ebay') {
+      try {
+        const authedClient = createClient(
+          Deno.env.get('SUPABASE_URL')!,
+          Deno.env.get('SUPABASE_ANON_KEY')!,
+          { global: { headers: { Authorization: authHeader } } }
+        );
+        const { data: corrections } = await authedClient
+          .from('listing_corrections')
+          .select('wrong_title,corrected_title,correction_note,category')
+          .order('created_at', { ascending: false })
+          .limit(20);
+
+        if (corrections && corrections.length > 0) {
+          const seen = new Set<string>();
+          const lines: string[] = [];
+          for (const c of corrections) {
+            const key = `${c.wrong_title ?? ''}→${c.corrected_title ?? ''}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const parts: string[] = [];
+            if (c.wrong_title && c.corrected_title && c.wrong_title !== c.corrected_title) {
+              parts.push(`Was mis-identified as "${c.wrong_title}" — correct is "${c.corrected_title}"`);
+            } else if (c.corrected_title) {
+              parts.push(`Correct identification: "${c.corrected_title}"`);
+            }
+            if (c.correction_note) parts.push(`Note: ${c.correction_note}`);
+            if (c.category) parts.push(`(category: ${c.category})`);
+            if (parts.length) lines.push(`- ${parts.join(' ')}`);
+          }
+          if (lines.length > 0) {
+            systemPrompt = `=== LEARNED CORRECTIONS (avoid repeating these identification mistakes) ===\n${lines.join('\n')}\n=== END LEARNED CORRECTIONS ===\n\n${systemPrompt}`;
+            console.log(`Injected ${lines.length} learned corrections`);
+          }
+        }
+      } catch (e) {
+        console.warn('Learned-corrections injection skipped (non-blocking):', e);
+      }
+    }
+
     // Build content array with images - limit to 4 for speed (AI gets diminishing returns beyond that)
     const content: any[] = [];
     const maxImagesForAI = Math.min(imageUrls.length, 4);
