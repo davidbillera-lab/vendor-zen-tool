@@ -348,6 +348,7 @@ CATEGORY-SPECIFIC:
   "title": "string (MUST be 80 chars or less - Cassini optimized, keyword-dense)",
   "description": "string (150+ words, Cassini optimized, structured with specs/condition/includes)",
   "price": number (based on sold comps, not random),
+  "compQuery": "string (3-6 word search phrase a shopper would type to find THIS exact item — brand + item type + key descriptor, e.g. 'Coach Willis leather satchel'. NOT the full keyword-stuffed title. Used to pull live market comps.)",
   "category": "string (human readable like 'Men's Coats, Jackets & Vests')",
   "categoryId": number (REQUIRED - must be a LEAF category ID, not parent),
   "condition": "string",
@@ -539,6 +540,118 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
   "startingBid": number
 }`
 };
+
+// Shape returned to the caller (and stored on the listing as `priceComps`).
+// Marketplace-Insights-ready: when we get approved for real SOLD data, only the
+// fetch step below changes — this contract and the band math stay identical.
+interface PriceComps {
+  suggested: number;
+  low: number;
+  high: number;
+  sampleSize: number;
+  source: "ebay_active" | "ebay_sold";
+}
+
+// Pull live eBay FIXED_PRICE asking prices for `query`, reject outliers, and
+// return an honest suggested price + range. Returns null if there isn't enough
+// trustworthy data — the caller then keeps the AI's price (no regression).
+//
+// Outlier defense (David's #1 requirement):
+//   1. FIXED_PRICE filter excludes auctions — kills the "auction giveaway" lows.
+//   2. Trim the top & bottom 15% — kills the "lists 4x higher" moron and junk.
+//   3. Median (not mean) of the trimmed set — one survivor can't drag it.
+//   4. Trust gate: need >= 5 priced comps after trim, else return null.
+async function fetchEbayComps(
+  query: string,
+  _conditionHint: string
+): Promise<PriceComps | null> {
+  const q = (query || "").trim();
+  if (q.length < 3) return null;
+
+  const ebayClientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+  const ebayClientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+  if (!ebayClientId || !ebayClientSecret) return null;
+
+  // ── Step 1: fetch the raw price array (the ONLY part that changes for SOLD) ──
+  const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${btoa(`${ebayClientId}:${ebayClientSecret}`)}`,
+    },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "https://api.ebay.com/oauth/api_scope",
+    }),
+  });
+  if (!tokenRes.ok) return null;
+  const appToken = (await tokenRes.json()).access_token as string;
+  if (!appToken) return null;
+
+  const searchUrl =
+    `https://api.ebay.com/buy/browse/v1/item_summary/search` +
+    `?q=${encodeURIComponent(q)}` +
+    `&filter=${encodeURIComponent("buyingOptions:{FIXED_PRICE}")}` +
+    `&limit=100`;
+
+  const searchRes = await fetch(searchUrl, {
+    headers: {
+      Authorization: `Bearer ${appToken}`,
+      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+    },
+  });
+  if (!searchRes.ok) return null;
+
+  const searchData = await searchRes.json();
+  const summaries: any[] = Array.isArray(searchData.itemSummaries)
+    ? searchData.itemSummaries
+    : [];
+
+  const prices = summaries
+    .map((it) =>
+      it?.price?.currency === "USD" ? parseFloat(it.price.value) : NaN
+    )
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+
+  // ── Step 2: compute the band from the array (UNCHANGED for SOLD data) ──
+  return computeBand(prices, "ebay_active");
+}
+
+// Reject outliers and collapse a sorted price array into a suggested median +
+// honest range. Separated from the fetch so the Marketplace Insights swap reuses
+// it verbatim. Returns null when there's too little data to trust.
+function computeBand(
+  sortedPrices: number[],
+  source: PriceComps["source"]
+): PriceComps | null {
+  if (sortedPrices.length < 5) return null;
+
+  const trimCount = Math.floor(sortedPrices.length * 0.15);
+  const trimmed =
+    trimCount > 0
+      ? sortedPrices.slice(trimCount, sortedPrices.length - trimCount)
+      : sortedPrices;
+
+  // Trust gate: need a real cluster after trimming, not 2 survivors.
+  if (trimmed.length < 5) return null;
+
+  const mid = Math.floor(trimmed.length / 2);
+  const median =
+    trimmed.length % 2 === 0
+      ? (trimmed[mid - 1] + trimmed[mid]) / 2
+      : trimmed[mid];
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  return {
+    suggested: round2(median),
+    low: round2(trimmed[0]),
+    high: round2(trimmed[trimmed.length - 1]),
+    sampleSize: trimmed.length,
+    source,
+  };
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -916,6 +1029,37 @@ serve(async (req) => {
         }
         anyListing['itemSpecifics'] = itemSpecs;
       }
+
+      // ── Live pricing comps (eBay Browse API) ──────────────────────────────
+      // Replace the AI's hallucinated price with a real, outlier-trimmed median
+      // of live eBay asking prices. PURELY ADDITIVE: runs after the AI already
+      // returned a complete listing. If it finds too few comps or errors, we
+      // keep the AI's price exactly as before — no regression possible.
+      try {
+        const compQuery =
+          ((anyListing['compQuery'] as string) || (anyListing['title'] as string) || "").trim();
+        const comps = compQuery
+          ? await fetchEbayComps(compQuery, (anyListing['condition'] as string) || "")
+          : null;
+
+        if (comps) {
+          console.log(
+            `[generate-listing] Comps applied: AI price=${anyListing['price']} → market median=${comps.suggested} ` +
+            `(range $${comps.low}-$${comps.high}, n=${comps.sampleSize}, source=${comps.source}) for query="${compQuery}"`
+          );
+          anyListing['price'] = comps.suggested;
+          anyListing['priceComps'] = comps;
+        } else {
+          console.log(
+            `[generate-listing] No usable comps for query="${compQuery}" — keeping AI price=${anyListing['price']}`
+          );
+          anyListing['priceComps'] = { source: "ai_estimate" };
+        }
+      } catch (compErr) {
+        console.warn("[generate-listing] Comp lookup error (non-fatal, keeping AI price):", compErr);
+        anyListing['priceComps'] = { source: "ai_estimate" };
+      }
+      // ─────────────────────────────────────────────────────────────────────
     }
 
     return new Response(
