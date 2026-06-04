@@ -1850,6 +1850,17 @@ export default function CreateListing() {
                           onChange={e => setGeneratedListing(prev => prev ? { ...prev, price: parseFloat(e.target.value) || 0 } : prev)}
                           className="font-semibold text-primary w-28"
                         />
+                        {generatedListing.priceComps?.source === "ebay_active" && generatedListing.priceComps.low != null && (
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Market range ${generatedListing.priceComps.low}–${generatedListing.priceComps.high}
+                            {generatedListing.priceComps.sampleSize ? ` · ${generatedListing.priceComps.sampleSize} eBay listings` : ''}
+                          </p>
+                        )}
+                        {generatedListing.priceComps?.source === "ai_estimate" && (
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            AI estimate — no live comps found
+                          </p>
+                        )}
                       </div>
                     )}
                     {generatedListing.lowEst && (

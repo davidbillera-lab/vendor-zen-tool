@@ -19,6 +19,15 @@ export interface GeneratedListing {
   categoryId?: number; // eBay numeric category ID
   condition?: string;
   itemSpecifics?: Record<string, string>;
+  // eBay live pricing comps (set by generate-listing; price is derived from these)
+  compQuery?: string;
+  priceComps?: {
+    source: "ebay_active" | "ebay_sold" | "ai_estimate";
+    suggested?: number;
+    low?: number;
+    high?: number;
+    sampleSize?: number;
+  };
   // LiveAuctioneers specific
   lowEst?: number;
   highEst?: number;
