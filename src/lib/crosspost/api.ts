@@ -28,7 +28,7 @@ export function buildEbayBatchRow(
     returns_accepted: true,
     return_period: 30,
     return_shipping: 'seller',
-    promotion_rate: 5.0,
+    promotion_rate: 2.1,
     promotion_type: 'flat',
   };
 }

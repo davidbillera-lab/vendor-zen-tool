@@ -106,7 +106,7 @@ export default function CreateListing() {
   const [copied, setCopied] = useState<string | null>(null);
   
   // eBay specific
-  const [promotionRate, setPromotionRate] = useState("5.0");
+  const [promotionRate, setPromotionRate] = useState("2.1");
   const [promotionType, setPromotionType] = useState<"flat" | "fluctuating">("flat");
   
   // Facebook specific
