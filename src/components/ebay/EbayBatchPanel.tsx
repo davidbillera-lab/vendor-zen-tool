@@ -72,6 +72,39 @@ interface EbayRow {
   custom_sku: string | null;
 }
 
+// Fire-and-forget: record a human correction of an AI identification so the
+// generation prompt can learn from it (self-improving loop). Never throws —
+// a capture failure must never block the listing flow.
+async function captureCorrection(input: {
+  source: "ai_verify" | "refine";
+  category?: string | null;
+  wrongTitle?: string | null;
+  correctedTitle?: string | null;
+  wrongSpecifics?: Record<string, string> | null;
+  correctedSpecifics?: Record<string, string> | null;
+  correctionNote?: string | null;
+  imageUrls?: string[] | null;
+}) {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from("listing_corrections").insert({
+      user_id: user.id,
+      source: input.source,
+      platform: "ebay",
+      category: input.category ?? null,
+      wrong_title: input.wrongTitle ?? null,
+      corrected_title: input.correctedTitle ?? null,
+      wrong_specifics: input.wrongSpecifics ?? null,
+      corrected_specifics: input.correctedSpecifics ?? null,
+      correction_note: input.correctionNote ?? null,
+      image_urls: input.imageUrls ?? null,
+    });
+  } catch (e) {
+    console.warn("captureCorrection failed (non-blocking):", e);
+  }
+}
+
 interface EbayBatchPanelProps {
   projectId: string | null;
   rows: EbayRow[];
@@ -349,6 +382,17 @@ export function EbayBatchPanel({
         } : prev);
         setCorrectionPrompt("");
       }
+      // Capture the human-driven correction so generation can learn from it.
+      captureCorrection({
+        source: "refine",
+        category: row.category,
+        wrongTitle: row.title,
+        correctedTitle: refined.title || row.title,
+        wrongSpecifics: row.item_specifics,
+        correctedSpecifics: refined.itemSpecifics || row.item_specifics,
+        correctionNote: promptText.trim(),
+        imageUrls: row.image_urls,
+      });
       toast({ title: "Listing Updated", description: "AI refined your listing" });
     } catch (error) {
       toast({
@@ -434,6 +478,22 @@ export function EbayBatchPanel({
   const handleAcceptVerify = () => {
     if (!verifyPanel) return;
     const cl = verifyPanel.correctedListing;
+    const original = verifyPanel.row;
+    // Only capture when the accepted correction actually changed identification.
+    const titleChanged = cl.title && String(cl.title).substring(0, 80) !== original.title;
+    const specsChanged = cl.itemSpecifics &&
+      JSON.stringify(cl.itemSpecifics) !== JSON.stringify(original.item_specifics);
+    if (titleChanged || specsChanged) {
+      captureCorrection({
+        source: "ai_verify",
+        category: original.category,
+        wrongTitle: original.title,
+        correctedTitle: cl.title ? String(cl.title) : original.title,
+        wrongSpecifics: original.item_specifics,
+        correctedSpecifics: cl.itemSpecifics || original.item_specifics,
+        imageUrls: original.image_urls,
+      });
+    }
     onRowsChange(prev => prev.map(r => r.id === verifyPanel.row.id ? {
       ...r,
       title: cl.title ? String(cl.title).substring(0, 80) : r.title,
