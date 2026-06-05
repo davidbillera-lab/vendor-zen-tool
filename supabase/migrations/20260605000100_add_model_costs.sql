@@ -18,11 +18,14 @@ alter table public.model_costs enable row level security;
 
 -- Own-row visibility; inserts come from edge functions acting for the user
 -- (service role bypasses RLS, authenticated may log their own rows).
-create policy if not exists "model_costs_select_own"
+-- CREATE POLICY has no IF NOT EXISTS, so drop-then-create for idempotency.
+drop policy if exists "model_costs_select_own" on public.model_costs;
+create policy "model_costs_select_own"
   on public.model_costs for select
   using (auth.uid() = user_id);
 
-create policy if not exists "model_costs_insert_own"
+drop policy if exists "model_costs_insert_own" on public.model_costs;
+create policy "model_costs_insert_own"
   on public.model_costs for insert
   with check (auth.uid() = user_id or user_id is null);
 
