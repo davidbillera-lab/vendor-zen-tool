@@ -626,6 +626,16 @@ export default function CreateListing() {
             setEbayRows(prev => [...prev, data]);
             setEbayLotNumber(prev => prev + 1);
             setCustomSku("");
+          } else if (error) {
+            // Never swallow a save failure silently — a rejected insert here
+            // looks exactly like "nothing saves" to the operator (no row added,
+            // lot number stuck, no eBay push button). Surface it loudly.
+            console.error('eBay batch row save failed:', error);
+            toast({
+              title: "Listing didn't save to eBay batch",
+              description: error.message || "The item was not added to the batch. Try again or contact support.",
+              variant: "destructive"
+            });
           }
         }
       }
