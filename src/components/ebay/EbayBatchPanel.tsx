@@ -100,6 +100,11 @@ async function captureCorrection(input: {
       correction_note: input.correctionNote ?? null,
       image_urls: input.imageUrls ?? null,
     });
+    // Fire-and-forget: embed the new correction(s) so semantic retrieval can
+    // surface them later. Never awaited into the UI path; failures are ignored.
+    supabase.functions
+      .invoke("embed-corrections", { body: { limit: 25 } })
+      .catch((e) => console.warn("embed-corrections invoke skipped (non-blocking):", e));
   } catch (e) {
     console.warn("captureCorrection failed (non-blocking):", e);
   }
