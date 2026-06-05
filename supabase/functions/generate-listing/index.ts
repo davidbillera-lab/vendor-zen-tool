@@ -13,6 +13,112 @@ interface GenerateRequest {
   masterPrompt?: string;
 }
 
+// --- v2.2 semantic correction retrieval helpers ---
+const CAPTION_MODEL = 'claude-haiku-4-5';        // Tier-1 vision pass
+const EMBED_MODEL = 'text-embedding-3-small';    // 1536 dims, Tier-1
+// USD per 1M tokens (approx; for the model_costs ledger only).
+const CAPTION_IN_PER_1M = 1.0;
+const CAPTION_OUT_PER_1M = 5.0;
+const EMBED_IN_PER_1M = 0.02;
+
+// One short visual descriptor of the item, used as the embedding query so we
+// can retrieve semantically-similar past corrections even though there's no
+// title yet at generation time. Returns null on any failure (caller falls back).
+async function captionItem(
+  imageUrls: string[],
+  anthropicKey: string
+): Promise<{ caption: string; inputTokens: number; outputTokens: number } | null> {
+  try {
+    const max = Math.min(imageUrls.length, 3);
+    const content: any[] = [];
+    for (let i = 0; i < max; i++) {
+      content.push({ type: 'image', source: { type: 'url', url: imageUrls[i] } });
+    }
+    content.push({
+      type: 'text',
+      text: 'In one short line (max 15 words), describe this item for resale identification: type, material, style, era. Just the descriptor, no sentence.',
+    });
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ model: CAPTION_MODEL, max_tokens: 60, messages: [{ role: 'user', content }] }),
+    });
+    if (!res.ok) {
+      console.warn(`caption pass failed (${res.status})`);
+      return null;
+    }
+    const j = await res.json();
+    const caption = j.content?.[0]?.text?.trim();
+    if (!caption) return null;
+    return {
+      caption,
+      inputTokens: j.usage?.input_tokens ?? 0,
+      outputTokens: j.usage?.output_tokens ?? 0,
+    };
+  } catch (e) {
+    console.warn('captionItem error (non-blocking):', e);
+    return null;
+  }
+}
+
+// Embed a text query with the same model used to embed stored corrections.
+async function embedQuery(
+  text: string,
+  openaiKey: string
+): Promise<{ vector: number[]; inputTokens: number } | null> {
+  try {
+    const res = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, input: text }),
+    });
+    if (!res.ok) {
+      console.warn(`embed query failed (${res.status})`);
+      return null;
+    }
+    const j = await res.json();
+    const vector = j.data?.[0]?.embedding;
+    if (!vector) return null;
+    return { vector, inputTokens: j.usage?.prompt_tokens ?? 0 };
+  } catch (e) {
+    console.warn('embedQuery error (non-blocking):', e);
+    return null;
+  }
+}
+
+// Shared formatter: turn correction rows into deduped guardrail lines.
+function formatCorrectionLines(
+  corrections: Array<{
+    wrong_title?: string | null;
+    corrected_title?: string | null;
+    correction_note?: string | null;
+    category?: string | null;
+  }> | null
+): string[] {
+  if (!corrections || corrections.length === 0) return [];
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const c of corrections) {
+    const key = `${c.wrong_title ?? ''}→${c.corrected_title ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const parts: string[] = [];
+    if (c.wrong_title && c.corrected_title && c.wrong_title !== c.corrected_title) {
+      parts.push(`Was mis-identified as "${c.wrong_title}" — correct is "${c.corrected_title}"`);
+    } else if (c.corrected_title) {
+      parts.push(`Correct identification: "${c.corrected_title}"`);
+    }
+    if (c.correction_note) parts.push(`Note: ${c.correction_note}`);
+    if (c.category) parts.push(`(category: ${c.category})`);
+    if (parts.length) lines.push(`- ${parts.join(' ')}`);
+  }
+  return lines;
+}
+
 const PLATFORM_PROMPTS = {
   ebay: `You are an expert eBay seller and listing optimizer with deep knowledge of sold comps and category taxonomy. Your job is to generate listings that SELL QUICKLY by using accurate categories, realistic sold-comp pricing, and keyword-rich titles.
 
@@ -711,10 +817,14 @@ serve(async (req) => {
       systemPrompt = `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY — OVERRIDE DEFAULTS) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${systemPrompt}`;
     }
 
-    // Inject learned corrections (self-improving loop): prepend the caller's
-    // recent human corrections so the model stops repeating identification
-    // mistakes. RAG-lite — most-recent deduped corrections, eBay only. Zero
-    // behavior change when there are none. Non-blocking on any failure.
+    // Inject learned corrections (self-improving loop v2.2): retrieve the
+    // caller's *most semantically-similar* past corrections and prepend them so
+    // the model stops repeating identification mistakes. Pipeline: caption the
+    // photos (Haiku) → embed the caption (OpenAI) → match_listing_corrections
+    // RPC (pgvector nearest-neighbour, RLS-scoped to the caller). Falls back to
+    // v1 global-recent when there are no images, captioning/embedding fails, or
+    // no semantic matches. eBay only. Zero behavior change when there are none.
+    // Non-blocking on any failure.
     if (platform === 'ebay') {
       try {
         const authedClient = createClient(
@@ -722,33 +832,89 @@ serve(async (req) => {
           Deno.env.get('SUPABASE_ANON_KEY')!,
           { global: { headers: { Authorization: authHeader } } }
         );
-        const { data: corrections } = await authedClient
-          .from('listing_corrections')
-          .select('wrong_title,corrected_title,correction_note,category')
-          .order('created_at', { ascending: false })
-          .limit(20);
 
-        if (corrections && corrections.length > 0) {
-          const seen = new Set<string>();
-          const lines: string[] = [];
-          for (const c of corrections) {
-            const key = `${c.wrong_title ?? ''}→${c.corrected_title ?? ''}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            const parts: string[] = [];
-            if (c.wrong_title && c.corrected_title && c.wrong_title !== c.corrected_title) {
-              parts.push(`Was mis-identified as "${c.wrong_title}" — correct is "${c.corrected_title}"`);
-            } else if (c.corrected_title) {
-              parts.push(`Correct identification: "${c.corrected_title}"`);
+        // Cost-log helper — own-row insert is RLS-allowed (auth.uid() = user.id).
+        const logCost = (
+          operation: string,
+          model: string,
+          inputTokens: number | null,
+          outputTokens: number | null,
+          costUsd: number | null
+        ) => {
+          authedClient
+            .from('model_costs')
+            .insert({
+              user_id: user.id,
+              source: 'generate-listing',
+              operation,
+              model,
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              cost_usd: costUsd,
+            })
+            .then(({ error }) => {
+              if (error) console.warn('model_costs log skipped (non-blocking):', error.message);
+            });
+        };
+
+        let corrections:
+          | Array<{
+              wrong_title?: string | null;
+              corrected_title?: string | null;
+              correction_note?: string | null;
+              category?: string | null;
+            }>
+          | null = null;
+        let retrievalMode = 'semantic';
+
+        const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+
+        // --- v2.2 semantic path: caption → embed → nearest-neighbour RPC ---
+        if (imageUrls.length > 0 && OPENAI_API_KEY) {
+          const cap = await captionItem(imageUrls, ANTHROPIC_API_KEY);
+          if (cap) {
+            const capCost = Number(
+              (
+                (cap.inputTokens / 1_000_000) * CAPTION_IN_PER_1M +
+                (cap.outputTokens / 1_000_000) * CAPTION_OUT_PER_1M
+              ).toFixed(6)
+            );
+            logCost('caption', CAPTION_MODEL, cap.inputTokens, cap.outputTokens, capCost);
+
+            const emb = await embedQuery(cap.caption, OPENAI_API_KEY);
+            if (emb) {
+              const embCost = Number(((emb.inputTokens / 1_000_000) * EMBED_IN_PER_1M).toFixed(6));
+              logCost('embedding', EMBED_MODEL, emb.inputTokens, null, embCost);
+
+              const { data: matches, error: rpcErr } = await authedClient.rpc(
+                'match_listing_corrections',
+                { query_embedding: JSON.stringify(emb.vector), match_count: 8 }
+              );
+              if (rpcErr) {
+                console.warn('match_listing_corrections RPC failed (non-blocking):', rpcErr.message);
+              } else if (matches && matches.length > 0) {
+                corrections = matches;
+                console.log(`Semantic retrieval: ${matches.length} match(es) for "${cap.caption}"`);
+              }
             }
-            if (c.correction_note) parts.push(`Note: ${c.correction_note}`);
-            if (c.category) parts.push(`(category: ${c.category})`);
-            if (parts.length) lines.push(`- ${parts.join(' ')}`);
           }
-          if (lines.length > 0) {
-            systemPrompt = `=== LEARNED CORRECTIONS (avoid repeating these identification mistakes) ===\n${lines.join('\n')}\n=== END LEARNED CORRECTIONS ===\n\n${systemPrompt}`;
-            console.log(`Injected ${lines.length} learned corrections`);
-          }
+        }
+
+        // --- fallback: v1 global most-recent (no images / no key / no matches) ---
+        if (!corrections || corrections.length === 0) {
+          retrievalMode = 'recent';
+          const { data: recent } = await authedClient
+            .from('listing_corrections')
+            .select('wrong_title,corrected_title,correction_note,category')
+            .order('created_at', { ascending: false })
+            .limit(20);
+          corrections = recent ?? null;
+        }
+
+        const lines = formatCorrectionLines(corrections);
+        if (lines.length > 0) {
+          systemPrompt = `=== LEARNED CORRECTIONS (avoid repeating these identification mistakes) ===\n${lines.join('\n')}\n=== END LEARNED CORRECTIONS ===\n\n${systemPrompt}`;
+          console.log(`Injected ${lines.length} learned corrections (${retrievalMode})`);
         }
       } catch (e) {
         console.warn('Learned-corrections injection skipped (non-blocking):', e);
