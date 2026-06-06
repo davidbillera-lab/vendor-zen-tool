@@ -825,6 +825,9 @@ serve(async (req) => {
     // v1 global-recent when there are no images, captioning/embedding fails, or
     // no semantic matches. eBay only. Zero behavior change when there are none.
     // Non-blocking on any failure.
+    // v2.4: ids of the corrections actually injected, surfaced in the response so
+    // the generated row can be tagged and re-corrections traced back to the lesson.
+    let injectedCorrectionIds: string[] = [];
     if (platform === 'ebay') {
       try {
         const authedClient = createClient(
@@ -859,6 +862,7 @@ serve(async (req) => {
 
         let corrections:
           | Array<{
+              id?: string | null;
               wrong_title?: string | null;
               corrected_title?: string | null;
               correction_note?: string | null;
@@ -905,7 +909,8 @@ serve(async (req) => {
           retrievalMode = 'recent';
           const { data: recent } = await authedClient
             .from('listing_corrections')
-            .select('wrong_title,corrected_title,correction_note,category')
+            .select('id,wrong_title,corrected_title,correction_note,category')
+            .eq('retired', false)
             .order('created_at', { ascending: false })
             .limit(20);
           corrections = recent ?? null;
@@ -915,6 +920,11 @@ serve(async (req) => {
         if (lines.length > 0) {
           systemPrompt = `=== LEARNED CORRECTIONS (avoid repeating these identification mistakes) ===\n${lines.join('\n')}\n=== END LEARNED CORRECTIONS ===\n\n${systemPrompt}`;
           console.log(`Injected ${lines.length} learned corrections (${retrievalMode})`);
+          // v2.4: surface which corrections actually shaped this listing so the
+          // generated row can be tagged and re-corrections traced back to the lesson.
+          injectedCorrectionIds = (corrections ?? [])
+            .map((c) => c.id)
+            .filter((id): id is string => typeof id === 'string');
         }
       } catch (e) {
         console.warn('Learned-corrections injection skipped (non-blocking):', e);
@@ -1273,7 +1283,7 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ listing: parsedListing, rawResponse: aiResponse }),
+      JSON.stringify({ listing: parsedListing, rawResponse: aiResponse, injectedCorrectionIds }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
