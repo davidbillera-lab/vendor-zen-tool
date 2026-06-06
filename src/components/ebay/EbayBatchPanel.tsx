@@ -70,6 +70,9 @@ interface EbayRow {
   brand: string | null;
   mpn: string | null;
   custom_sku: string | null;
+  // v2.4: ids of the learned corrections injected when this row was generated, so a
+  // re-correction on the same row can flag the failed lesson(s). Null = none injected.
+  injected_correction_ids: string[] | null;
 }
 
 // Fire-and-forget: record a human correction of an AI identification so the
@@ -84,6 +87,12 @@ async function captureCorrection(input: {
   correctedSpecifics?: Record<string, string> | null;
   correctionNote?: string | null;
   imageUrls?: string[] | null;
+  // v2.4: when this correction lands on a row that was generated WITH learned
+  // corrections injected, the injected lesson(s) failed -> flag them so they get
+  // down-weighted/retired. All optional; absent = nothing to flag (v1 behavior).
+  rowId?: string | null;
+  injectedCorrectionIds?: string[] | null;
+  correctedField?: "title" | "specifics" | "both";
 }) {
   try {
     const { data: { user } } = await supabase.auth.getUser();
@@ -100,6 +109,18 @@ async function captureCorrection(input: {
       correction_note: input.correctionNote ?? null,
       image_urls: input.imageUrls ?? null,
     });
+    // v2.4: if this row was shaped by injected lessons and got re-corrected on the
+    // same kind of field, the lesson failed -> mark it (bumps times_failed, retires
+    // at threshold, feeds the re-correction-rate metric). Fire-and-forget.
+    if (input.rowId && input.injectedCorrectionIds?.length) {
+      supabase.rpc("mark_corrections_re_corrected", {
+        p_row_id: input.rowId,
+        p_field: input.correctedField ?? "both",
+        p_ids: input.injectedCorrectionIds,
+      }).then(({ error }) => {
+        if (error) console.warn("mark_corrections_re_corrected skipped (non-blocking):", error.message);
+      });
+    }
     // Fire-and-forget: embed the new correction(s) so semantic retrieval can
     // surface them later. Never awaited into the UI path; failures are ignored.
     supabase.functions
@@ -388,6 +409,10 @@ export function EbayBatchPanel({
         setCorrectionPrompt("");
       }
       // Capture the human-driven correction so generation can learn from it.
+      const refTitleChanged = refined.title &&
+        String(refined.title).substring(0, 80) !== row.title;
+      const refSpecsChanged = refined.itemSpecifics &&
+        JSON.stringify(refined.itemSpecifics) !== JSON.stringify(row.item_specifics);
       captureCorrection({
         source: "refine",
         category: row.category,
@@ -397,6 +422,10 @@ export function EbayBatchPanel({
         correctedSpecifics: refined.itemSpecifics || row.item_specifics,
         correctionNote: promptText.trim(),
         imageUrls: row.image_urls,
+        rowId: row.id,
+        injectedCorrectionIds: row.injected_correction_ids,
+        correctedField: refTitleChanged && refSpecsChanged
+          ? "both" : refTitleChanged ? "title" : "specifics",
       });
       toast({ title: "Listing Updated", description: "AI refined your listing" });
     } catch (error) {
@@ -497,6 +526,10 @@ export function EbayBatchPanel({
         wrongSpecifics: original.item_specifics,
         correctedSpecifics: cl.itemSpecifics || original.item_specifics,
         imageUrls: original.image_urls,
+        rowId: original.id,
+        injectedCorrectionIds: original.injected_correction_ids,
+        correctedField: titleChanged && specsChanged
+          ? "both" : titleChanged ? "title" : "specifics",
       });
     }
     onRowsChange(prev => prev.map(r => r.id === verifyPanel.row.id ? {
