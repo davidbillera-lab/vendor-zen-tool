@@ -617,15 +617,29 @@ export default function CreateListing() {
               promotion_rate: parseFloat(promotionRate),
               promotion_type: promotionType,
               custom_sku: customSku.trim() || null,
+              injected_correction_ids: listing.injectedCorrectionIds?.length
+                ? listing.injectedCorrectionIds
+                : null,
               created_by: user?.id
             })
             .select()
             .single();
-          
+
           if (!error && data) {
             setEbayRows(prev => [...prev, data]);
             setEbayLotNumber(prev => prev + 1);
             setCustomSku("");
+            // v2.4: durably log which corrections shaped this row + bump times_injected.
+            // Fire-and-forget — a logging failure must never block the listing flow.
+            if (listing.injectedCorrectionIds?.length) {
+              supabase.rpc('record_correction_injections', {
+                p_row_id: String(data.id),
+                p_platform: 'ebay',
+                p_ids: listing.injectedCorrectionIds,
+              }).then(({ error: rpcErr }) => {
+                if (rpcErr) console.warn('record_correction_injections skipped (non-blocking):', rpcErr.message);
+              });
+            }
           } else if (error) {
             // Never swallow a save failure silently — a rejected insert here
             // looks exactly like "nothing saves" to the operator (no row added,
