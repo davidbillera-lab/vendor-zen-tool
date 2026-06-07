@@ -39,18 +39,16 @@ export function DoaCredentialsCard() {
       return;
     }
     setIsSaving(true);
-    const { error } = await supabase
-      .from("user_doa_credentials" as any)
-      .upsert(
-        {
-          user_id: user.id,
+    const { error } = await supabase.functions.invoke("save-credentials", {
+      body: {
+        platform: "doa",
+        fields: {
           doa_email: email.trim(),
           doa_password: password.trim(),
           doa_first_lot_url: firstLotUrl.trim() || null,
-          updated_at: new Date().toISOString(),
         },
-        { onConflict: "user_id" }
-      );
+      },
+    });
     setIsSaving(false);
     if (error) {
       toast.error("Failed to save: " + error.message);

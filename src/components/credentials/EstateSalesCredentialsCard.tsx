@@ -37,17 +37,15 @@ export function EstateSalesCredentialsCard() {
       return;
     }
     setIsSaving(true);
-    const { error } = await supabase
-      .from("user_estatesales_credentials" as any)
-      .upsert(
-        {
-          user_id: user.id,
+    const { error } = await supabase.functions.invoke("save-credentials", {
+      body: {
+        platform: "estatesales",
+        fields: {
           estatesales_email: email.trim(),
           estatesales_password: password.trim(),
-          updated_at: new Date().toISOString(),
         },
-        { onConflict: "user_id" }
-      );
+      },
+    });
     setIsSaving(false);
     if (error) {
       toast.error("Failed to save: " + error.message);
