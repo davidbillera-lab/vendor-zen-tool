@@ -27,3 +27,8 @@ dist-ssr
 
 # Agent scratch (brainstorm sessions, not project source)
 .superpowers/
+.codex-qc/
+
+# Agent runtime state — not source
+*.progress.json
+*.lnk

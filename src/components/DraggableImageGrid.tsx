@@ -90,7 +90,7 @@ export function DraggableImageGrid({
               alt={`Image ${i + 1}`}
               className={cn(sizeClasses[size], "object-cover rounded-lg border border-border cursor-pointer hover:opacity-90 transition-opacity")}
               draggable={false}
-              onClick={() => setEditorIndex(i)}
+              onClick={() => showEnhance && setEditorIndex(i)}
             />
 
             {/* Drag Handle */}
@@ -107,16 +107,18 @@ export function DraggableImageGrid({
 
             {/* Quick action buttons (visible on hover) */}
             <div className="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditorIndex(i);
-                }}
-                className="h-6 w-6 bg-primary rounded-full flex items-center justify-center hover:bg-primary/80 shadow-md"
-                title="Edit image"
-              >
-                <Pencil className="h-3 w-3 text-white" />
-              </button>
+              {showEnhance && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditorIndex(i);
+                  }}
+                  className="h-6 w-6 bg-primary rounded-full flex items-center justify-center hover:bg-primary/80 shadow-md"
+                  title="Edit image"
+                >
+                  <Pencil className="h-3 w-3 text-white" />
+                </button>
+              )}
               {onRemove && (
                 <button
                   onClick={(e) => {

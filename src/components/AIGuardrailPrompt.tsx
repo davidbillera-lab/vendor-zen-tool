@@ -50,15 +50,14 @@ export function AIGuardrailPrompt({ projectId, masterPrompt, onMasterPromptChang
                 size="sm"
                 onClick={async () => {
                   setSaving(true);
-                  try {
-                    await supabase.from('la_batches').update({ master_prompt: null }).eq('id', projectId);
+                  const { error } = await supabase.from('la_batches').update({ master_prompt: null }).eq('id', projectId);
+                  setSaving(false);
+                  if (error) {
+                    toast({ title: "Failed to clear", variant: "destructive" });
+                  } else {
                     onMasterPromptChange("");
                     setDraft("");
                     toast({ title: "Guardrail prompt cleared" });
-                  } catch {
-                    toast({ title: "Failed to clear", variant: "destructive" });
-                  } finally {
-                    setSaving(false);
                   }
                 }}
                 disabled={saving}
@@ -72,14 +71,13 @@ export function AIGuardrailPrompt({ projectId, masterPrompt, onMasterPromptChang
               onClick={async () => {
                 if (!draft.trim()) return;
                 setSaving(true);
-                try {
-                  await supabase.from('la_batches').update({ master_prompt: draft.trim() }).eq('id', projectId);
-                  onMasterPromptChange(draft.trim());
-                  toast({ title: "✅ Guardrail prompt saved", description: "All AI calls for this project will use this prompt" });
-                } catch {
+                const { error } = await supabase.from('la_batches').update({ master_prompt: draft.trim() }).eq('id', projectId);
+                setSaving(false);
+                if (error) {
                   toast({ title: "Failed to save", variant: "destructive" });
-                } finally {
-                  setSaving(false);
+                } else {
+                  onMasterPromptChange(draft.trim());
+                  toast({ title: "Guardrail prompt saved", description: "All AI calls for this project will use this prompt" });
                 }
               }}
               disabled={saving || !draft.trim()}

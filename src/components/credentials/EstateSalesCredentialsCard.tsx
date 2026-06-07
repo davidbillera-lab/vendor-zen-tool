@@ -32,19 +32,15 @@ export function EstateSalesCredentialsCard() {
 
   const handleSave = async () => {
     if (!user) return;
-    if (!email || !password) {
+    if (!email || (!isConnected && !password)) {
       toast.error("Enter email and password");
       return;
     }
     setIsSaving(true);
+    const fields: Record<string, string> = { estatesales_email: email.trim() };
+    if (password.trim()) fields.estatesales_password = password.trim();
     const { error } = await supabase.functions.invoke("save-credentials", {
-      body: {
-        platform: "estatesales",
-        fields: {
-          estatesales_email: email.trim(),
-          estatesales_password: password.trim(),
-        },
-      },
+      body: { platform: "estatesales", fields },
     });
     setIsSaving(false);
     if (error) {

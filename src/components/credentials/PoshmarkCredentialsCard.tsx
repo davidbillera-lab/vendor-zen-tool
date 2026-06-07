@@ -32,19 +32,15 @@ export function PoshmarkCredentialsCard() {
 
   const handleSave = async () => {
     if (!user) return;
-    if (!email || !password) {
+    if (!email || (!isConnected && !password)) {
       toast.error("Enter both email and password");
       return;
     }
     setIsSaving(true);
+    const fields: Record<string, string> = { poshmark_email: email.trim() };
+    if (password.trim()) fields.poshmark_password = password.trim();
     const { error } = await supabase.functions.invoke("save-credentials", {
-      body: {
-        platform: "poshmark",
-        fields: {
-          poshmark_email: email.trim(),
-          poshmark_password: password.trim(),
-        },
-      },
+      body: { platform: "poshmark", fields },
     });
     setIsSaving(false);
     if (error) {

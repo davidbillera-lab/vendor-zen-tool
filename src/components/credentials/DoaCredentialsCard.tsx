@@ -34,20 +34,18 @@ export function DoaCredentialsCard() {
 
   const handleSave = async () => {
     if (!user) return;
-    if (!email || !password) {
+    if (!email || (!isConnected && !password)) {
       toast.error("Enter email and password");
       return;
     }
     setIsSaving(true);
+    const fields: Record<string, string | null> = {
+      doa_email: email.trim(),
+      doa_first_lot_url: firstLotUrl.trim() || null,
+    };
+    if (password.trim()) fields.doa_password = password.trim();
     const { error } = await supabase.functions.invoke("save-credentials", {
-      body: {
-        platform: "doa",
-        fields: {
-          doa_email: email.trim(),
-          doa_password: password.trim(),
-          doa_first_lot_url: firstLotUrl.trim() || null,
-        },
-      },
+      body: { platform: "doa", fields },
     });
     setIsSaving(false);
     if (error) {

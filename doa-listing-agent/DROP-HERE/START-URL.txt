@@ -1,5 +1,1 @@
- ====================================================
-  All lots completed successfully
- ====================================================
-
-https://denveronlineauctions.com/sub-admin/EditAuction?id=1767397&PartyId=115https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXXXX&PartyId=115
+https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXXXX&PartyId=115

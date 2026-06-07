@@ -32,19 +32,15 @@ export function MercariCredentialsCard() {
 
   const handleSave = async () => {
     if (!user) return;
-    if (!email || !password) {
+    if (!email || (!isConnected && !password)) {
       toast.error("Enter both email and password");
       return;
     }
     setIsSaving(true);
+    const fields: Record<string, string> = { mercari_email: email.trim() };
+    if (password.trim()) fields.mercari_password = password.trim();
     const { error } = await supabase.functions.invoke("save-credentials", {
-      body: {
-        platform: "mercari",
-        fields: {
-          mercari_email: email.trim(),
-          mercari_password: password.trim(),
-        },
-      },
+      body: { platform: "mercari", fields },
     });
     setIsSaving(false);
     if (error) {
