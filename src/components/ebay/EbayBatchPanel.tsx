@@ -327,7 +327,7 @@ export function EbayBatchPanel({
       updates.price = isNaN(parsed) ? row.price : parsed;
     }
     await supabase.from('ebay_batch_rows').update(updates).eq('id', inlineEdit.id);
-    onRowsChange(prev => prev.map(r => r.id === inlineEdit.id ? { ...r, ...updates } : r));
+    onRowsChange(rows.map(r => r.id === inlineEdit.id ? { ...r, ...updates } : r));
     setInlineEdit(null);
   };
 
@@ -388,7 +388,7 @@ export function EbayBatchPanel({
 
       const refined = data.listing;
       if (targetRow) {
-        onRowsChange(prev => prev.map(r => r.id === row.id ? {
+        onRowsChange(rows.map(r => r.id === row.id ? {
           ...r,
           title: (refined.title || r.title).substring(0, 80),
           description: refined.description || r.description,
@@ -532,7 +532,7 @@ export function EbayBatchPanel({
           ? "both" : titleChanged ? "title" : "specifics",
       });
     }
-    onRowsChange(prev => prev.map(r => r.id === verifyPanel.row.id ? {
+    onRowsChange(rows.map(r => r.id === verifyPanel.row.id ? {
       ...r,
       title: cl.title ? String(cl.title).substring(0, 80) : r.title,
       description: cl.description || r.description,
@@ -1391,7 +1391,7 @@ export function EbayBatchPanel({
                      || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
           if (match && result.id) {
             const missingSpec = match[1].trim();
-            onRowsChange(prev => prev.map(r => r.id === result.id
+            onRowsChange(rows.map(r => r.id === result.id
               ? { ...r, status: "error", item_specifics: { ...r.item_specifics, [missingSpec]: "" } }
               : r
             ));
@@ -1431,7 +1431,7 @@ export function EbayBatchPanel({
       }
       const { succeeded, failed, results } = data;
       if (succeeded > 0) {
-        onRowsChange(prev => prev.filter(r => r.id !== row.id));
+        onRowsChange(rows.filter(r => r.id !== row.id));
         setRowErrors(prev => { const next = { ...prev }; delete next[row.id]; return next; });
         setSpecFixes(prev => { const next = { ...prev }; delete next[row.id]; return next; });
         toast({ title: "Pushed!", description: "Listing is now in your Seller Hub drafts." });
@@ -1443,7 +1443,7 @@ export function EbayBatchPanel({
         if (match) {
           const missingSpec = match[1].trim();
           const updated = { ...row, item_specifics: { ...row.item_specifics, [missingSpec]: "" } };
-          onRowsChange(prev => prev.map(r => r.id === row.id ? updated : r));
+          onRowsChange(rows.map(r => r.id === row.id ? updated : r));
           if (editingRow?.id === row.id) setEditingRow(updated);
         }
         setRowErrors(prev => ({ ...prev, [row.id]: err }));
@@ -1679,7 +1679,7 @@ export function EbayBatchPanel({
               <Button
                 className="flex-1 bg-green-600 hover:bg-green-700 text-white"
                 onClick={() => {
-                  onRowsChange(prev => prev.filter(r => r.status !== "published"));
+                  onRowsChange(rows.filter(r => r.status !== "published"));
                   setHasPublished(false);
                   setShowRemovePublishedDialog(false);
                 }}
@@ -1980,7 +1980,7 @@ export function EbayBatchPanel({
                             ...row,
                             item_specifics: { ...row.item_specifics, ...fixes },
                           };
-                          onRowsChange(prev => prev.map(r => r.id === row.id ? updatedRow : r));
+                          onRowsChange(rows.map(r => r.id === row.id ? updatedRow : r));
                           setSpecFixes(prev => { const n = { ...prev }; delete n[row.id]; return n; });
                           handleRetrySingleRow(updatedRow);
                         }}
