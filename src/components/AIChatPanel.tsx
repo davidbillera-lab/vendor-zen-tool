@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { MessageCircle, X, Send, Loader2, Bot, ChevronDown } from "lucide-react";
+import { X, Send, Loader2, Bot, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -49,6 +49,12 @@ export function AIChatPanel() {
       setTimeout(() => textareaRef.current?.focus(), 100);
     }
   }, [open]);
+
+  useEffect(() => {
+    const handler = () => setOpen(true);
+    window.addEventListener("vzt:open-chat", handler);
+    return () => window.removeEventListener("vzt:open-chat", handler);
+  }, []);
 
   const sendMessage = async (text?: string) => {
     const content = (text ?? input).trim();
@@ -111,17 +117,6 @@ export function AIChatPanel() {
 
   return (
     <>
-      {/* Floating button */}
-      {!open && (
-        <button
-          onClick={() => setOpen(true)}
-          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-full bg-primary px-4 py-3 text-primary-foreground shadow-lg hover:bg-primary/90 transition-all duration-200 hover:scale-105"
-        >
-          <Bot className="h-5 w-5" />
-          <span className="text-sm font-medium">Ask Claude</span>
-        </button>
-      )}
-
       {/* Chat panel */}
       {open && (
         <div className="fixed bottom-6 right-6 z-50 flex flex-col w-[380px] max-h-[600px] rounded-2xl border border-border bg-background shadow-2xl overflow-hidden">

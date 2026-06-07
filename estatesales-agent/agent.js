@@ -322,6 +322,8 @@ async function scrapeLots(page) {
  * Downloads DOA images to disk, then re-uploads them to EstateSales.net.
  */
 async function uploadLots(page, lots) {
+  let succeeded = 0;
+  const failedLots = [];
   console.log('[agent] Logging into EstateSales.net...');
   await page.goto('https://www.estatesales.net/login', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
   await screenshot(page, 'es-login-page');
@@ -513,17 +515,22 @@ async function uploadLots(page, lots) {
         await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
         await screenshot(page, `es-after-save-lot-${i + 1}`);
         console.log(`[agent]   Lot ${i + 1} saved: "${lot.title.slice(0, 60)}"`);
+        succeeded++;
       } else {
         await screenshot(page, `es-no-save-button-lot-${i + 1}`);
-        console.warn(`[agent]   WARNING: Could not find save/submit button for lot ${i + 1}`);
+        const msg = `Could not find save/submit button for lot ${i + 1}`;
+        console.warn(`[agent]   WARNING: ${msg}`);
+        failedLots.push({ index: i + 1, title: lot.title, error: msg });
       }
 
     } catch (err) {
       await screenshot(page, `es-error-lot-${i + 1}`);
       console.error(`[agent]   ERROR uploading lot ${i + 1}: ${err.message}`);
-      // Non-fatal per lot — continue with next lot
+      failedLots.push({ index: i + 1, title: lot.title, error: err.message });
     }
   }
+
+  return { succeeded, failed: failedLots.length, failedLots };
 }
 
 /**
@@ -636,8 +643,19 @@ async function run() {
 
     // ── Phase 2: EstateSales upload ──────────────────────────────────────────
     console.log('\n[agent] ── Phase 2: EstateSales Upload ─────────────────────');
-    await uploadLots(page, lots);
-    console.log('\n[agent] Phase 2 complete — all lots processed.');
+    const uploadResult = await uploadLots(page, lots);
+    console.log(`\n[agent] Phase 2 complete — ${uploadResult.succeeded} succeeded, ${uploadResult.failed} failed.`);
+    if (uploadResult.failed > 0) {
+      const summary = uploadResult.failedLots.map(l => `Lot ${l.index}: ${l.error}`).join('; ');
+      if (uploadResult.succeeded === 0) {
+        throw new Error(`All ${uploadResult.failed} lot(s) failed to upload. ${summary}`);
+      }
+      // Partial success — throw a typed error so the entry point can distinguish
+      const partialErr = new Error(`${uploadResult.failed} of ${lots.length} lot(s) failed: ${summary}`);
+      partialErr.partial = true;
+      partialErr.succeeded = uploadResult.succeeded;
+      throw partialErr;
+    }
 
   } catch (err) {
     await screenshot(page, 'error-state');
@@ -656,6 +674,11 @@ run()
     process.exit(0);
   })
   .catch(async (err) => {
+    if (err.partial) {
+      console.warn('\n[agent] Partial failure:', err.message);
+      await updateJobStatus('partial_failed', err.message);
+      process.exit(0);
+    }
     console.error('\n[agent] FATAL:', err.message);
     await updateJobStatus('failed', err.message);
     process.exit(1);

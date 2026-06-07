@@ -13,10 +13,31 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { webcrypto } from 'node:crypto';
 
-const JOB_ID              = process.env.JOB_ID;
-const SUPABASE_URL        = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const JOB_ID                      = process.env.JOB_ID;
+const SUPABASE_URL                = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY        = process.env.SUPABASE_SERVICE_KEY;
+const CREDENTIALS_ENCRYPTION_KEY  = process.env.CREDENTIALS_ENCRYPTION_KEY;
+
+/**
+ * Decrypts a value that was encrypted by the save-credentials edge function.
+ * Falls back to returning the value as-is for legacy plaintext rows.
+ */
+async function decryptCredential(value, keyBase64) {
+  if (!keyBase64 || !value) return value;
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { return value; }
+  if (!parsed?.iv || !parsed?.ciphertext) return value;
+  const keyBytes = Buffer.from(keyBase64, 'base64');
+  const key = await webcrypto.subtle.importKey(
+    'raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt'],
+  );
+  const iv         = Buffer.from(parsed.iv, 'base64');
+  const ciphertext = Buffer.from(parsed.ciphertext, 'base64');
+  const plaintext  = await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return new TextDecoder().decode(plaintext);
+}
 
 // ── Validate required env vars ────────────────────────────────────────────────
 
@@ -95,13 +116,13 @@ if (esError || !esCreds) {
   process.exit(1);
 }
 
-// ── Inject credentials and job context into process.env ───────────────────────
+// ── Decrypt and inject credentials into process.env ──────────────────────────
 
 process.env.DOA_EMAIL             = doaCreds.doa_email;
-process.env.DOA_PASSWORD          = doaCreds.doa_password;
+process.env.DOA_PASSWORD          = await decryptCredential(doaCreds.doa_password, CREDENTIALS_ENCRYPTION_KEY);
 process.env.DOA_URL               = job.doa_url;
 process.env.ESTATESALES_EMAIL     = esCreds.estatesales_email;
-process.env.ESTATESALES_PASSWORD  = esCreds.estatesales_password;
+process.env.ESTATESALES_PASSWORD  = await decryptCredential(esCreds.estatesales_password, CREDENTIALS_ENCRYPTION_KEY);
 process.env.ESTATESALES_URL       = job.estatesales_url;
 
 console.log(`[runAgent] Credentials loaded. Starting job ${JOB_ID}...`);

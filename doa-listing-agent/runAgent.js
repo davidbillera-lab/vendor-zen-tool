@@ -15,11 +15,32 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { webcrypto } from 'node:crypto';
 
-const USER_ID         = process.env.USER_ID;
-const BATCH_ID        = process.env.BATCH_ID;
-const SUPABASE_URL    = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const USER_ID                     = process.env.USER_ID;
+const BATCH_ID                    = process.env.BATCH_ID;
+const SUPABASE_URL                = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY        = process.env.SUPABASE_SERVICE_KEY;
+const CREDENTIALS_ENCRYPTION_KEY  = process.env.CREDENTIALS_ENCRYPTION_KEY;
+
+/**
+ * Decrypts a value encrypted by the save-credentials edge function.
+ * Returns the value unchanged for legacy plaintext rows.
+ */
+async function decryptCredential(value, keyBase64) {
+  if (!keyBase64 || !value) return value;
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { return value; }
+  if (!parsed?.iv || !parsed?.ciphertext) return value;
+  const keyBytes = Buffer.from(keyBase64, 'base64');
+  const key = await webcrypto.subtle.importKey(
+    'raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt'],
+  );
+  const iv         = Buffer.from(parsed.iv, 'base64');
+  const ciphertext = Buffer.from(parsed.ciphertext, 'base64');
+  const plaintext  = await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return new TextDecoder().decode(plaintext);
+}
 
 // ── Validate required env vars ────────────────────────────────────────────────
 
@@ -58,12 +79,10 @@ if (error || !creds) {
   process.exit(1);
 }
 
-// ── Inject credentials into process.env so agent.js picks them up ─────────────
-// agent.js reads DOA_EMAIL / DOA_PASSWORD via dotenv — setting them here
-// before the dynamic import means doaAgent.js requires zero changes.
+// ── Decrypt and inject credentials into process.env ──────────────────────────
 
 process.env.DOA_EMAIL    = creds.doa_email;
-process.env.DOA_PASSWORD = creds.doa_password;
+process.env.DOA_PASSWORD = await decryptCredential(creds.doa_password, CREDENTIALS_ENCRYPTION_KEY);
 
 // ── Push CLI args so agent.js enters --supabase --batch mode ──────────────────
 

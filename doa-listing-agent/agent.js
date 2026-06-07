@@ -40,7 +40,10 @@
  * -----------------------------------------------------------------------------
  */
 
-import 'dotenv/config';
+import { fileURLToPath } from 'url';
+import path from 'path';
+import dotenv from 'dotenv';
+dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '.env') });
 import readline from 'readline';
 import chalk    from 'chalk';
 import log      from './logger.js';

@@ -34,7 +34,6 @@ interface TestResult {
 }
 
 export function EbayOAuthManager() {
-  const [ruName, setRuName] = useState("");
   const [authCode, setAuthCode] = useState("");
   const [diagnosis, setDiagnosis] = useState<DiagnoseResult | null>(null);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
@@ -79,15 +78,9 @@ export function EbayOAuthManager() {
   };
 
   const handleGetAuthUrl = async () => {
-    if (!ruName.trim()) {
-      toast.error("Enter your RuName (Redirect URL Name) from eBay Developer Portal");
-      return;
-    }
     setLoading("authUrl");
     try {
-      const result = await callOAuth("get_auth_url", {
-        redirect_uri: ruName.trim(),
-      });
+      const result = await callOAuth("get_auth_url", {});
       if (result.error) {
         toast.error(result.error);
         return;
@@ -110,24 +103,18 @@ export function EbayOAuthManager() {
     try {
       const result = await callOAuth("exchange_code", {
         code: authCode.trim(),
-        redirect_uri: ruName.trim(),
       });
       if (result.error) {
         toast.error(`${result.error}: ${result.details || ""}`);
         return;
       }
-      toast.success(
-        "OAuth tokens received! Copy the refresh token and save it as EBAY_REFRESH_TOKEN."
-      );
+      toast.success("eBay account connected!");
+      setAuthCode("");
       setTestResult({
         success: true,
-        message: `Refresh token received (${result.refresh_token?.length || 0} chars). Save it as EBAY_REFRESH_TOKEN secret.`,
+        message: "eBay account connected successfully.",
         token_type_hint: "✅ OAuth 2.0 User Token",
       });
-      // Show the token so they can copy it
-      if (result.refresh_token) {
-        setAuthCode(result.refresh_token);
-      }
     } catch (e: any) {
       toast.error(e.message);
     } finally {
@@ -234,22 +221,14 @@ export function EbayOAuthManager() {
         </p>
 
         <div className="space-y-2">
-          <Label htmlFor="runame">RuName (Redirect URL Name from eBay Developer Portal)</Label>
-          <div className="flex gap-2">
-            <Input
-              id="runame"
-              placeholder="e.g. Your_App_Name-YourNam-SBX-abc123-defg"
-              value={ruName}
-              onChange={(e) => setRuName(e.target.value)}
-            />
-            <Button
-              onClick={handleGetAuthUrl}
-              disabled={loading === "authUrl"}
-              variant="outline"
-            >
-              {loading === "authUrl" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Get URL"}
-            </Button>
-          </div>
+          <Button
+            onClick={handleGetAuthUrl}
+            disabled={loading === "authUrl"}
+            variant="outline"
+          >
+            {loading === "authUrl" ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+            Get eBay Auth URL
+          </Button>
         </div>
 
         {authUrl && (
@@ -301,27 +280,6 @@ export function EbayOAuthManager() {
           </div>
         </div>
 
-        {authCode && authCode.length > 100 && (
-          <div className="rounded-md bg-success/10 border border-success/30 p-3 text-sm">
-            <p className="font-medium text-success flex items-center gap-2">
-              <CheckCircle className="h-4 w-4" />
-              Refresh token received! Copy it and save as EBAY_REFRESH_TOKEN:
-            </p>
-            <div className="mt-2 flex gap-2">
-              <Input value={authCode} readOnly className="font-mono text-xs" />
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => {
-                  navigator.clipboard.writeText(authCode);
-                  toast.success("Refresh token copied!");
-                }}
-              >
-                <Copy className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

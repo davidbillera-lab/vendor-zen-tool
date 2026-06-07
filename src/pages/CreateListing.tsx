@@ -45,7 +45,7 @@ import { ProjectManager, type Project } from "@/components/BatchManager";
 import { LALotEditor } from "@/components/LALotEditor";
 import { DenverLotEditor } from "@/components/DenverLotEditor";
 import { supabase } from "@/integrations/supabase/client";
-import { PhotoStudio } from "@/components/PhotoStudio";
+import { ImageEditor } from "@/components/ImageEditor";
 
 import { saveAs } from "file-saver";
 import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
@@ -106,8 +106,10 @@ export default function CreateListing() {
   const [copied, setCopied] = useState<string | null>(null);
   
   // eBay specific
-  const [promotionRate, setPromotionRate] = useState("5.0");
+  const [promotionRate, setPromotionRate] = useState("2.1");
   const [promotionType, setPromotionType] = useState<"flat" | "fluctuating">("flat");
+  // Optional internal/Custom SKU — lands in eBay's "Custom Label (SKU)". Never required, never blocks a push.
+  const [customSku, setCustomSku] = useState("");
   
   // Facebook specific
   const [selectedGroups, setSelectedGroups] = useState<string[]>(DEFAULT_FB_GROUPS);
@@ -119,8 +121,8 @@ export default function CreateListing() {
   const [savingLot, setSavingLot] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [initialProjectLoaded, setInitialProjectLoaded] = useState(false);
-  const [photoStudioOpen, setPhotoStudioOpen] = useState(false);
-  const [photoStudioIndex, setPhotoStudioIndex] = useState(0);
+  const [imageEditorOpen, setImageEditorOpen] = useState(false);
+  const [imageEditorIndex, setImageEditorIndex] = useState(0);
   
   // Load project from URL parameter
   useEffect(() => {
@@ -302,6 +304,7 @@ export default function CreateListing() {
           .from('ebay_batch_rows')
           .select('*')
           .eq('batch_id', selectedProject.id)
+          .neq('status', 'archived')
           .order('lot_number', { ascending: true });
         
         if (error) throw error;
@@ -514,7 +517,7 @@ export default function CreateListing() {
     return new File([array], filename, { type: mime });
   }
 
-  function handlePhotoStudioSave(updatedUrls: string[]) {
+  function handleImageEditorSave(updatedUrls: string[]) {
     setImages(prev => {
       prev.forEach(img => { if (img.preview.startsWith('blob:')) URL.revokeObjectURL(img.preview); });
       return updatedUrls.map((url, i) => {
@@ -524,7 +527,7 @@ export default function CreateListing() {
         return { file: newFile, preview: url, url: original?.url };
       });
     });
-    setPhotoStudioOpen(false);
+    setImageEditorOpen(false);
   }
 
   const handlePlatformClick = async (platform: Platform) => {
@@ -613,14 +616,40 @@ export default function CreateListing() {
               return_shipping: ebayShippingSettings.returnShipping,
               promotion_rate: parseFloat(promotionRate),
               promotion_type: promotionType,
+              custom_sku: customSku.trim() || null,
+              injected_correction_ids: listing.injectedCorrectionIds?.length
+                ? listing.injectedCorrectionIds
+                : null,
               created_by: user?.id
             })
             .select()
             .single();
-          
+
           if (!error && data) {
             setEbayRows(prev => [...prev, data]);
             setEbayLotNumber(prev => prev + 1);
+            setCustomSku("");
+            // v2.4: durably log which corrections shaped this row + bump times_injected.
+            // Fire-and-forget — a logging failure must never block the listing flow.
+            if (listing.injectedCorrectionIds?.length) {
+              supabase.rpc('record_correction_injections', {
+                p_row_id: String(data.id),
+                p_platform: 'ebay',
+                p_ids: listing.injectedCorrectionIds,
+              }).then(({ error: rpcErr }) => {
+                if (rpcErr) console.warn('record_correction_injections skipped (non-blocking):', rpcErr.message);
+              });
+            }
+          } else if (error) {
+            // Never swallow a save failure silently — a rejected insert here
+            // looks exactly like "nothing saves" to the operator (no row added,
+            // lot number stuck, no eBay push button). Surface it loudly.
+            console.error('eBay batch row save failed:', error);
+            toast({
+              title: "Listing didn't save to eBay batch",
+              description: error.message || "The item was not added to the batch. Try again or contact support.",
+              variant: "destructive"
+            });
           }
         }
       }
@@ -988,10 +1017,11 @@ export default function CreateListing() {
         title: generatedListing.title,
         description: generatedListing.description,
         price: generatedListing.price,
+        custom_sku: customSku.trim() || null,
       }).eq('id', lastEbayRow.id);
     }, 600);
     return () => { if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current); };
-  }, [generatedListing, ebayRows]);
+  }, [generatedListing, ebayRows, customSku]);
 
   const [downloadingImages, setDownloadingImages] = useState(false);
   const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
@@ -1205,10 +1235,11 @@ export default function CreateListing() {
                 {isDragging ? "Drop photos here!" : "Add Photos"}
               </h3>
               <p className="text-muted-foreground text-sm mb-4">
-                Drop files, browse, or take a photo
+                Snap several photos in a row, or upload from your library
               </p>
               <div className="flex gap-3">
-                <CameraCapture 
+                <CameraCapture
+                  variant="default"
                   onCapture={(files) => {
                     const newImages = files.map(file => ({
                       file,
@@ -1239,10 +1270,20 @@ export default function CreateListing() {
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">{images.length} photo(s)</span>
                 <div className="flex items-center gap-2">
+                  <CameraCapture
+                    size="sm"
+                    onCapture={(files) => {
+                      const newImages = files.map(file => ({
+                        file,
+                        preview: URL.createObjectURL(file)
+                      }));
+                      setImages(prev => [...prev, ...newImages]);
+                    }}
+                  />
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => { setPhotoStudioIndex(0); setPhotoStudioOpen(true); }}
+                    onClick={() => { setImageEditorIndex(0); setImageEditorOpen(true); }}
                   >
                     <Pencil className="h-3 w-3 mr-1" />
                     Prep Photos
@@ -1257,7 +1298,7 @@ export default function CreateListing() {
                   <div key={index} className="relative aspect-square rounded-lg overflow-hidden border border-border group">
                     <img src={img.preview} alt="" className="w-full h-full object-cover" />
                     <button
-                      onClick={() => { setPhotoStudioIndex(index); setPhotoStudioOpen(true); }}
+                      onClick={() => { setImageEditorIndex(index); setImageEditorOpen(true); }}
                       className="absolute top-1 left-1 p-1 bg-primary/80 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
                       title="Edit in Photo Studio"
                     >
@@ -1800,10 +1841,11 @@ export default function CreateListing() {
                       </Button>
                     )}
                   </div>
-                  <Input
+                  <Textarea
                     value={generatedListing.title}
                     onChange={e => setGeneratedListing(prev => prev ? { ...prev, title: e.target.value } : prev)}
-                    className="font-medium"
+                    className="font-medium resize-none"
+                    rows={2}
                   />
                   <span className="text-xs text-muted-foreground">{generatedListing.title.length} chars</span>
                 </div>
@@ -1837,6 +1879,17 @@ export default function CreateListing() {
                           onChange={e => setGeneratedListing(prev => prev ? { ...prev, price: parseFloat(e.target.value) || 0 } : prev)}
                           className="font-semibold text-primary w-28"
                         />
+                        {generatedListing.priceComps?.source === "ebay_active" && generatedListing.priceComps.low != null && (
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Market range ${generatedListing.priceComps.low}–${generatedListing.priceComps.high}
+                            {generatedListing.priceComps.sampleSize ? ` · ${generatedListing.priceComps.sampleSize} eBay listings` : ''}
+                          </p>
+                        )}
+                        {generatedListing.priceComps?.source === "ai_estimate" && (
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            AI estimate — no live comps found
+                          </p>
+                        )}
                       </div>
                     )}
                     {generatedListing.lowEst && (
@@ -1972,6 +2025,18 @@ export default function CreateListing() {
                       itemSpecifics={ebayItemSpecifics}
                       onChange={setEbayItemSpecifics}
                     />
+                    {/* Custom SKU — shown as the last item specific. Optional, never blocks a push. */}
+                    <div className="mt-4 pt-4 border-t border-border">
+                      <Label className="text-xs">Custom SKU (optional)</Label>
+                      <Input
+                        value={customSku}
+                        onChange={(e) => setCustomSku(e.target.value)}
+                        placeholder="Your internal SKU — leave blank to skip"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Maps to eBay's "Custom Label (SKU)". Optional.
+                      </p>
+                    </div>
                   </div>
 
                   {/* Shipping & Returns */}
@@ -2074,12 +2139,12 @@ export default function CreateListing() {
         />
       )}
 
-      {photoStudioOpen && (
-        <PhotoStudio
+      {imageEditorOpen && (
+        <ImageEditor
           images={images.map(img => img.preview)}
-          initialIndex={photoStudioIndex}
-          onSave={handlePhotoStudioSave}
-          onCancel={() => setPhotoStudioOpen(false)}
+          initialIndex={imageEditorIndex}
+          onSave={handleImageEditorSave}
+          onCancel={() => setImageEditorOpen(false)}
         />
       )}
     </MainLayout>

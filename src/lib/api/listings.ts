@@ -19,6 +19,15 @@ export interface GeneratedListing {
   categoryId?: number; // eBay numeric category ID
   condition?: string;
   itemSpecifics?: Record<string, string>;
+  // eBay live pricing comps (set by generate-listing; price is derived from these)
+  compQuery?: string;
+  priceComps?: {
+    source: "ebay_active" | "ebay_sold" | "ai_estimate";
+    suggested?: number;
+    low?: number;
+    high?: number;
+    sampleSize?: number;
+  };
   // LiveAuctioneers specific
   lowEst?: number;
   highEst?: number;
@@ -37,6 +46,9 @@ export interface GeneratedListing {
   locationNickname?: string;
   // Denver specific
   startingBid?: number;
+  // v2.4: ids of the learned corrections injected into this generation, so the
+  // saved row can be tagged and re-corrections traced back to the lesson.
+  injectedCorrectionIds?: string[];
 }
 
 export async function generateListing(
@@ -67,7 +79,12 @@ export async function generateListing(
     throw new Error(data.error);
   }
 
-  return data.listing;
+  return {
+    ...data.listing,
+    injectedCorrectionIds: Array.isArray(data.injectedCorrectionIds)
+      ? data.injectedCorrectionIds
+      : [],
+  };
 }
 
 // Compress image before upload for faster processing
@@ -241,6 +258,7 @@ export async function deleteListing(id: string) {
 export function generateEbayCSV(listings: any[]): string {
   const headers = [
     'Action(SiteID=US|Country=US|Currency=USD|Version=1193)',
+    'CustomLabel',
     'Title',
     'Description',
     'StartPrice',
@@ -253,6 +271,7 @@ export function generateEbayCSV(listings: any[]): string {
 
   const rows = listings.map(l => [
     'Add',
+    (l.custom_sku && String(l.custom_sku).trim()) || (l.lot_number ?? '') , // Custom Label (SKU) — prefer user SKU, else lot #
     l.title || '',
     l.description || '',
     l.price || '',

@@ -18,6 +18,7 @@ import {
   Send,
   Sparkles,
   RefreshCw,
+  Share2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -33,7 +34,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { EbayItemSpecificsEditor } from "./EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "./EbayShippingSettings";
 import { DraggableImageGrid } from "../DraggableImageGrid";
-import { ImageEnhancer } from "../ImageEnhancer";
+import { AIGenerateButton } from "../AIGenerateButton";
 
 interface EbayRow {
   id: string;
@@ -69,6 +70,65 @@ interface EbayRow {
   brand: string | null;
   mpn: string | null;
   custom_sku: string | null;
+  // v2.4: ids of the learned corrections injected when this row was generated, so a
+  // re-correction on the same row can flag the failed lesson(s). Null = none injected.
+  injected_correction_ids: string[] | null;
+}
+
+// Fire-and-forget: record a human correction of an AI identification so the
+// generation prompt can learn from it (self-improving loop). Never throws —
+// a capture failure must never block the listing flow.
+async function captureCorrection(input: {
+  source: "ai_verify" | "refine";
+  category?: string | null;
+  wrongTitle?: string | null;
+  correctedTitle?: string | null;
+  wrongSpecifics?: Record<string, string> | null;
+  correctedSpecifics?: Record<string, string> | null;
+  correctionNote?: string | null;
+  imageUrls?: string[] | null;
+  // v2.4: when this correction lands on a row that was generated WITH learned
+  // corrections injected, the injected lesson(s) failed -> flag them so they get
+  // down-weighted/retired. All optional; absent = nothing to flag (v1 behavior).
+  rowId?: string | null;
+  injectedCorrectionIds?: string[] | null;
+  correctedField?: "title" | "specifics" | "both";
+}) {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from("listing_corrections").insert({
+      user_id: user.id,
+      source: input.source,
+      platform: "ebay",
+      category: input.category ?? null,
+      wrong_title: input.wrongTitle ?? null,
+      corrected_title: input.correctedTitle ?? null,
+      wrong_specifics: input.wrongSpecifics ?? null,
+      corrected_specifics: input.correctedSpecifics ?? null,
+      correction_note: input.correctionNote ?? null,
+      image_urls: input.imageUrls ?? null,
+    });
+    // v2.4: if this row was shaped by injected lessons and got re-corrected on the
+    // same kind of field, the lesson failed -> mark it (bumps times_failed, retires
+    // at threshold, feeds the re-correction-rate metric). Fire-and-forget.
+    if (input.rowId && input.injectedCorrectionIds?.length) {
+      supabase.rpc("mark_corrections_re_corrected", {
+        p_row_id: input.rowId,
+        p_field: input.correctedField ?? "both",
+        p_ids: input.injectedCorrectionIds,
+      }).then(({ error }) => {
+        if (error) console.warn("mark_corrections_re_corrected skipped (non-blocking):", error.message);
+      });
+    }
+    // Fire-and-forget: embed the new correction(s) so semantic retrieval can
+    // surface them later. Never awaited into the UI path; failures are ignored.
+    supabase.functions
+      .invoke("embed-corrections", { body: { limit: 25 } })
+      .catch((e) => console.warn("embed-corrections invoke skipped (non-blocking):", e));
+  } catch (e) {
+    console.warn("captureCorrection failed (non-blocking):", e);
+  }
 }
 
 interface EbayBatchPanelProps {
@@ -123,6 +183,7 @@ export function EbayBatchPanel({
   const [inlineEdit, setInlineEdit] = useState<{ id: string; field: 'title' | 'price'; value: string } | null>(null);
   // specFixes[rowId][specKey] = current draft value for an empty item_specific
   const [specFixes, setSpecFixes] = useState<Record<string, Record<string, string>>>({});
+  const [crossPostRowId, setCrossPostRowId] = useState<string | null>(null);
 
   // Reset AI state when edit dialog closes
   useEffect(() => {
@@ -219,6 +280,40 @@ export function EbayBatchPanel({
     toast({ title: "Listing deleted" });
   };
 
+  const handleCrossPost = async (row: EbayRow, platforms: string[]) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { toast({ title: "Not authenticated", variant: "destructive" }); return; }
+
+    const formattedData = {
+      title: row.title,
+      description: row.description,
+      price: row.price,
+      imageUrls: row.image_urls || [],
+      item_specifics: row.item_specifics || {},
+    };
+
+    let failed = false;
+    for (const platform of platforms) {
+      const { error } = await (supabase as any).from('crosspost_jobs').insert({
+        listing_id: null,
+        batch_id: row.batch_id ?? null,
+        user_id: user.id,
+        platform,
+        status: 'pending',
+        formatted_data: formattedData,
+      });
+      if (error) {
+        toast({ title: `Failed to queue ${platform}`, variant: "destructive" });
+        failed = true;
+        break;
+      }
+    }
+    if (!failed) {
+      toast({ title: `Queued for ${platforms.join(' + ')} — launch the desktop agent to post` });
+    }
+    setCrossPostRowId(null);
+  };
+
   const saveInlineEdit = async () => {
     if (!inlineEdit) return;
     const row = rows.find(r => r.id === inlineEdit.id);
@@ -232,7 +327,7 @@ export function EbayBatchPanel({
       updates.price = isNaN(parsed) ? row.price : parsed;
     }
     await supabase.from('ebay_batch_rows').update(updates).eq('id', inlineEdit.id);
-    onRowsChange(prev => prev.map(r => r.id === inlineEdit.id ? { ...r, ...updates } : r));
+    onRowsChange(rows.map(r => r.id === inlineEdit.id ? { ...r, ...updates } : r));
     setInlineEdit(null);
   };
 
@@ -242,17 +337,17 @@ export function EbayBatchPanel({
     
     const { error } = await supabase
       .from('ebay_batch_rows')
-      .delete()
+      .update({ status: 'archived' })
       .eq('batch_id', projectId);
-    
+
     if (error) {
       toast({ title: "Clear failed", variant: "destructive" });
       return;
     }
-    
+
     onRowsChange([]);
     onLotNumberChange(1);
-    toast({ title: "All eBay listings cleared" });
+    toast({ title: "Listings archived" });
   };
 
   const refineListing = async (targetRow?: EbayRow, prompt?: string) => {
@@ -293,7 +388,7 @@ export function EbayBatchPanel({
 
       const refined = data.listing;
       if (targetRow) {
-        onRowsChange(prev => prev.map(r => r.id === row.id ? {
+        onRowsChange(rows.map(r => r.id === row.id ? {
           ...r,
           title: (refined.title || r.title).substring(0, 80),
           description: refined.description || r.description,
@@ -313,6 +408,25 @@ export function EbayBatchPanel({
         } : prev);
         setCorrectionPrompt("");
       }
+      // Capture the human-driven correction so generation can learn from it.
+      const refTitleChanged = refined.title &&
+        String(refined.title).substring(0, 80) !== row.title;
+      const refSpecsChanged = refined.itemSpecifics &&
+        JSON.stringify(refined.itemSpecifics) !== JSON.stringify(row.item_specifics);
+      captureCorrection({
+        source: "refine",
+        category: row.category,
+        wrongTitle: row.title,
+        correctedTitle: refined.title || row.title,
+        wrongSpecifics: row.item_specifics,
+        correctedSpecifics: refined.itemSpecifics || row.item_specifics,
+        correctionNote: promptText.trim(),
+        imageUrls: row.image_urls,
+        rowId: row.id,
+        injectedCorrectionIds: row.injected_correction_ids,
+        correctedField: refTitleChanged && refSpecsChanged
+          ? "both" : refTitleChanged ? "title" : "specifics",
+      });
       toast({ title: "Listing Updated", description: "AI refined your listing" });
     } catch (error) {
       toast({
@@ -398,7 +512,27 @@ export function EbayBatchPanel({
   const handleAcceptVerify = () => {
     if (!verifyPanel) return;
     const cl = verifyPanel.correctedListing;
-    onRowsChange(prev => prev.map(r => r.id === verifyPanel.row.id ? {
+    const original = verifyPanel.row;
+    // Only capture when the accepted correction actually changed identification.
+    const titleChanged = cl.title && String(cl.title).substring(0, 80) !== original.title;
+    const specsChanged = cl.itemSpecifics &&
+      JSON.stringify(cl.itemSpecifics) !== JSON.stringify(original.item_specifics);
+    if (titleChanged || specsChanged) {
+      captureCorrection({
+        source: "ai_verify",
+        category: original.category,
+        wrongTitle: original.title,
+        correctedTitle: cl.title ? String(cl.title) : original.title,
+        wrongSpecifics: original.item_specifics,
+        correctedSpecifics: cl.itemSpecifics || original.item_specifics,
+        imageUrls: original.image_urls,
+        rowId: original.id,
+        injectedCorrectionIds: original.injected_correction_ids,
+        correctedField: titleChanged && specsChanged
+          ? "both" : titleChanged ? "title" : "specifics",
+      });
+    }
+    onRowsChange(rows.map(r => r.id === verifyPanel.row.id ? {
       ...r,
       title: cl.title ? String(cl.title).substring(0, 80) : r.title,
       description: cl.description || r.description,
@@ -711,7 +845,7 @@ export function EbayBatchPanel({
       
       const base = [
         "Add",                                                           // *Action
-        row.lot_number?.toString() || (index + 1).toString(),            // Custom Label (SKU)
+        row.custom_sku?.trim() || row.lot_number?.toString() || (index + 1).toString(), // Custom Label (SKU) — prefer user SKU, else lot #
         categoryId,                                                      // Category (numeric leaf ID)
         sanitizeForCSV((row.title || "").substring(0, 80)),              // Title
         "",                                                              // Relationship (empty for non-variation)
@@ -1229,7 +1363,12 @@ export function EbayBatchPanel({
       });
 
       if (error) {
-        toast({ title: "Push failed", description: error.message, variant: "destructive" });
+        let description = error.message;
+        try {
+          const body = await (error as any).context?.json?.();
+          if (body?.error) description = body.error;
+        } catch {}
+        toast({ title: "Push failed", description, variant: "destructive" });
         return;
       }
 
@@ -1252,7 +1391,7 @@ export function EbayBatchPanel({
                      || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
           if (match && result.id) {
             const missingSpec = match[1].trim();
-            onRowsChange(prev => prev.map(r => r.id === result.id
+            onRowsChange(rows.map(r => r.id === result.id
               ? { ...r, status: "error", item_specifics: { ...r.item_specifics, [missingSpec]: "" } }
               : r
             ));
@@ -1281,10 +1420,18 @@ export function EbayBatchPanel({
       const { data, error } = await supabase.functions.invoke("ebay-publish", {
         body: { rows: [row] },
       });
-      if (error) { toast({ title: "Retry failed", description: error.message, variant: "destructive" }); return; }
+      if (error) {
+        let description = error.message;
+        try {
+          const body = await (error as any).context?.json?.();
+          if (body?.error) description = body.error;
+        } catch {}
+        toast({ title: "Retry failed", description, variant: "destructive" });
+        return;
+      }
       const { succeeded, failed, results } = data;
       if (succeeded > 0) {
-        onRowsChange(prev => prev.filter(r => r.id !== row.id));
+        onRowsChange(rows.filter(r => r.id !== row.id));
         setRowErrors(prev => { const next = { ...prev }; delete next[row.id]; return next; });
         setSpecFixes(prev => { const next = { ...prev }; delete next[row.id]; return next; });
         toast({ title: "Pushed!", description: "Listing is now in your Seller Hub drafts." });
@@ -1296,7 +1443,7 @@ export function EbayBatchPanel({
         if (match) {
           const missingSpec = match[1].trim();
           const updated = { ...row, item_specifics: { ...row.item_specifics, [missingSpec]: "" } };
-          onRowsChange(prev => prev.map(r => r.id === row.id ? updated : r));
+          onRowsChange(rows.map(r => r.id === row.id ? updated : r));
           if (editingRow?.id === row.id) setEditingRow(updated);
         }
         setRowErrors(prev => ({ ...prev, [row.id]: err }));
@@ -1532,7 +1679,7 @@ export function EbayBatchPanel({
               <Button
                 className="flex-1 bg-green-600 hover:bg-green-700 text-white"
                 onClick={() => {
-                  onRowsChange(prev => prev.filter(r => r.status !== "published"));
+                  onRowsChange(rows.filter(r => r.status !== "published"));
                   setHasPublished(false);
                   setShowRemovePublishedDialog(false);
                 }}
@@ -1765,12 +1912,42 @@ export function EbayBatchPanel({
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="h-7 w-7 p-0 text-blue-400 hover:text-blue-300"
+                      title="Cross-post to Poshmark / Mercari"
+                      onClick={() => setCrossPostRowId(crossPostRowId === row.id ? null : row.id)}
+                    >
+                      <Share2 className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0 text-destructive hover:text-destructive"
                       onClick={() => handleDelete(row.id)}
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
+                  {crossPostRowId === row.id && (
+                    <div className="mt-1 flex items-center gap-2 pt-1 border-t border-border">
+                      <span className="text-xs text-muted-foreground">Cross-post to:</span>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['poshmark'])}>
+                        Poshmark
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['mercari'])}>
+                        Mercari
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['poshmark', 'mercari'])}>
+                        Both
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-6 text-xs"
+                        onClick={() => setCrossPostRowId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
                 </div>
                 {/* Inline fix for missing item specifics after a failed push */}
                 {rowErrors[row.id] && (() => {
@@ -1803,7 +1980,7 @@ export function EbayBatchPanel({
                             ...row,
                             item_specifics: { ...row.item_specifics, ...fixes },
                           };
-                          onRowsChange(prev => prev.map(r => r.id === row.id ? updatedRow : r));
+                          onRowsChange(rows.map(r => r.id === row.id ? updatedRow : r));
                           setSpecFixes(prev => { const n = { ...prev }; delete n[row.id]; return n; });
                           handleRetrySingleRow(updatedRow);
                         }}
@@ -1894,10 +2071,10 @@ export function EbayBatchPanel({
                   <Label className="text-xs text-muted-foreground uppercase">
                     Images (drag to reorder, hover for AI)
                   </Label>
-                  <ImageEnhancer
-                    onImageGenerated={(url) => setEditingRow({ 
-                      ...editingRow, 
-                      image_urls: [...(editingRow.image_urls || []), url] 
+                  <AIGenerateButton
+                    onImageGenerated={(url) => setEditingRow({
+                      ...editingRow,
+                      image_urls: [...(editingRow.image_urls || []), url]
                     })}
                     trigger={
                       <Button variant="outline" size="sm" className="gap-1 h-7">
@@ -2002,7 +2179,7 @@ export function EbayBatchPanel({
               </div>
 
               {/* Product Identifiers */}
-              <div className="grid grid-cols-4 gap-4 pt-3 border-t border-border">
+              <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
                 <div>
                   <Label>Brand</Label>
                   <Input
@@ -2027,20 +2204,25 @@ export function EbayBatchPanel({
                     placeholder="Manufacturer Part #"
                   />
                 </div>
-                <div>
-                  <Label>Custom SKU</Label>
-                  <Input
-                    value={editingRow.custom_sku || ""}
-                    onChange={(e) => setEditingRow({ ...editingRow, custom_sku: e.target.value })}
-                    placeholder="Your internal SKU"
-                  />
-                </div>
               </div>
 
               <EbayItemSpecificsEditor
                 itemSpecifics={editingRow.item_specifics || {}}
                 onChange={(specifics) => setEditingRow({ ...editingRow, item_specifics: specifics })}
               />
+
+              {/* Custom SKU — shown as the last item specific. Optional, never blocks a push. */}
+              <div className="pt-3 border-t border-border">
+                <Label>Custom SKU (optional)</Label>
+                <Input
+                  value={editingRow.custom_sku || ""}
+                  onChange={(e) => setEditingRow({ ...editingRow, custom_sku: e.target.value })}
+                  placeholder="Your internal SKU — leave blank to skip"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Maps to eBay's "Custom Label (SKU)". Optional.
+                </p>
+              </div>
 
               {/* Best Offer Settings */}
               <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">

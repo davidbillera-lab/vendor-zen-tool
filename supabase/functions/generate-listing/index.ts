@@ -13,6 +13,112 @@ interface GenerateRequest {
   masterPrompt?: string;
 }
 
+// --- v2.2 semantic correction retrieval helpers ---
+const CAPTION_MODEL = 'claude-haiku-4-5';        // Tier-1 vision pass
+const EMBED_MODEL = 'text-embedding-3-small';    // 1536 dims, Tier-1
+// USD per 1M tokens (approx; for the model_costs ledger only).
+const CAPTION_IN_PER_1M = 1.0;
+const CAPTION_OUT_PER_1M = 5.0;
+const EMBED_IN_PER_1M = 0.02;
+
+// One short visual descriptor of the item, used as the embedding query so we
+// can retrieve semantically-similar past corrections even though there's no
+// title yet at generation time. Returns null on any failure (caller falls back).
+async function captionItem(
+  imageUrls: string[],
+  anthropicKey: string
+): Promise<{ caption: string; inputTokens: number; outputTokens: number } | null> {
+  try {
+    const max = Math.min(imageUrls.length, 3);
+    const content: any[] = [];
+    for (let i = 0; i < max; i++) {
+      content.push({ type: 'image', source: { type: 'url', url: imageUrls[i] } });
+    }
+    content.push({
+      type: 'text',
+      text: 'In one short line (max 15 words), describe this item for resale identification: type, material, style, era. Just the descriptor, no sentence.',
+    });
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ model: CAPTION_MODEL, max_tokens: 60, messages: [{ role: 'user', content }] }),
+    });
+    if (!res.ok) {
+      console.warn(`caption pass failed (${res.status})`);
+      return null;
+    }
+    const j = await res.json();
+    const caption = j.content?.[0]?.text?.trim();
+    if (!caption) return null;
+    return {
+      caption,
+      inputTokens: j.usage?.input_tokens ?? 0,
+      outputTokens: j.usage?.output_tokens ?? 0,
+    };
+  } catch (e) {
+    console.warn('captionItem error (non-blocking):', e);
+    return null;
+  }
+}
+
+// Embed a text query with the same model used to embed stored corrections.
+async function embedQuery(
+  text: string,
+  openaiKey: string
+): Promise<{ vector: number[]; inputTokens: number } | null> {
+  try {
+    const res = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, input: text }),
+    });
+    if (!res.ok) {
+      console.warn(`embed query failed (${res.status})`);
+      return null;
+    }
+    const j = await res.json();
+    const vector = j.data?.[0]?.embedding;
+    if (!vector) return null;
+    return { vector, inputTokens: j.usage?.prompt_tokens ?? 0 };
+  } catch (e) {
+    console.warn('embedQuery error (non-blocking):', e);
+    return null;
+  }
+}
+
+// Shared formatter: turn correction rows into deduped guardrail lines.
+function formatCorrectionLines(
+  corrections: Array<{
+    wrong_title?: string | null;
+    corrected_title?: string | null;
+    correction_note?: string | null;
+    category?: string | null;
+  }> | null
+): string[] {
+  if (!corrections || corrections.length === 0) return [];
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const c of corrections) {
+    const key = `${c.wrong_title ?? ''}→${c.corrected_title ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const parts: string[] = [];
+    if (c.wrong_title && c.corrected_title && c.wrong_title !== c.corrected_title) {
+      parts.push(`Was mis-identified as "${c.wrong_title}" — correct is "${c.corrected_title}"`);
+    } else if (c.corrected_title) {
+      parts.push(`Correct identification: "${c.corrected_title}"`);
+    }
+    if (c.correction_note) parts.push(`Note: ${c.correction_note}`);
+    if (c.category) parts.push(`(category: ${c.category})`);
+    if (parts.length) lines.push(`- ${parts.join(' ')}`);
+  }
+  return lines;
+}
+
 const PLATFORM_PROMPTS = {
   ebay: `You are an expert eBay seller and listing optimizer with deep knowledge of sold comps and category taxonomy. Your job is to generate listings that SELL QUICKLY by using accurate categories, realistic sold-comp pricing, and keyword-rich titles.
 
@@ -348,6 +454,7 @@ CATEGORY-SPECIFIC:
   "title": "string (MUST be 80 chars or less - Cassini optimized, keyword-dense)",
   "description": "string (150+ words, Cassini optimized, structured with specs/condition/includes)",
   "price": number (based on sold comps, not random),
+  "compQuery": "string (3-6 word search phrase a shopper would type to find THIS exact item — brand + item type + key descriptor, e.g. 'Coach Willis leather satchel'. NOT the full keyword-stuffed title. Used to pull live market comps.)",
   "category": "string (human readable like 'Men's Coats, Jackets & Vests')",
   "categoryId": number (REQUIRED - must be a LEAF category ID, not parent),
   "condition": "string",
@@ -540,6 +647,118 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 }`
 };
 
+// Shape returned to the caller (and stored on the listing as `priceComps`).
+// Marketplace-Insights-ready: when we get approved for real SOLD data, only the
+// fetch step below changes — this contract and the band math stay identical.
+interface PriceComps {
+  suggested: number;
+  low: number;
+  high: number;
+  sampleSize: number;
+  source: "ebay_active" | "ebay_sold";
+}
+
+// Pull live eBay FIXED_PRICE asking prices for `query`, reject outliers, and
+// return an honest suggested price + range. Returns null if there isn't enough
+// trustworthy data — the caller then keeps the AI's price (no regression).
+//
+// Outlier defense (David's #1 requirement):
+//   1. FIXED_PRICE filter excludes auctions — kills the "auction giveaway" lows.
+//   2. Trim the top & bottom 15% — kills the "lists 4x higher" moron and junk.
+//   3. Median (not mean) of the trimmed set — one survivor can't drag it.
+//   4. Trust gate: need >= 5 priced comps after trim, else return null.
+async function fetchEbayComps(
+  query: string,
+  _conditionHint: string
+): Promise<PriceComps | null> {
+  const q = (query || "").trim();
+  if (q.length < 3) return null;
+
+  const ebayClientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+  const ebayClientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+  if (!ebayClientId || !ebayClientSecret) return null;
+
+  // ── Step 1: fetch the raw price array (the ONLY part that changes for SOLD) ──
+  const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${btoa(`${ebayClientId}:${ebayClientSecret}`)}`,
+    },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "https://api.ebay.com/oauth/api_scope",
+    }),
+  });
+  if (!tokenRes.ok) return null;
+  const appToken = (await tokenRes.json()).access_token as string;
+  if (!appToken) return null;
+
+  const searchUrl =
+    `https://api.ebay.com/buy/browse/v1/item_summary/search` +
+    `?q=${encodeURIComponent(q)}` +
+    `&filter=${encodeURIComponent("buyingOptions:{FIXED_PRICE}")}` +
+    `&limit=100`;
+
+  const searchRes = await fetch(searchUrl, {
+    headers: {
+      Authorization: `Bearer ${appToken}`,
+      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+    },
+  });
+  if (!searchRes.ok) return null;
+
+  const searchData = await searchRes.json();
+  const summaries: any[] = Array.isArray(searchData.itemSummaries)
+    ? searchData.itemSummaries
+    : [];
+
+  const prices = summaries
+    .map((it) =>
+      it?.price?.currency === "USD" ? parseFloat(it.price.value) : NaN
+    )
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+
+  // ── Step 2: compute the band from the array (UNCHANGED for SOLD data) ──
+  return computeBand(prices, "ebay_active");
+}
+
+// Reject outliers and collapse a sorted price array into a suggested median +
+// honest range. Separated from the fetch so the Marketplace Insights swap reuses
+// it verbatim. Returns null when there's too little data to trust.
+function computeBand(
+  sortedPrices: number[],
+  source: PriceComps["source"]
+): PriceComps | null {
+  if (sortedPrices.length < 5) return null;
+
+  const trimCount = Math.floor(sortedPrices.length * 0.15);
+  const trimmed =
+    trimCount > 0
+      ? sortedPrices.slice(trimCount, sortedPrices.length - trimCount)
+      : sortedPrices;
+
+  // Trust gate: need a real cluster after trimming, not 2 survivors.
+  if (trimmed.length < 5) return null;
+
+  const mid = Math.floor(trimmed.length / 2);
+  const median =
+    trimmed.length % 2 === 0
+      ? (trimmed[mid - 1] + trimmed[mid]) / 2
+      : trimmed[mid];
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  return {
+    suggested: round2(median),
+    low: round2(trimmed[0]),
+    high: round2(trimmed[trimmed.length - 1]),
+    sampleSize: trimmed.length,
+    source,
+  };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -596,6 +815,120 @@ serve(async (req) => {
     // Inject master prompt as a guardrail if provided
     if (masterPrompt) {
       systemPrompt = `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY — OVERRIDE DEFAULTS) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${systemPrompt}`;
+    }
+
+    // Inject learned corrections (self-improving loop v2.2): retrieve the
+    // caller's *most semantically-similar* past corrections and prepend them so
+    // the model stops repeating identification mistakes. Pipeline: caption the
+    // photos (Haiku) → embed the caption (OpenAI) → match_listing_corrections
+    // RPC (pgvector nearest-neighbour, RLS-scoped to the caller). Falls back to
+    // v1 global-recent when there are no images, captioning/embedding fails, or
+    // no semantic matches. eBay only. Zero behavior change when there are none.
+    // Non-blocking on any failure.
+    // v2.4: ids of the corrections actually injected, surfaced in the response so
+    // the generated row can be tagged and re-corrections traced back to the lesson.
+    let injectedCorrectionIds: string[] = [];
+    if (platform === 'ebay') {
+      try {
+        const authedClient = createClient(
+          Deno.env.get('SUPABASE_URL')!,
+          Deno.env.get('SUPABASE_ANON_KEY')!,
+          { global: { headers: { Authorization: authHeader } } }
+        );
+
+        // Cost-log helper — own-row insert is RLS-allowed (auth.uid() = user.id).
+        const logCost = (
+          operation: string,
+          model: string,
+          inputTokens: number | null,
+          outputTokens: number | null,
+          costUsd: number | null
+        ) => {
+          authedClient
+            .from('model_costs')
+            .insert({
+              user_id: user.id,
+              source: 'generate-listing',
+              operation,
+              model,
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              cost_usd: costUsd,
+            })
+            .then(({ error }) => {
+              if (error) console.warn('model_costs log skipped (non-blocking):', error.message);
+            });
+        };
+
+        let corrections:
+          | Array<{
+              id?: string | null;
+              wrong_title?: string | null;
+              corrected_title?: string | null;
+              correction_note?: string | null;
+              category?: string | null;
+            }>
+          | null = null;
+        let retrievalMode = 'semantic';
+
+        const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+
+        // --- v2.2 semantic path: caption → embed → nearest-neighbour RPC ---
+        if (imageUrls.length > 0 && OPENAI_API_KEY) {
+          const cap = await captionItem(imageUrls, ANTHROPIC_API_KEY);
+          if (cap) {
+            const capCost = Number(
+              (
+                (cap.inputTokens / 1_000_000) * CAPTION_IN_PER_1M +
+                (cap.outputTokens / 1_000_000) * CAPTION_OUT_PER_1M
+              ).toFixed(6)
+            );
+            logCost('caption', CAPTION_MODEL, cap.inputTokens, cap.outputTokens, capCost);
+
+            const emb = await embedQuery(cap.caption, OPENAI_API_KEY);
+            if (emb) {
+              const embCost = Number(((emb.inputTokens / 1_000_000) * EMBED_IN_PER_1M).toFixed(6));
+              logCost('embedding', EMBED_MODEL, emb.inputTokens, null, embCost);
+
+              const { data: matches, error: rpcErr } = await authedClient.rpc(
+                'match_listing_corrections',
+                { query_embedding: JSON.stringify(emb.vector), match_count: 8 }
+              );
+              if (rpcErr) {
+                console.warn('match_listing_corrections RPC failed (non-blocking):', rpcErr.message);
+              } else if (matches && matches.length > 0) {
+                corrections = matches;
+                console.log(`Semantic retrieval: ${matches.length} match(es) for "${cap.caption}"`);
+              }
+            }
+          }
+        }
+
+        // --- fallback: v1 global most-recent (no images / no key / no matches) ---
+        if (!corrections || corrections.length === 0) {
+          retrievalMode = 'recent';
+          const { data: recent } = await authedClient
+            .from('listing_corrections')
+            .select('id,wrong_title,corrected_title,correction_note,category')
+            .eq('retired', false)
+            .order('created_at', { ascending: false })
+            .limit(20);
+          corrections = recent ?? null;
+        }
+
+        const lines = formatCorrectionLines(corrections);
+        if (lines.length > 0) {
+          systemPrompt = `=== LEARNED CORRECTIONS (avoid repeating these identification mistakes) ===\n${lines.join('\n')}\n=== END LEARNED CORRECTIONS ===\n\n${systemPrompt}`;
+          console.log(`Injected ${lines.length} learned corrections (${retrievalMode})`);
+          // v2.4: surface which corrections actually shaped this listing so the
+          // generated row can be tagged and re-corrections traced back to the lesson.
+          injectedCorrectionIds = (corrections ?? [])
+            .map((c) => c.id)
+            .filter((id): id is string => typeof id === 'string');
+        }
+      } catch (e) {
+        console.warn('Learned-corrections injection skipped (non-blocking):', e);
+      }
     }
 
     // Build content array with images - limit to 4 for speed (AI gets diminishing returns beyond that)
@@ -916,10 +1249,41 @@ serve(async (req) => {
         }
         anyListing['itemSpecifics'] = itemSpecs;
       }
+
+      // ── Live pricing comps (eBay Browse API) ──────────────────────────────
+      // Replace the AI's hallucinated price with a real, outlier-trimmed median
+      // of live eBay asking prices. PURELY ADDITIVE: runs after the AI already
+      // returned a complete listing. If it finds too few comps or errors, we
+      // keep the AI's price exactly as before — no regression possible.
+      try {
+        const compQuery =
+          ((anyListing['compQuery'] as string) || (anyListing['title'] as string) || "").trim();
+        const comps = compQuery
+          ? await fetchEbayComps(compQuery, (anyListing['condition'] as string) || "")
+          : null;
+
+        if (comps) {
+          console.log(
+            `[generate-listing] Comps applied: AI price=${anyListing['price']} → market median=${comps.suggested} ` +
+            `(range $${comps.low}-$${comps.high}, n=${comps.sampleSize}, source=${comps.source}) for query="${compQuery}"`
+          );
+          anyListing['price'] = comps.suggested;
+          anyListing['priceComps'] = comps;
+        } else {
+          console.log(
+            `[generate-listing] No usable comps for query="${compQuery}" — keeping AI price=${anyListing['price']}`
+          );
+          anyListing['priceComps'] = { source: "ai_estimate" };
+        }
+      } catch (compErr) {
+        console.warn("[generate-listing] Comp lookup error (non-fatal, keeping AI price):", compErr);
+        anyListing['priceComps'] = { source: "ai_estimate" };
+      }
+      // ─────────────────────────────────────────────────────────────────────
     }
 
     return new Response(
-      JSON.stringify({ listing: parsedListing, rawResponse: aiResponse }),
+      JSON.stringify({ listing: parsedListing, rawResponse: aiResponse, injectedCorrectionIds }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
