@@ -169,12 +169,14 @@ async function callGptImage2(imageUrl: string, prompt: string, mode: string): Pr
   } else {
     // Edit or enhance: edits endpoint (multipart)
     const imgBytes = await fetchImageBytes(imageUrl);
+    const mimeType = detectMimeType(imageUrl);
+    const ext = mimeType === 'image/png' ? 'png' : 'jpeg';
     const form = new FormData();
     form.append('model', 'gpt-image-2');
     form.append('prompt', effectivePrompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
-    form.append('image', new Blob([imgBytes], { type: 'image/png' }), 'image.png');
+    form.append('image', new Blob([imgBytes], { type: mimeType }), `image.${ext}`);
 
     response = await fetch('https://api.openai.com/v1/images/edits', {
       method: 'POST',
@@ -215,8 +217,9 @@ async function callGemini(imageUrl: string, prompt: string, mode: string): Promi
 
   if (mode !== 'generate' && imageUrl) {
     const imgBytes = await fetchImageBytes(imageUrl);
-    const b64 = btoa(String.fromCharCode(...imgBytes));
-    parts.push({ inlineData: { mimeType: 'image/png', data: b64 } });
+    const b64 = uint8ArrayToBase64(imgBytes);
+    const mimeType = detectMimeType(imageUrl);
+    parts.push({ inlineData: { mimeType, data: b64 } });
   }
 
   const response = await fetch(
@@ -247,6 +250,24 @@ async function callGemini(imageUrl: string, prompt: string, mode: string): Promi
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
+
+function detectMimeType(imageUrl: string): string {
+  if (imageUrl.startsWith('data:')) {
+    const match = imageUrl.match(/^data:([^;]+);/);
+    return match ? match[1] : 'image/jpeg';
+  }
+  return 'image/jpeg';
+}
+
+// Chunk-based btoa to avoid call stack overflow on large images
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const CHUNK = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + CHUNK, bytes.length)));
+  }
+  return btoa(binary);
+}
 
 async function fetchImageBytes(imageUrl: string): Promise<Uint8Array> {
   if (imageUrl.startsWith('data:')) {
