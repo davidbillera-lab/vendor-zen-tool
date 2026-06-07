@@ -35,3 +35,6 @@ dist-ssr
 
 # Supabase CLI temp files — generated, not source
 supabase/.temp/
+
+# Local MCP server config — machine-specific
+.mcp.json
