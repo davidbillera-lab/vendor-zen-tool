@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
+import ReactCrop, { Crop, PixelCrop, convertToPixelCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import {
   RotateCcw, RotateCw, Loader2, X, Check,
@@ -28,13 +28,14 @@ interface ImageEdit {
   bgRemoved: boolean;
   bgColor: string | null;
   src: string;
+  transparentSrc: string | null;
 }
 
 export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: ImageEditorProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [edits, setEdits] = useState<ImageEdit[]>(() =>
-    images.map(src => ({ rotation: 0, crop: null, bgRemoved: false, bgColor: null, src }))
+    images.map(src => ({ rotation: 0, crop: null, bgRemoved: false, bgColor: null, src, transparentSrc: null }))
   );
   const [crop, setCrop] = useState<Crop>();
   const [activeCropRatio, setActiveCropRatio] = useState<string>('free');
@@ -81,8 +82,12 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
 
   async function applyCrop() {
     if (!crop || !imgRef.current) return;
-    const cropped = await getCroppedImg(imgRef.current, crop as PixelCrop);
-    updateEdit(currentIndex, { src: cropped, crop: crop as PixelCrop });
+    const img = imgRef.current;
+    const pixelCrop: PixelCrop = crop.unit === '%'
+      ? convertToPixelCrop(crop, img.width, img.height)
+      : (crop as PixelCrop);
+    const cropped = await getCroppedImg(img, pixelCrop);
+    updateEdit(currentIndex, { src: cropped, crop: pixelCrop });
     setCrop(undefined);
     setActiveCropRatio('free');
   }
@@ -93,7 +98,7 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
       const { removeBackground } = await import('@imgly/background-removal');
       const blob = await removeBackground(currentEdit.src);
       const url = URL.createObjectURL(blob);
-      updateEdit(currentIndex, { bgRemoved: true, bgColor: null, src: url });
+      updateEdit(currentIndex, { bgRemoved: true, bgColor: null, src: url, transparentSrc: url });
     } catch (e) {
       console.error('BG removal failed:', e);
       toast({ title: 'Background removal failed', variant: 'destructive' });
@@ -103,8 +108,8 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
   }
 
   async function handleBgColor(color: string | null) {
-    if (!currentEdit.bgRemoved) return;
-    const filled = await fillBackground(currentEdit.src, color);
+    if (!currentEdit.bgRemoved || !currentEdit.transparentSrc) return;
+    const filled = await fillBackground(currentEdit.transparentSrc, color);
     updateEdit(currentIndex, { bgColor: color, src: filled });
   }
 
@@ -184,7 +189,7 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
   function handleUseAiResult() {
     if (!aiResult) return;
     // AI results add as a NEW image, never overwriting the original
-    const newEdit: ImageEdit = { rotation: 0, crop: null, bgRemoved: false, bgColor: null, src: aiResult };
+    const newEdit: ImageEdit = { rotation: 0, crop: null, bgRemoved: false, bgColor: null, src: aiResult, transparentSrc: null };
     setEdits(prev => [...prev, newEdit]);
     setCurrentIndex(edits.length); // jump to the new image
     setAiResult(null);
