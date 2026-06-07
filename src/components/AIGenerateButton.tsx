@@ -11,7 +11,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 
-type AiProvider = 'gpt-image-2' | 'nano-banana';
+type AiProvider = 'gpt-image-2' | 'gemini';
 
 interface AIGenerateButtonProps {
   onImageGenerated: (url: string) => void;
@@ -83,14 +83,19 @@ export function AIGenerateButton({ onImageGenerated, trigger }: AIGenerateButton
 
   return (
     <>
-      <div onClick={() => setOpen(true)}>
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen(true)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setOpen(true); }}
+      >
         {trigger ?? (
           <Button variant="outline" size="sm" className="gap-1">
             <ImagePlus className="h-4 w-4" />
             AI Generate
           </Button>
         )}
-      </div>
+      </span>
 
       <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
         <DialogContent className="max-w-md">
@@ -114,11 +119,11 @@ export function AIGenerateButton({ onImageGenerated, trigger }: AIGenerateButton
               </Button>
               <Button
                 size="sm"
-                variant={provider === 'nano-banana' ? 'default' : 'outline'}
+                variant={provider === 'gemini' ? 'default' : 'outline'}
                 className="flex-1 h-7 text-xs"
-                onClick={() => setProvider('nano-banana')}
+                onClick={() => setProvider('gemini')}
               >
-                Nano Banana
+                Gemini
               </Button>
             </div>
 

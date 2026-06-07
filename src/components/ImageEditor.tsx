@@ -97,8 +97,10 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
     try {
       const { removeBackground } = await import('@imgly/background-removal');
       const blob = await removeBackground(currentEdit.src);
+      const oldTransparentSrc = currentEdit.transparentSrc;
       const url = URL.createObjectURL(blob);
       updateEdit(currentIndex, { bgRemoved: true, bgColor: null, src: url, transparentSrc: url });
+      if (oldTransparentSrc?.startsWith('blob:')) URL.revokeObjectURL(oldTransparentSrc);
     } catch (e) {
       console.error('BG removal failed:', e);
       toast({ title: 'Background removal failed', variant: 'destructive' });

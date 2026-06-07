@@ -32,3 +32,6 @@ dist-ssr
 # Agent runtime state — not source
 *.progress.json
 *.lnk
+
+# Supabase CLI temp files — generated, not source
+supabase/.temp/
