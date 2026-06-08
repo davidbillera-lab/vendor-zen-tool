@@ -213,7 +213,7 @@ async function callGemini(imageUrl: string, prompt: string, mode: string): Promi
     ? `Enhance this product image for e-commerce listing. Make it look professional with good lighting, clean background, clear details, and appealing presentation. ${prompt || 'Improve overall quality and appeal.'}`
     : prompt;
 
-  const parts: unknown[] = [{ text: effectivePrompt }];
+  const parts: unknown[] = [];
 
   if (mode !== 'generate' && imageUrl) {
     const imgBytes = await fetchImageBytes(imageUrl);
@@ -221,6 +221,8 @@ async function callGemini(imageUrl: string, prompt: string, mode: string): Promi
     const mimeType = detectMimeType(imageUrl);
     parts.push({ inlineData: { mimeType, data: b64 } });
   }
+
+  parts.push({ text: effectivePrompt });
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${GOOGLE_AI_API_KEY}`,
@@ -238,7 +240,7 @@ async function callGemini(imageUrl: string, prompt: string, mode: string): Promi
     const errorText = await response.text();
     console.error('Gemini API error:', response.status, errorText);
     if (response.status === 429) throw new Error('Rate limit exceeded. Please try again later.');
-    throw new Error(`Gemini API error: ${response.status}`);
+    throw new Error(`Gemini API error: ${response.status} — ${errorText}`);
   }
 
   const data = await response.json();
