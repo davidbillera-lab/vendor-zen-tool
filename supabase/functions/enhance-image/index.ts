@@ -10,7 +10,7 @@ interface EnhanceRequest {
   imageUrl: string;
   prompt: string;
   mode: 'enhance' | 'generate' | 'edit';
-  provider: 'gpt-image-2' | 'gemini';
+  provider?: string;
 }
 
 serve(async (req) => {
@@ -76,11 +76,7 @@ serve(async (req) => {
 
     let base64Image: string;
 
-    if (provider === 'gemini') {
-      base64Image = await callGemini(imageUrl, prompt, mode);
-    } else {
-      base64Image = await callGptImage2(imageUrl, prompt, mode);
-    }
+    base64Image = await callGptImage2(imageUrl, prompt, mode);
 
     // Increment usage atomically now that the image was generated successfully
     await serviceClient.rpc('increment_enhancement_count', {
@@ -164,6 +160,7 @@ async function callGptImage2(imageUrl: string, prompt: string, mode: string): Pr
         prompt: effectivePrompt,
         n: 1,
         size: '1024x1024',
+        quality: 'medium',
       }),
     });
   } else {
@@ -176,6 +173,7 @@ async function callGptImage2(imageUrl: string, prompt: string, mode: string): Pr
     form.append('prompt', effectivePrompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
+    form.append('quality', 'medium');
     form.append('image', new Blob([imgBytes], { type: mimeType }), `image.${ext}`);
 
     response = await fetch('https://api.openai.com/v1/images/edits', {
@@ -201,54 +199,6 @@ async function extractOpenAIBase64(response: Response): Promise<string> {
   const b64 = data?.data?.[0]?.b64_json;
   if (!b64) throw new Error('No image returned from OpenAI');
   return b64;
-}
-
-// ── Provider: Google Gemini image generation ─────────────────────────────────
-
-async function callGemini(imageUrl: string, prompt: string, mode: string): Promise<string> {
-  const GOOGLE_AI_API_KEY = Deno.env.get('GOOGLE_AI_API_KEY');
-  if (!GOOGLE_AI_API_KEY) throw new Error('GOOGLE_AI_API_KEY is not configured');
-
-  const effectivePrompt = mode === 'enhance'
-    ? `Enhance this product image for e-commerce listing. Make it look professional with good lighting, clean background, clear details, and appealing presentation. ${prompt || 'Improve overall quality and appeal.'}`
-    : prompt;
-
-  const parts: unknown[] = [];
-
-  if (mode !== 'generate' && imageUrl) {
-    const imgBytes = await fetchImageBytes(imageUrl);
-    const b64 = uint8ArrayToBase64(imgBytes);
-    const mimeType = detectMimeType(imageUrl);
-    parts.push({ inlineData: { mimeType, data: b64 } });
-  }
-
-  parts.push({ text: effectivePrompt });
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${GOOGLE_AI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Gemini API error:', response.status, errorText);
-    if (response.status === 429) throw new Error('Rate limit exceeded. Please try again later.');
-    throw new Error(`Gemini API error: ${response.status} — ${errorText}`);
-  }
-
-  const data = await response.json();
-  const imagePart = data?.candidates?.[0]?.content?.parts?.find(
-    (p: { inlineData?: { data: string } }) => p.inlineData?.data
-  );
-  if (!imagePart?.inlineData?.data) throw new Error('No image returned from Gemini');
-  return imagePart.inlineData.data;
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
