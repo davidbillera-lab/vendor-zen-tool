@@ -926,6 +926,30 @@ serve(async (req) => {
             .map((c) => c.id)
             .filter((id): id is string => typeof id === 'string');
         }
+
+        // v2.3: distilled lessons — general rules the distill-lessons batch pass
+        // extracted from this seller's correction history. Prepended after the
+        // corrections block so LEARNED LESSONS sits above LEARNED CORRECTIONS in
+        // the final prompt: lessons generalize, raw cases give precision. Zero
+        // change when none exist.
+        const { data: lessons, error: lessonsErr } = await authedClient
+          .from('listing_correction_lessons')
+          .select('id, lesson_text')
+          .eq('retired', false)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        if (lessonsErr) {
+          console.warn('Lesson retrieval failed (non-blocking):', lessonsErr.message);
+        } else if (lessons && lessons.length > 0) {
+          const lessonLines = lessons.map((l) => `- ${l.lesson_text}`);
+          systemPrompt = `=== LEARNED LESSONS (general rules from this seller's correction history) ===\n${lessonLines.join('\n')}\n=== END LEARNED LESSONS ===\n\n${systemPrompt}`;
+          console.log(`Injected ${lessons.length} distilled lesson(s)`);
+          authedClient
+            .rpc('record_lesson_injections', { p_ids: lessons.map((l: { id: string }) => l.id) })
+            .then(({ error }) => {
+              if (error) console.warn('record_lesson_injections skipped (non-blocking):', error.message);
+            });
+        }
       } catch (e) {
         console.warn('Learned-corrections injection skipped (non-blocking):', e);
       }
