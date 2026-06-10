@@ -81,3 +81,23 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 **Why:** `supabaseReader.js` reads `process.env.SUPABASE_SERVICE_ROLE_KEY` specifically to bypass Row-Level Security on `denver_batch_rows`. If this var is missing, it falls back to `SUPABASE_ANON_KEY` — the anon key is subject to RLS and returns 0 rows silently. The workflow was injecting `SUPABASE_SERVICE_KEY` (no `_ROLE_`) which `runAgent.js` uses to authenticate to Supabase, but `supabaseReader.js` never saw the service role key it needed. The GitHub Secret `SUPABASE_SERVICE_ROLE_KEY` existed (added 2026-04-14) but was never wired into the workflow env block.
 
 **Consequence:** Both vars serve different purposes — do not consolidate them. `SUPABASE_SERVICE_KEY` → `runAgent.js` (fetches user credentials). `SUPABASE_SERVICE_ROLE_KEY` → `supabaseReader.js` (reads `denver_batch_rows` bypassing RLS). Any future workflow that uses `supabaseReader.js` must inject both.
+
+---
+
+## 2026-06-04/05 — Self-improving loop v2.2: semantic correction retrieval via pgvector (deployed)
+
+**Decision:** Correction injection in `generate-listing` moved from "20 most-recent global" (v1) to semantic nearest-neighbor retrieval. Each correction gets a 1536-dim embedding (`text-embedding-3-small`) over a compact signature (wrong/corrected title + specifics + category + note). At generation time the current item is captioned by Haiku (`claude-haiku-4-5`, ≤15-word resale descriptor), embedded the same way, and the top-8 nearest corrections are retrieved via the `match_listing_corrections` pgvector RPC and injected into the prompt. Backfill runs through the `embed-corrections` edge function (fire-and-forget from `EbayBatchPanel`, batch limit 25). If captioning/embedding fails, retrieval falls back to recent-20 (`retrievalMode='recent'`) — the listing path never blocks.
+
+**Why:** v1's global-recent injection degrades with volume — a clock correction is noise when listing a rug. Semantic retrieval makes relevance *improve* with volume (denser correction space → better neighbors), which is the compounding-moat thesis. v2.1 (category pre-filter) was skipped as subsumed: the embedding includes category, so semantic match dominates whenever images exist.
+
+**Consequence:** pgvector extension enabled; `listing_corrections.embedding vector(1536)` column. All retrieval is RLS-scoped (`security invoker`, `user_id = auth.uid()`) using a request-auth'd client — per-tenant correction isolation is preserved. Caption + embedding are Tier-1 calls, cost-logged to `model_costs` with `source: 'generate-listing'`. Migrations 20260604000000/20260605000000 were applied directly (not via tracked `supabase db push`), so `list_migrations` on the live project stops at 20260529000000 — schema verified live by direct SQL.
+
+---
+
+## 2026-06-05 — Self-improving loop v2.4: effectiveness tracking, decay, and retirement (deployed)
+
+**Decision:** Closed the quality loop on injected corrections. Every generation records which corrections shaped it: durable `correction_injections` event log (survives `ebay_batch_rows` deletion via on-delete-set-null) + `injected_correction_ids uuid[]` handle on the row, written via `record_correction_injections` RPC (non-blocking, from `CreateListing.tsx`). When the operator re-corrects the same row, `mark_corrections_re_corrected` flips the open injection events, bumps `times_failed`, and retires a correction once `times_failed >= 3 AND times_failed * 2 >= times_injected`. Retrieval ranking is now `similarity × recency decay (1/(1 + age_days/90))` and excludes retired rows. `correction_effectiveness_stats()` reports overall re-correction rate plus trailing-30d vs prior-30d.
+
+**Why:** Without failure tracking, a bad lesson gets injected forever. Decay keeps the operator's current taste dominant over stale corrections. The stats function produces the exit-story metric ("re-correction rate down X% over 90 days") for a data room.
+
+**Consequence:** Three counters (`times_injected`, `times_failed`, `retired`) on `listing_corrections` plus an UPDATE RLS policy (v1 had only select/insert). All RPCs are `security invoker` with `auth.uid()` scoping. Migration 20260605000200, also applied directly (untracked in `list_migrations`). Verified live 2026-06-09: `generate-listing` v28 + `embed-corrections` v4 active, 1 correction captured and embedded, 8 injection events recorded. Remaining unbuilt stage: v2.3 (distilled lessons, Tier-2 batch, sibling `_lessons` table).
