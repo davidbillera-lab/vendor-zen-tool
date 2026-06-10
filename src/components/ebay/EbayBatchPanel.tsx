@@ -126,6 +126,9 @@ async function captureCorrection(input: {
     supabase.functions
       .invoke("embed-corrections", { body: { limit: 25 } })
       .catch((e) => console.warn("embed-corrections invoke skipped (non-blocking):", e));
+    supabase.functions
+      .invoke("distill-lessons", { body: {} })
+      .catch((e) => console.warn("distill-lessons trigger skipped (non-blocking):", e));
   } catch (e) {
     console.warn("captureCorrection failed (non-blocking):", e);
   }
