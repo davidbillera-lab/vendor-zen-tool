@@ -111,3 +111,17 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 **Why:** Individual corrections are per-item specifics; they don't generalise across items. After accumulating ≥5 corrections on the same pattern (e.g. "always include model number in title for electronics"), the agent should apply that rule universally — not just when a matching vector is retrieved. The consolidation pass extracts that signal. No cron was used because the correction flow already has a natural trigger point (a new correction just captured), so piggy-backing on that event keeps the stack simpler. Lesson embeddings were explicitly skipped — lessons are general rules, not item-specific text, so vector similarity retrieval adds no value over recency ordering.
 
 **Consequence:** `listing_correction_lessons` table (`id uuid pk`, `lesson_text text`, `created_at timestamptz`, `retired bool default false`, `times_injected int default 0`). `record_lesson_injections` RPC increments `times_injected` in bulk, fire-and-forget. Lessons are retired manually or by a future automated decay pass. The Sonnet Tier-2 routing for `distill-lessons` is intentional — it needs reasoning quality to synthesise patterns, not just extraction. Do not downgrade to Haiku for the distillation call.
+
+---
+
+## 2026-06-11 — Hermes Loop closed: distilled lessons now injected into refine-listing verify mode
+
+**Decision:** `refine-listing` edge function's verify branch now reads up to 5 active lessons from `listing_correction_lessons` via `authedClient` (RLS-scoped) before building the system prompt. Lessons are prepended as a `=== LEARNED LESSONS ===` block, identical format to `generate-listing`. The read is fully non-blocking — if the table is empty or the fetch fails, verify proceeds normally with no lessons block. Refine mode is intentionally unchanged.
+
+**Why:** `generate-listing` was already closed (lessons injected since v2.3). `refine-listing` only read the manual `masterPrompt` guardrail. That meant the AI's distilled knowledge never reached the Verify path — the loop was broken at the last mile. Closing it means AI Verify gets smarter as corrections accumulate, without any manual operator action.
+
+**Why verify only, not refine:** Refine is directive — the user gives a specific instruction ("change the title to X"). Injecting learned lessons into a directive call risks the AI modifying fields the user didn't ask about, producing unexpected drift. Verify is evaluative — the AI audits the whole listing — so accumulated lessons are directly applicable and improve audit quality.
+
+**authedClient is required:** Lessons are RLS-scoped to `auth.uid()`. The anon client returns 0 rows silently. The pattern is `createClient(url, anonKey, { global: { headers: { Authorization: authHeader } } })` — same as generate-listing lines 833-837. Do not use the plain anon client for lesson reads.
+
+**Consequence:** The Hermes Loop is now fully closed across all three AI call paths in VZT: `generate-listing` (generate), `refine-listing/verify` (audit), and the `distill-lessons` consolidation pass. The global framework is documented as a portable skill at `~/.claude/skills/hermes-loop/SKILL.md`. Commit `5953055` on `vercel-deploy`.
