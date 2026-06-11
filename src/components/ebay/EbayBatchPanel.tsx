@@ -2391,7 +2391,7 @@ export function EbayBatchPanel({
                     variant="outline"
                     size="sm"
                     className="ml-auto h-7 text-xs"
-                    onClick={verifyListing}
+                    onClick={() => verifyListing()}
                     disabled={isVerifying || isRefining}
                   >
                     {isVerifying ? (
@@ -2411,7 +2411,7 @@ export function EbayBatchPanel({
                     disabled={isRefining}
                   />
                   <Button
-                    onClick={refineListing}
+                    onClick={() => refineListing()}
                     disabled={!correctionPrompt.trim() || isRefining}
                     size="icon"
                   >
