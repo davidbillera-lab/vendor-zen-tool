@@ -20,9 +20,8 @@ interface Job {
   doa_url: string;
   estatesales_url: string;
   status: "pending" | "running" | "completed" | "failed";
-  error: string | null;
+  error_message: string | null;
   created_at: string;
-  updated_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,7 +40,7 @@ export default function EstateSalesUpload() {
     try {
       const { data, error } = await supabase
         .from("estatesales_jobs" as any)
-        .select("id, doa_url, estatesales_url, status, error, created_at, updated_at")
+        .select("id, doa_url, estatesales_url, status, error_message, created_at")
         .order("created_at", { ascending: false })
         .limit(20);
       if (error) throw error;
@@ -239,10 +238,10 @@ function JobCard({ job }: { job: Job }) {
         {format(new Date(job.created_at), "MMM d, yyyy h:mm a")}
       </p>
 
-      {job.error && (
+      {job.error_message && (
         <div className="flex items-start gap-2 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 p-2.5 text-xs text-red-700 dark:text-red-400">
           <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-          {job.error}
+          {job.error_message}
         </div>
       )}
     </div>

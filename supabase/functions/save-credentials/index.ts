@@ -72,14 +72,17 @@ serve(async (req) => {
       throw new Error('CREDENTIALS_ENCRYPTION_KEY secret is not configured on this edge function.');
     }
 
-    // Authenticate the caller
-    const authHeader = req.headers.get('authorization') ?? '';
-    const supabaseUser = createClient(
+    // Service role client for JWT validation and DB writes
+    const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { authorization: authHeader } } },
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { auth: { persistSession: false } },
     );
-    const { data: { user }, error: userErr } = await supabaseUser.auth.getUser();
+
+    // Identify the calling user — pass JWT explicitly (edge functions have no stored session)
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const jwt = authHeader.replace(/^Bearer\s+/i, '');
+    const { data: { user }, error: userErr } = await supabase.auth.getUser(jwt);
     if (userErr || !user) {
       return new Response(
         JSON.stringify({ error: 'Unauthorized — valid session required' }),
@@ -96,12 +99,6 @@ serve(async (req) => {
         processedFields[k] = v;
       }
     }
-
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-      { auth: { persistSession: false } },
-    );
 
     const { error } = await supabase
       .from(table)

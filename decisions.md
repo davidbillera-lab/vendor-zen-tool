@@ -4,6 +4,24 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 
 ---
 
+## 2026-06-11 — Edge functions must validate the JWT explicitly with a service-role client (not anon-key + stored session)
+
+**Decision:** Any Supabase edge function that needs the calling user's identity must (1) create a client with `SUPABASE_SERVICE_ROLE_KEY`, and (2) extract the JWT from the `Authorization` header and call `supabase.auth.getUser(jwt)` with that token passed explicitly. The anon-key client with `global.headers.Authorization` + a no-argument `getUser()` does NOT work in edge functions — there is no stored session, so `getUser()` returns null and the function 401s. This fixed both `trigger-estatesales-agent` (commit a72aae1) and `save-credentials` (the "failed to save the credentials" bug).
+
+**Why:** Edge functions are stateless request handlers. The supabase-js auth helpers assume a browser-style persisted session; that assumption is false server-side. Passing the JWT directly to `getUser(jwt)` is the only reliable way to resolve the user. `trigger-doa-agent` already used this pattern — it was the working reference.
+
+**Consequence:** When writing or reviewing any edge function that reads `user.id`, confirm it uses the service-role + `getUser(jwt)` pattern. Do not reintroduce anon-key + global-header auth. (Note: Lovable has regenerated functions with the broken pattern before — re-check after any Lovable touch.)
+
+## 2026-06-11 — Reconciled estatesales credentials schema drift (missing updated_at)
+
+**Decision:** Added `updated_at timestamptz not null default now()` to `user_estatesales_credentials` (migration `20260611000000`). Lovable had created this table without the column, unlike its three sibling tables (`user_doa/mercari/poshmark_credentials`), all of which have it. The generic `save-credentials` function stamps `updated_at` on every upsert, so the missing column would have surfaced as a 500 once the auth fix unblocked the request.
+
+**Why:** Fix the drift at the source (the table) rather than special-casing the function. Removing the `updated_at` stamp from the shared function would have degraded the three working platforms. Uniform tables → one code path for all four platforms.
+
+**Consequence:** All four `user_<platform>_credentials` tables now have identical `updated_at` semantics. Keep them in sync. The committed migration `20260518000000_add_estatesales_tables.sql` already declared the column — the live DB had drifted from it, a recurring Lovable risk.
+
+---
+
 ## 2026-05 — Multi-tenant credential pattern: zero secrets in GitHub, all creds from Supabase at runtime
 
 **Decision:** User platform credentials (DOA, EstateSales.net) are stored in Supabase tables (`user_doa_credentials`, `user_estatesales_credentials`) per-user, never in GitHub Secrets or `.env` files. GitHub Actions workflows only receive `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`. The `runAgent.js` entrypoint for each agent fetches the calling user's credentials from Supabase at runtime using `user_id` from the job record.
