@@ -50,6 +50,12 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
+    const authedClient = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
     const { currentListing, correctionPrompt, imageUrls = [], platform = 'liveauctioneers', mode = 'refine', masterPrompt } = await req.json() as RefineRequest;
 
     console.log(`Mode: ${mode}, Platform: ${platform}`);
@@ -68,11 +74,33 @@ serve(async (req) => {
     if (mode === 'verify') {
       console.log('Running listing verification with Claude...');
 
+      let lessons: { id: string; lesson_text: string }[] = [];
+      try {
+        const { data, error: lessonsErr } = await authedClient
+          .from('listing_correction_lessons')
+          .select('id, lesson_text')
+          .eq('retired', false)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        if (lessonsErr) {
+          console.warn('lesson fetch skipped:', lessonsErr.message);
+        } else {
+          lessons = data ?? [];
+          if (lessons.length > 0) console.log(`Injected ${lessons.length} distilled lesson(s)`);
+        }
+      } catch (e) {
+        console.warn('lesson fetch failed (non-blocking):', e);
+      }
+
+      const lessonsSection = lessons.length > 0
+        ? `=== LEARNED LESSONS (from this seller's correction history) ===\n${lessons.map(l => `- ${l.lesson_text}`).join('\n')}\n=== END LEARNED LESSONS ===\n\n`
+        : '';
+
       const masterPromptSection = masterPrompt
         ? `\nBUSINESS CONTEXT (apply to all evaluations):\n${masterPrompt}\n`
         : '';
 
-      const verifySystemPrompt = `You are an expert eBay listing quality auditor with deep knowledge of current market prices.${masterPromptSection}
+      const verifySystemPrompt = `${lessonsSection}You are an expert eBay listing quality auditor with deep knowledge of current market prices.${masterPromptSection}
 
 Analyze the listing title, description, price, condition, and item specifics for quality and accuracy.
 
