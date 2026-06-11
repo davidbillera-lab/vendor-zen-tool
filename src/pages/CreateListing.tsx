@@ -867,8 +867,8 @@ export default function CreateListing() {
       }
 
       toast({
-        title: data.verified ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
-        description: data.notes || (data.verified ? "AI confirmed the identification is correct" : "Listing updated with corrections"),
+        title: data.passed ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
+        description: data.report || (data.passed ? "AI confirmed the identification is correct" : "Listing updated with corrections"),
       });
     } catch (error) {
       toast({

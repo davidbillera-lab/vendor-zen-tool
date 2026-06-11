@@ -61,7 +61,7 @@ serve(async (req) => {
 
     // Build Anthropic content with images for reference
     const imageContent: any[] = [];
-    for (const url of imageUrls) {
+    for (const url of imageUrls.filter(Boolean)) {
       imageContent.push({ type: "image", source: { type: "url", url } });
     }
 
@@ -123,9 +123,9 @@ No markdown fences. Return only the JSON object.`;
       if (!verifyResponse.ok) {
         const errorText = await verifyResponse.text();
         console.error('Anthropic API error:', verifyResponse.status, errorText);
-        if (verifyResponse.status === 429) {
+        if (verifyResponse.status === 429 || verifyResponse.status === 529 || verifyResponse.status === 503) {
           return new Response(
-            JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+            JSON.stringify({ error: 'AI service is temporarily busy. Please try again in a moment.' }),
             { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
         }
@@ -200,7 +200,7 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1500,
+        max_tokens: 2500,
         system: systemPrompt,
         messages: [{ role: 'user', content }],
       }),
@@ -210,9 +210,9 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
       const errorText = await response.text();
       console.error('Anthropic API error:', response.status, errorText);
 
-      if (response.status === 429) {
+      if (response.status === 429 || response.status === 529 || response.status === 503) {
         return new Response(
-          JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+          JSON.stringify({ error: 'AI service is temporarily busy. Please try again in a moment.' }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
