@@ -155,8 +155,8 @@ export function LALotEditor({ lot, onClose, onUpdate, onDelete }: LALotEditorPro
       }
 
       const data = await response.json();
-      const refined = data.listing;
-      
+      const refined = data.listing ?? {};
+
       setFormData(prev => ({
         ...prev,
         title: refined.title || prev.title,

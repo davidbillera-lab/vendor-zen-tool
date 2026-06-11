@@ -389,7 +389,7 @@ export function EbayBatchPanel({
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Refinement failed');
 
-      const refined = data.listing;
+      const refined = data.listing ?? {};
       if (targetRow) {
         onRowsChange(rows.map(r => r.id === row.id ? {
           ...r,

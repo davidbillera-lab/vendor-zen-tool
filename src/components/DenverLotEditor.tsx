@@ -117,8 +117,8 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
       }
 
       const data = await response.json();
-      const refined = data.listing;
-      
+      const refined = data.listing ?? {};
+
       setFormData(prev => ({
         ...prev,
         title: (refined.title || prev.title).substring(0, 100),

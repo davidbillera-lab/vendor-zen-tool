@@ -828,7 +828,7 @@ export default function CreateListing() {
       }
       const data = await verifyResp.json();
 
-      const refined = data.correctedListing;
+      const refined = data.correctedListing ?? {};
       setEbayVerifyResult({
         verified: data.passed,
         confidence: data.confidence,
@@ -919,7 +919,7 @@ export default function CreateListing() {
       }
       const data = await refineResp.json();
 
-      const refined = data.listing;
+      const refined = data.listing ?? {};
       const updates: any = {};
       if (refined.title) updates.title = String(refined.title).substring(0, 80);
       if (refined.description) updates.description = refined.description;

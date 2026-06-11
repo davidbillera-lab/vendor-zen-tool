@@ -50,7 +50,7 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
-    const { currentListing, correctionPrompt, imageUrls, platform = 'liveauctioneers', mode = 'refine', masterPrompt } = await req.json() as RefineRequest;
+    const { currentListing, correctionPrompt, imageUrls = [], platform = 'liveauctioneers', mode = 'refine', masterPrompt } = await req.json() as RefineRequest;
 
     console.log(`Mode: ${mode}, Platform: ${platform}`);
 
@@ -227,13 +227,19 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
     // Parse the JSON from the response
     let refinedListing;
     try {
-      // Extract JSON from potential markdown code blocks
-      const jsonMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, aiResponse];
-      const jsonStr = jsonMatch[1].trim();
-      refinedListing = JSON.parse(jsonStr);
+      const codeBlockMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        refinedListing = JSON.parse(codeBlockMatch[1].trim());
+      } else {
+        const objMatch = aiResponse.match(/\{[\s\S]*\}/);
+        refinedListing = JSON.parse(objMatch ? objMatch[0] : aiResponse.trim());
+      }
     } catch (parseError) {
-      console.error('Failed to parse AI response:', aiResponse);
-      throw new Error('Failed to parse AI response as JSON');
+      console.error('Failed to parse AI response as JSON:', aiResponse.substring(0, 500));
+      return new Response(
+        JSON.stringify({ error: 'AI returned an unparseable response. Please try again.' }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     return new Response(
