@@ -39,27 +39,23 @@ serve(async (req) => {
       );
     }
 
-    // Identify the calling user from their JWT
-    const authHeader = req.headers.get('authorization') ?? '';
-    const supabaseUser = createClient(
+    // Service role client for data operations and JWT validation
+    const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { authorization: authHeader } } },
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { auth: { persistSession: false } },
     );
-    const { data: { user }, error: userErr } = await supabaseUser.auth.getUser();
+
+    // Identify the calling user — pass JWT explicitly (edge functions have no stored session)
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const jwt = authHeader.replace(/^Bearer\s+/i, '');
+    const { data: { user }, error: userErr } = await supabase.auth.getUser(jwt);
     if (userErr || !user) {
       return new Response(
         JSON.stringify({ error: 'Unauthorized — valid session required' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
-
-    // Service role client to bypass RLS for inserts/reads
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
-      { auth: { persistSession: false } },
-    );
 
     // Verify the user has credentials on file before creating a job
     const { data: creds } = await supabase
