@@ -66,6 +66,47 @@ async function updateJobStatus(status, error = null) {
   else console.log(`[agent] Job status → ${status}`);
 }
 
+async function updateJobFields(fields) {
+  if (!supabase || !JOB_ID) return;
+  const { error: dbErr } = await supabase
+    .from('estatesales_jobs')
+    .update(fields)
+    .eq('id', JOB_ID);
+  if (dbErr) console.error(`[agent] Could not update job fields: ${dbErr.message}`);
+}
+
+/**
+ * Read the set of DOA lot URLs already uploaded to this EstateSales sale.
+ * Fails closed: if the ledger can't be read we abort rather than risk
+ * uploading duplicates.
+ */
+async function fetchUploadedLotUrls() {
+  if (!supabase) return new Set();
+  const { data, error } = await supabase
+    .from('estatesales_uploaded_lots')
+    .select('lot_url')
+    .eq('es_url', ES_URL);
+  if (error) throw new Error(`[agent] Could not read uploaded-lots ledger: ${error.message}`);
+  return new Set((data || []).map((r) => r.lot_url));
+}
+
+async function recordUploadedLot(lot, userId) {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('estatesales_uploaded_lots')
+    .upsert({
+      user_id:    userId,
+      job_id:     JOB_ID || null,
+      es_url:     ES_URL,
+      lot_url:    lot.source_url,
+      lot_number: lot.lot_number,
+      lot_title:  lot.title,
+    }, { onConflict: 'es_url,lot_url', ignoreDuplicates: true });
+  if (error) {
+    console.error(`[agent]   WARNING: could not record lot ${lot.lot_number} in ledger — a future re-run may upload it again: ${error.message}`);
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function screenshot(page, name) {
@@ -333,6 +374,7 @@ async function scrapeLots(page) {
           description: data.description,
           price:       data.price,
           imageUrls:   data.imageUrls,
+          source_url:  url,
         });
         continue;
       }
@@ -418,6 +460,7 @@ async function scrapeLots(page) {
         description,
         price,
         imageUrls:   allImageUrls,
+        source_url:  url,
       });
 
     } catch (err) {
@@ -440,6 +483,34 @@ async function scrapeLots(page) {
 async function uploadLots(page, lots) {
   let succeeded = 0;
   const failedLots = [];
+
+  // ── Dedup: skip lots already uploaded to this sale ───────────────────────
+  // The ledger (estatesales_uploaded_lots) records every lot saved to a given
+  // ES sale URL, so a re-run after a mid-run failure resumes where it left
+  // off instead of creating duplicates. Lots without a source_url can't be
+  // matched against the ledger and are treated as pending.
+  const uploadedUrls = await fetchUploadedLotUrls();
+  const pending = lots.filter((l) => !l.source_url || !uploadedUrls.has(l.source_url));
+  const skipped = lots.length - pending.length;
+  if (skipped > 0) {
+    console.log(`[agent] Skipping ${skipped} already-uploaded lot(s) — ${pending.length} remaining.`);
+  }
+  if (pending.length === 0) {
+    console.log('[agent] All lots already uploaded to this sale — nothing to do.');
+    return { succeeded: 0, failed: 0, failedLots: [], skipped };
+  }
+
+  // user_id for ledger rows (RLS select policy scopes the UI to the owner)
+  let jobUserId = null;
+  if (supabase && JOB_ID) {
+    const { data: jobRow } = await supabase
+      .from('estatesales_jobs')
+      .select('user_id')
+      .eq('id', JOB_ID)
+      .single();
+    jobUserId = jobRow?.user_id ?? null;
+  }
+
   console.log('[agent] Logging into EstateSales.net...');
   // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
   await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
@@ -506,9 +577,9 @@ async function uploadLots(page, lots) {
   fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
   // ── Upload each lot ──────────────────────────────────────────────────────
-  for (let i = 0; i < lots.length; i++) {
-    const lot = lots[i];
-    console.log(`\n[agent] Uploading lot ${i + 1}/${lots.length}: "${lot.title.slice(0, 60)}"`);
+  for (let i = 0; i < pending.length; i++) {
+    const lot = pending[i];
+    console.log(`\n[agent] Uploading lot ${i + 1}/${pending.length}: "${lot.title.slice(0, 60)}"`);
 
     try {
       // Navigate to the "add item" page.
@@ -637,6 +708,8 @@ async function uploadLots(page, lots) {
         await screenshot(page, `es-after-save-lot-${i + 1}`);
         console.log(`[agent]   Lot ${i + 1} saved: "${lot.title.slice(0, 60)}"`);
         succeeded++;
+        await recordUploadedLot(lot, jobUserId);
+        if (succeeded % 5 === 0) await updateJobFields({ lots_uploaded: succeeded });
       } else {
         await screenshot(page, `es-no-save-button-lot-${i + 1}`);
         const msg = `Could not find save/submit button for lot ${i + 1}`;
@@ -651,7 +724,7 @@ async function uploadLots(page, lots) {
     }
   }
 
-  return { succeeded, failed: failedLots.length, failedLots };
+  return { succeeded, failed: failedLots.length, failedLots, skipped };
 }
 
 /**
@@ -762,6 +835,7 @@ async function run() {
 
     lots = await scrapeLots(page);
     console.log(`\n[agent] Phase 1 complete — scraped ${lots.length} lot(s).`);
+    await updateJobFields({ lots_scraped: lots.length });
 
     if (lots.length === 0) {
       throw new Error(
@@ -775,13 +849,14 @@ async function run() {
     console.log('\n[agent] ── Phase 2: EstateSales Upload ─────────────────────');
     const uploadResult = await uploadLots(page, lots);
     console.log(`\n[agent] Phase 2 complete — ${uploadResult.succeeded} succeeded, ${uploadResult.failed} failed.`);
+    await updateJobFields({ lots_uploaded: uploadResult.succeeded });
     if (uploadResult.failed > 0) {
       const summary = uploadResult.failedLots.map(l => `Lot ${l.index}: ${l.error}`).join('; ');
       if (uploadResult.succeeded === 0) {
         throw new Error(`All ${uploadResult.failed} lot(s) failed to upload. ${summary}`);
       }
       // Partial success — throw a typed error so the entry point can distinguish
-      const partialErr = new Error(`${uploadResult.failed} of ${lots.length} lot(s) failed: ${summary}`);
+      const partialErr = new Error(`${uploadResult.failed} of ${lots.length - uploadResult.skipped} lot(s) failed: ${summary}`);
       partialErr.partial = true;
       partialErr.succeeded = uploadResult.succeeded;
       throw partialErr;

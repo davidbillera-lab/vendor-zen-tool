@@ -19,9 +19,11 @@ interface Job {
   id: string;
   doa_url: string;
   estatesales_url: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "partial_failed";
   error_message: string | null;
   created_at: string;
+  lots_scraped: number | null;
+  lots_uploaded: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -40,7 +42,7 @@ export default function EstateSalesUpload() {
     try {
       const { data, error } = await supabase
         .from("estatesales_jobs" as any)
-        .select("id, doa_url, estatesales_url, status, error_message, created_at")
+        .select("id, doa_url, estatesales_url, status, error_message, created_at, lots_scraped, lots_uploaded")
         .order("created_at", { ascending: false })
         .limit(20);
       if (error) throw error;
@@ -205,6 +207,7 @@ const STATUS_CONFIG = {
   running:   { label: "Running",   Icon: Loader2,      cls: "text-blue-600 bg-blue-500/10",     spin: true  },
   completed: { label: "Completed", Icon: CheckCircle2, cls: "text-emerald-600 bg-emerald-500/10", spin: false },
   failed:    { label: "Failed",    Icon: XCircle,      cls: "text-red-600 bg-red-500/10",       spin: false },
+  partial_failed: { label: "Partial", Icon: AlertCircle, cls: "text-orange-600 bg-orange-500/10", spin: false },
 } as const;
 
 function JobCard({ job }: { job: Job }) {
@@ -236,6 +239,11 @@ function JobCard({ job }: { job: Job }) {
 
       <p className="text-xs text-muted-foreground">
         {format(new Date(job.created_at), "MMM d, yyyy h:mm a")}
+        {job.lots_scraped != null && (
+          <span className="ml-2 text-foreground">
+            · {job.lots_uploaded ?? 0} of {job.lots_scraped} lots uploaded
+          </span>
+        )}
       </p>
 
       {job.error_message && (

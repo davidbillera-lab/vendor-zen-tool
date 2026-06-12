@@ -143,3 +143,13 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 **authedClient is required:** Lessons are RLS-scoped to `auth.uid()`. The anon client returns 0 rows silently. The pattern is `createClient(url, anonKey, { global: { headers: { Authorization: authHeader } } })` — same as generate-listing lines 833-837. Do not use the plain anon client for lesson reads.
 
 **Consequence:** The Hermes Loop is now fully closed across all three AI call paths in VZT: `generate-listing` (generate), `refine-listing/verify` (audit), and the `distill-lessons` consolidation pass. The global framework is documented as a portable skill at `~/.claude/skills/hermes-loop/SKILL.md`. Commit `5953055` on `vercel-deploy`.
+
+---
+
+## 2026-06-12 - EstateSales dedup ledger: estatesales_uploaded_lots table + progress fields
+
+**Decision:** New table `public.estatesales_uploaded_lots` (Supabase project atgrxqfxysvppqoyvjdd) records every lot the EstateSales agent successfully uploads, keyed `UNIQUE (es_url, lot_url)` where `lot_url` is the stable DOA `/auction-details?id=N` link and `es_url` is the target EstateSales sale. On every run, `uploadLots()` reads the ledger before ES login and skips lots already present. The ledger read **fails closed** - if it errors, the run aborts rather than risk duplicates. Writes go through the service-role key (upsert with `ignoreDuplicates`, non-fatal on error); RLS is enabled with a select-only `auth.uid() = user_id` policy so the UI can read but nothing client-side can write. The agent also writes `lots_scraped` / `lots_uploaded` progress fields to `estatesales_jobs` during the run, surfaced read-only on the EstateSalesUpload page.
+
+**Why:** A mid-run failure (e.g. the 2026-06-11 login blocker) previously meant a re-run would re-upload every lot, creating duplicates on the live sale. David's directive: visibility into where a run left off, and no duplicates, in that order. Keying on `(es_url, lot_url)` makes resume idempotent per sale while still allowing the same DOA lot to upload to a different future sale.
+
+**Consequence:** Additive only - no existing table or function reads this ledger. Fail-closed means a Supabase outage blocks uploads entirely; that is the intended tradeoff (a blocked run is recoverable, duplicates are manual cleanup on a live customer-facing sale). Ledger starts empty; zero lots had ever uploaded, so no backfill. Migration applied directly 2026-06-12 (untracked in `list_migrations`).
