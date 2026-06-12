@@ -199,17 +199,52 @@ async function scrapeLots(page) {
     return results;
   });
 
+  // ── Fallback: public auction catalog page ─────────────────────────────────
+  // If DOA_URL is the public catalog (/auction/<slug>) rather than the admin
+  // page, lots are linked as /auction/<slug>/lot-N-<title-slug> (plus m-/v-
+  // media variants, each appearing twice). The catalog is client-side
+  // rendered, so wait for the links to appear before collecting.
+  let mode = 'admin';
+  if (lotLinks.length === 0) {
+    console.log('[agent] No admin lot links found — checking for public catalog lot links...');
+    await page.waitForSelector('a[href*="lot-"]', { timeout: WAIT_TIMEOUT }).catch(() => {});
+    const publicLinks = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a[href]'));
+      const byLot = new Map(); // lot number → href, preferring the plain (non m-/v-) variant
+      for (const a of links) {
+        const href = a.getAttribute('href');
+        if (!href) continue;
+        const m = href.match(/\/auction\/[^/]+\/(m-|v-)?lot-(\d+)-/i);
+        if (!m) continue;
+        const num = parseInt(m[2], 10);
+        const isVariant = Boolean(m[1]);
+        const abs = href.startsWith('http') ? href : `https://denveronlineauctions.com${href.startsWith('/') ? '' : '/'}${href}`;
+        if (!byLot.has(num) || (byLot.get(num).isVariant && !isVariant)) {
+          byLot.set(num, { url: abs, isVariant });
+        }
+      }
+      return Array.from(byLot.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([, v]) => v.url);
+    });
+    if (publicLinks.length > 0) {
+      mode = 'public';
+      lotLinks.push(...publicLinks);
+    }
+  }
+
   if (lotLinks.length === 0) {
     await screenshot(page, 'doa-no-lot-links');
     throw new Error(
       `[agent] No lot links found on the DOA auction page.\n` +
       `  URL visited: ${DOA_URL}\n` +
-      `  Expected links matching /EditLot?id= or /auctionItemId= in the page.\n` +
+      `  Expected admin links (/EditLot?id= or /auctionItemId=) or public\n` +
+      `  catalog links (/auction/<slug>/lot-N-...) in the page.\n` +
       `  Check the screenshot "doa-no-lot-links" to diagnose the actual page structure.`
     );
   }
 
-  console.log(`[agent] Found ${lotLinks.length} lot link(s) on auction page.`);
+  console.log(`[agent] Found ${lotLinks.length} lot link(s) on auction page (${mode} mode).`);
 
   // ── Visit each lot and scrape its data ────────────────────────────────────
   const lots = [];
@@ -221,6 +256,56 @@ async function scrapeLots(page) {
 
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+
+      if (mode === 'public') {
+        // Public lot detail page (verified selectors, 2026-06-11):
+        //   title       → #MainContent_labelName  ("Lot #3 <title>")
+        //   description → #HiddenlabelDescription
+        //   images      → #images-container a.gallery-item hrefs (full-size CDN urls)
+        //   bid amount  → not exposed publicly; best-effort text match, defaults to 0
+        await page.waitForSelector('#MainContent_labelName', { timeout: WAIT_TIMEOUT }).catch(() => {});
+        const data = await page.evaluate(() => {
+          const titleRaw = document.querySelector('#MainContent_labelName')?.textContent?.trim() || '';
+          const description = (document.querySelector('#HiddenlabelDescription')?.innerText || '').trim();
+          const seen = new Set();
+          const imageUrls = [];
+          for (const a of document.querySelectorAll('#images-container a.gallery-item, a.gallery-item')) {
+            const h = a.href;
+            if (h && /\.(jpg|jpeg|png|gif|webp)/i.test(h) && !seen.has(h)) {
+              seen.add(h);
+              imageUrls.push(h);
+            }
+          }
+          if (imageUrls.length === 0) {
+            for (const img of document.querySelectorAll('#images-container img, img[src*="b-cdn"]')) {
+              const src = (img.src || '').replace('_thumbnail', '');
+              if (src && !seen.has(src)) {
+                seen.add(src);
+                imageUrls.push(src);
+              }
+            }
+          }
+          let price = 0;
+          const m = document.body.innerText.match(/(?:Current|Starting|Minimum|High)\s+Bid[^$\n]{0,30}\$\s*([\d,]+(?:\.\d+)?)/i);
+          if (m) price = parseFloat(m[1].replace(/,/g, '')) || 0;
+          return { titleRaw, description, imageUrls, price };
+        });
+
+        const urlNum = url.match(/(?:m-|v-)?lot-(\d+)-/i)?.[1];
+        const derivedLotNum = urlNum || String(lotNum);
+        const title = data.titleRaw.replace(/^(?:[MV]\s+)?Lot\s*#?\d+\s*[-–:.]?\s*/i, '').trim() || data.titleRaw;
+
+        console.log(`[agent]     lot_number=${derivedLotNum} title="${title.slice(0, 60)}" bid=$${data.price} images=${data.imageUrls.length}`);
+
+        lots.push({
+          lot_number:  derivedLotNum,
+          title:       title || `Lot ${derivedLotNum}`,
+          description: data.description,
+          price:       data.price,
+          imageUrls:   data.imageUrls,
+        });
+        continue;
+      }
 
       // Wait for the title field to appear — confirms we're on a lot edit page
       await page.waitForSelector('#txtTitle, input[name*="Title" i]', {
