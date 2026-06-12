@@ -207,17 +207,26 @@ async function scrapeLots(page) {
   let mode = 'admin';
   if (lotLinks.length === 0) {
     console.log('[agent] No admin lot links found — checking for public catalog lot links...');
-    await page.waitForSelector('a[href*="lot-"]', { timeout: WAIT_TIMEOUT }).catch(() => {});
+    await page.waitForSelector('a[href*="lot-"], a[href*="auction-details?id="]', { timeout: WAIT_TIMEOUT }).catch(() => {});
     const publicLinks = await page.evaluate(() => {
       const links = Array.from(document.querySelectorAll('a[href]'));
-      const byLot = new Map(); // lot number → href, preferring the plain (non m-/v-) variant
+      const byLot = new Map(); // lot/item key → href, preferring the plain (non m-/v-) variant
       for (const a of links) {
         const href = a.getAttribute('href');
         if (!href) continue;
-        const m = href.match(/\/auction\/[^/]+\/(m-|v-)?lot-(\d+)-/i);
-        if (!m) continue;
-        const num = parseInt(m[2], 10);
-        const isVariant = Boolean(m[1]);
+        let num;
+        let isVariant = false;
+        let m = href.match(/\/auction\/[^/]+\/(m-|v-)?lot-(\d+)-/i);
+        if (m) {
+          num = parseInt(m[2], 10);
+          isVariant = Boolean(m[1]);
+        } else {
+          // Logged-in sessions render catalog tiles as /auction-details?id=<itemId>
+          // instead of the anonymous /auction/<slug>/lot-N-<title> format.
+          m = href.match(/\/auction-details\?id=(\d+)/i);
+          if (!m) continue;
+          num = parseInt(m[1], 10);
+        }
         const abs = href.startsWith('http') ? href : `https://denveronlineauctions.com${href.startsWith('/') ? '' : '/'}${href}`;
         if (!byLot.has(num) || (byLot.get(num).isVariant && !isVariant)) {
           byLot.set(num, { url: abs, isVariant });
@@ -310,7 +319,10 @@ async function scrapeLots(page) {
         });
 
         const urlNum = url.match(/(?:m-|v-)?lot-(\d+)-/i)?.[1];
-        const derivedLotNum = urlNum || String(lotNum);
+        // auction-details?id= URLs carry an item id, not a lot number — fall
+        // back to the "Lot #N" prefix in the page title, then to the index.
+        const titleNum = data.titleRaw.match(/Lot\s*#?\s*(\d+)/i)?.[1];
+        const derivedLotNum = urlNum || titleNum || String(lotNum);
         const title = data.titleRaw.replace(/^(?:[MV]\s+)?Lot\s*#?\d+\s*[-–:.]?\s*/i, '').trim() || data.titleRaw;
 
         console.log(`[agent]     lot_number=${derivedLotNum} title="${title.slice(0, 60)}" bid=$${data.price} images=${data.imageUrls.length}`);
