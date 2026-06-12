@@ -441,7 +441,8 @@ async function uploadLots(page, lots) {
   let succeeded = 0;
   const failedLots = [];
   console.log('[agent] Logging into EstateSales.net...');
-  await page.goto('https://www.estatesales.net/login', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
+  await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
   await screenshot(page, 'es-login-page');
 
   // EstateSales.net login form
@@ -461,6 +462,7 @@ async function uploadLots(page, lots) {
   await emailEl.fill(ES_EMAIL);
 
   const passEl = await findFirst(page, [
+    '#password-input',
     '#password',
     'input[name="password"]',
     'input[type="password"]',
@@ -469,21 +471,24 @@ async function uploadLots(page, lots) {
   if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
   await passEl.fill(ES_PASSWORD);
 
+  // The page has several stray type="submit" buttons (Back, clear) — match the
+  // visible Sign In button by text before falling back to generic selectors.
   const submitEl = await findFirst(page, [
+    'button:has-text("Sign In")',
+    'button:has-text("Log In")',
+    'button:has-text("Login")',
     'button[type="submit"]',
     'input[type="submit"]',
-    'button:has-text("Log In")',
-    'button:has-text("Sign In")',
-    'button:has-text("Login")',
   ]);
   if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
   await submitEl.click();
-  await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+  // Angular SPA — redirect after login is client-side, not a full navigation
+  await page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }).catch(() => {});
   await screenshot(page, 'es-after-login');
 
   // Verify login succeeded — look for a sign we're authenticated
   const currentUrl = page.url();
-  if (currentUrl.includes('/login') || currentUrl.includes('/signin')) {
+  if (/\/(sign-?in|log-?in)/i.test(currentUrl)) {
     await screenshot(page, 'es-login-failed');
     throw new Error(
       '[agent] EstateSales.net login appears to have failed — still on login page.\n' +
