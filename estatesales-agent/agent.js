@@ -234,6 +234,24 @@ async function scrapeLots(page) {
   }
 
   if (lotLinks.length === 0) {
+    // Diagnostic: dump what anchors the page actually has so the failure log
+    // shows the real link structure (CI may see a different page than local).
+    const diag = await page.evaluate(() => {
+      const hrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.getAttribute('href'));
+      const patterns = {};
+      for (const h of hrefs) {
+        const key = h.split(/[?#]/)[0].replace(/\d+/g, 'N').slice(0, 100);
+        patterns[key] = (patterns[key] || 0) + 1;
+      }
+      return {
+        url: location.href,
+        title: document.title,
+        anchorCount: hrefs.length,
+        patterns,
+        sample: hrefs.slice(0, 25),
+      };
+    }).catch((e) => ({ diagError: String(e) }));
+    console.log('[agent] DIAGNOSTIC anchor dump:', JSON.stringify(diag, null, 2));
     await screenshot(page, 'doa-no-lot-links');
     throw new Error(
       `[agent] No lot links found on the DOA auction page.\n` +
