@@ -91,7 +91,7 @@ if (doaError || !doaCreds) {
   console.error(`[runAgent] ERROR: ${msg}`);
   await supabase
     .from('estatesales_jobs')
-    .update({ status: 'failed', error: msg, updated_at: new Date().toISOString() })
+    .update({ status: 'failed', error_message: msg, completed_at: new Date().toISOString() })
     .eq('id', JOB_ID);
   process.exit(1);
 }
@@ -111,7 +111,7 @@ if (esError || !esCreds) {
   console.error(`[runAgent] ERROR: ${msg}`);
   await supabase
     .from('estatesales_jobs')
-    .update({ status: 'failed', error: msg, updated_at: new Date().toISOString() })
+    .update({ status: 'failed', error_message: msg, completed_at: new Date().toISOString() })
     .eq('id', JOB_ID);
   process.exit(1);
 }

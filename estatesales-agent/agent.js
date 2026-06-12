@@ -55,8 +55,9 @@ const supabase = (SUPABASE_URL && SUPABASE_KEY)
 
 async function updateJobStatus(status, error = null) {
   if (!supabase || !JOB_ID) return;
-  const update = { status, updated_at: new Date().toISOString() };
-  if (error) update.error = String(error).slice(0, 2000);
+  const update = { status };
+  if (status === 'completed' || status === 'failed') update.completed_at = new Date().toISOString();
+  if (error) update.error_message = String(error).slice(0, 2000);
   const { error: dbErr } = await supabase
     .from('estatesales_jobs')
     .update(update)
@@ -616,7 +617,16 @@ async function run() {
     // #MainContent_Email avoids the newsletter popup email input
     await page.fill('#MainContent_Email', DOA_EMAIL);
     await page.fill('#MainContent_Password', DOA_PASSWORD);
-    await page.click('button[type="submit"]');
+    // ASP.NET WebForms login — submit is an <input>, not a <button>
+    const doaSubmit = await findFirst(page, [
+      '#MainContent_LoginButton',
+      'input[type="submit"]',
+      'button[type="submit"]',
+      'button:has-text("Log in")',
+      'input[value="Log in"]',
+    ]);
+    if (!doaSubmit) throw new Error('[agent] Could not find DOA login submit button.');
+    await doaSubmit.click();
     await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
     await screenshot(page, 'doa-after-login');
 
