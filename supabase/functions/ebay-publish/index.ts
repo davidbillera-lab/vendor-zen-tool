@@ -184,23 +184,7 @@ interface EbayRow {
   custom_sku: string | null;
 }
 
-function buildAddFixedPriceItemXml(row: EbayRow): string {
-  const title = (row.title || "").substring(0, 80).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const description = row.description || "";
-  const categoryId = row.category?.match(/\d{3,}/)?.[0] || "0";
-  const conditionId = mapConditionId(row.condition);
-  const price = (row.price || 0).toFixed(2);
-  const shippingCost = row.shipping_type === "free" ? "0.00"
-    : row.shipping_cost ? row.shipping_cost.toFixed(2)
-    : "9.98"; // JSG default
-
-  // Pictures — Trading API accepts up to 12 external URLs directly
-  const imageUrls = (row.image_urls || []).slice(0, 12);
-  const pictureXml = imageUrls.length > 0
-    ? `<PictureDetails>${imageUrls.map(u => `<PictureURL>${u}</PictureURL>`).join("")}</PictureDetails>`
-    : "";
-
-  // Item specifics
+function buildEffectiveSpecifics(categoryId: string, row: EbayRow): Record<string, string> {
   const specifics: Record<string, string> = { ...(row.item_specifics || {}) };
   if (row.brand && !specifics["Brand"]) specifics["Brand"] = row.brand;
   if (row.mpn && !specifics["MPN"]) specifics["MPN"] = row.mpn;
@@ -222,7 +206,6 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
   const FRAGRANCE_CATEGORIES = new Set(["11848", "11849", "11850", "11846", "31786", "177989", "177990"]);
   if (FRAGRANCE_CATEGORIES.has(categoryId)) {
     if (!specifics["Fragrance Name"]) {
-      // Extract fragrance name: strip qty/type suffixes, take first 65 chars
       const cleaned = (row.title || "")
         .replace(/\d+(\.\d+)?\s*(oz|fl oz|ml|ounce)s?/gi, "")
         .replace(/\b(eau de (parfum|toilette|cologne)|edp|edt|edc|parfum|perfume|cologne|fragrance|spray|set|gift set|for\s+(men|women|him|her|man|woman))\b/gi, "")
@@ -271,6 +254,28 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
     if (!specifics["Department"]) specifics["Department"] = "Women";
     if (!specifics["Size"]) specifics["Size"] = "See Description";
   }
+
+  return specifics;
+}
+
+function buildAddFixedPriceItemXml(row: EbayRow): string {
+  const title = (row.title || "").substring(0, 80).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const description = row.description || "";
+  const categoryId = row.category?.match(/\d{3,}/)?.[0] || "0";
+  const conditionId = mapConditionId(row.condition);
+  const price = (row.price || 0).toFixed(2);
+  const shippingCost = row.shipping_type === "free" ? "0.00"
+    : row.shipping_cost ? row.shipping_cost.toFixed(2)
+    : "9.98"; // JSG default
+
+  // Pictures — Trading API accepts up to 12 external URLs directly
+  const imageUrls = (row.image_urls || []).slice(0, 12);
+  const pictureXml = imageUrls.length > 0
+    ? `<PictureDetails>${imageUrls.map(u => `<PictureURL>${u}</PictureURL>`).join("")}</PictureDetails>`
+    : "";
+
+  // Item specifics — computed by shared helper (also used by guardrail in publishRow)
+  const specifics = buildEffectiveSpecifics(categoryId, row);
 
   const specificsXml = Object.entries(specifics).length > 0
     ? `<ItemSpecifics>${Object.entries(specifics).map(([k, v]) =>
@@ -523,6 +528,16 @@ async function publishRow(
     const qaRow: EbayRow = Object.keys(qa.filledSpecifics).length > 0
       ? { ...row, item_specifics: { ...(row.item_specifics || {}), ...qa.filledSpecifics } }
       : row;
+
+    // Hard guardrail — reject before hitting Trading API if any required aspect is still missing
+    const effectiveSpecifics = buildEffectiveSpecifics(categoryId, { ...qaRow, category: categoryId });
+    const stillMissing = requiredAspects.filter(a => !effectiveSpecifics[a]);
+    if (stillMissing.length > 0) {
+      return {
+        success: false,
+        error: `Lot ${row.lot_number}: Missing required item specifics: ${stillMissing.join(", ")}. Add these in the item specifics panel before publishing.`,
+      };
+    }
 
     const xml = buildAddFixedPriceItemXml({ ...qaRow, category: categoryId });
 

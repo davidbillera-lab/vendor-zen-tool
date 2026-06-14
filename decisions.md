@@ -4,6 +4,16 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 
 ---
 
+## 2026-06-13 — eBay required item specifics guardrail: extract + pre-flight check before Trading API
+
+**Decision:** Extracted `buildEffectiveSpecifics(categoryId, row)` from `buildAddFixedPriceItemXml`. The new helper computes the exact specifics dict that will be submitted (user values + brand/mpn/upc + category-specific defaults). In `publishRow()`, immediately after the QA merge and before the XML build, the guardrail calls `buildEffectiveSpecifics` and cross-references against `requiredAspects` (from Taxonomy API). Any required aspect still missing → hard fail with a human-readable error listing the missing keys. Nothing hits the Trading API.
+
+**Why:** `getRequiredAspectsForCategory` was already fetching required aspects and `runPrePublishQA` was already trying to fill them via AI — but there was no enforcement. Items with unfillable required specifics (e.g. ISBN for books — AI can't fabricate an ISBN) were silently reaching the Trading API and getting error 21919303. The guardrail catches this case deterministically before any network call.
+
+**Consequence:** `buildEffectiveSpecifics` is now the single source of truth for what specifics will be submitted. If category-specific injection logic ever changes, update the helper — `buildAddFixedPriceItemXml` delegates to it. The guardrail gets the update automatically.
+
+---
+
 ## 2026-06-11 — Edge functions must validate the JWT explicitly with a service-role client (not anon-key + stored session)
 
 **Decision:** Any Supabase edge function that needs the calling user's identity must (1) create a client with `SUPABASE_SERVICE_ROLE_KEY`, and (2) extract the JWT from the `Authorization` header and call `supabase.auth.getUser(jwt)` with that token passed explicitly. The anon-key client with `global.headers.Authorization` + a no-argument `getUser()` does NOT work in edge functions — there is no stored session, so `getUser()` returns null and the function 401s. This fixed both `trigger-estatesales-agent` (commit a72aae1) and `save-credentials` (the "failed to save the credentials" bug).
