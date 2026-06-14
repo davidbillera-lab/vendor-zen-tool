@@ -109,31 +109,34 @@ async function getInventoryAccessToken(userCreds?: { clientId: string; clientSec
   const refreshToken = userCreds?.refreshToken ?? "";
 
   const b64Auth = btoa(`${clientId}:${clientSecret}`);
+  const oauthUrl = EBAY_ENV_CONFIG[environment].oauthTokenUrl;
 
-  const res = await fetch(EBAY_ENV_CONFIG[environment].oauthTokenUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${b64Auth}`,
-    },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      scope: "https://api.ebay.com/oauth/api_scope/sell.inventory",
-    }),
-  });
+  // Try sell.inventory scope first; fall back to basic api_scope for tokens
+  // connected before sell.inventory was added to REQUIRED_SCOPES.
+  for (const scope of [
+    "https://api.ebay.com/oauth/api_scope/sell.inventory",
+    "https://api.ebay.com/oauth/api_scope",
+  ]) {
+    const res = await fetch(oauthUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${b64Auth}`,
+      },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken, scope }),
+    });
 
-  if (!res.ok) {
+    if (res.ok) {
+      const data = await res.json();
+      console.log(`[ebay-publish] Inventory token obtained with scope: ${scope}`);
+      return { accessToken: data.access_token, environment, inventoryApiBase: EBAY_ENV_CONFIG[environment].inventoryApiBase };
+    }
+
     const text = await res.text();
-    throw new Error(`Inventory API OAuth token refresh failed (${res.status}): ${text}`);
+    console.warn(`[ebay-publish] Token refresh failed for scope ${scope} (${res.status}): ${text}`);
   }
 
-  const data = await res.json();
-  return {
-    accessToken: data.access_token,
-    environment,
-    inventoryApiBase: EBAY_ENV_CONFIG[environment].inventoryApiBase,
-  };
+  throw new Error("Inventory API OAuth token refresh failed for all scopes. Re-authorize eBay in Settings → Platforms.");
 }
 
 /* ──────────── Condition ID mapping (Trading API) ──────────── */
