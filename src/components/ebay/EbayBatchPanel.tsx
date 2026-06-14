@@ -163,6 +163,7 @@ export function EbayBatchPanel({
   const [backfillingCategories, setBackfillingCategories] = useState(false);
   const [excludeImages, setExcludeImages] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [sendingToDraft, setSendingToDraft] = useState(false);
   const [zapierWebhookUrl, setZapierWebhookUrl] = useState("https://hooks.zapier.com/hooks/catch/26172063/uqfpdh0/");
   const [sendingToZapier, setSendingToZapier] = useState(false);
   const [showZapierConfig, setShowZapierConfig] = useState(false);
@@ -1417,6 +1418,69 @@ export function EbayBatchPanel({
     }
   };
 
+  const handleSendToDraft = async () => {
+    if (rows.length === 0) {
+      toast({ title: "No listings", description: "Add listings first.", variant: "destructive" });
+      return;
+    }
+    if (!confirm(`Send ${activeRows.length} listing(s) to eBay Seller Hub as drafts?`)) return;
+
+    setSendingToDraft(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("ebay-publish", {
+        body: { rows: activeRows, mode: "draft" },
+      });
+
+      if (error) {
+        let description = error.message;
+        try {
+          const body = await (error as any).context?.json?.();
+          if (body?.error) description = body.error;
+        } catch {}
+        toast({ title: "Draft failed", description, variant: "destructive" });
+        return;
+      }
+
+      const { succeeded, failed, results, promotionMessage } = data;
+      if (succeeded > 0) {
+        const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
+        onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "draft" } : r));
+      }
+
+      if (failed > 0) {
+        const newErrors: Record<string, string> = {};
+        for (const result of results.filter((r: any) => !r.success)) {
+          const err = result.error || "";
+          const match = err.match(/item\s+specific[s]?\s+["']?([^"'.]+?)["']?\s+(is\s+missing|required)/i)
+                     || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
+          if (match && result.id) {
+            const missingSpec = match[1].trim();
+            onRowsChange(rows.map(r => r.id === result.id
+              ? { ...r, status: "error", item_specifics: { ...r.item_specifics, [missingSpec]: "" } }
+              : r
+            ));
+          }
+          if (result.id) newErrors[result.id] = err;
+        }
+        setRowErrors(prev => ({ ...prev, ...newErrors }));
+        toast({
+          title: `${succeeded} sent to draft, ${failed} failed`,
+          description: `First error: ${results.find((r: any) => !r.success)?.error?.substring(0, 120)}`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Sent to Seller Hub drafts!",
+          description: promotionMessage ?? `${succeeded} listing(s) are waiting in Seller Hub — review and publish when ready.`,
+        });
+      }
+    } catch (e) {
+      toast({ title: "Draft failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setSendingToDraft(false);
+    }
+  };
+
   const handleRetrySingleRow = async (row: EbayRow) => {
     setPublishing(true);
     try {
@@ -1488,10 +1552,16 @@ export function EbayBatchPanel({
               </div>
             </div>
             {rows.length > 0 && (
-              <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
-                {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push to eBay (${activeRows.length})` : "Push to eBay"}
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={handleSendToDraft} disabled={sendingToDraft || publishing} variant="outline" className="gap-2">
+                  {sendingToDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  {sendingToDraft ? "Sending…" : selectedIds.size > 0 ? `Send to Draft (${activeRows.length})` : "Send to Draft"}
+                </Button>
+                <Button onClick={handlePushToEbay} disabled={publishing || sendingToDraft} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
+                  {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push to eBay (${activeRows.length})` : "Push to eBay"}
+                </Button>
+              </div>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
