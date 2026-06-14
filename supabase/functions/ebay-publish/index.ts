@@ -795,7 +795,7 @@ async function getOrCreateMerchantLocation(accessToken: string, inventoryApiBase
   const LOCATION_KEY = "JSG_HIGHLANDS_RANCH";
 
   const listRes = await fetch(`${inventoryApiBase}/location`, {
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Accept-Language": "en-US" },
   });
 
   if (listRes.ok) {
@@ -809,7 +809,7 @@ async function getOrCreateMerchantLocation(accessToken: string, inventoryApiBase
 
   const createRes = await fetch(`${inventoryApiBase}/location/${LOCATION_KEY}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Accept-Language": "en-US" },
     body: JSON.stringify({
       location: {
         address: {
