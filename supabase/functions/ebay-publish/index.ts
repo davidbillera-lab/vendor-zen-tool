@@ -913,6 +913,7 @@ async function createOffer(
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
       "Content-Language": "en-US",
+      "Accept-Language": "en-US",
     },
     body: JSON.stringify(offerBody),
   });
