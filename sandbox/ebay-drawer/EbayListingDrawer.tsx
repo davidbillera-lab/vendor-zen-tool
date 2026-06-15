@@ -16,7 +16,8 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { X, AlertCircle, CheckCircle2, ExternalLink, Image as ImageIcon } from "lucide-react";
+import { AlertCircle, CheckCircle2, ExternalLink, Image as ImageIcon } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   Sheet,
@@ -389,9 +390,6 @@ export function EbayListingDrawer({
   onSaveSpecifics,
   onPublish,
 }: EbayListingDrawerProps) {
-  // Feature flag guard
-  if (!FEATURE_ENABLED) return null;
-
   const [status, setStatus] = useState<DrawerStatus>("idle");
   const [aspectFields, setAspectFields] = useState<AspectField[]>([]);
   const [workingImages, setWorkingImages] = useState<string[]>([]);
@@ -399,26 +397,37 @@ export function EbayListingDrawer({
   const [publishing, setPublishing] = useState(false);
   const prevRowId = useRef<string | null>(null);
 
+  // Feature flag guard — must come after all hooks to satisfy rules-of-hooks
+  if (!FEATURE_ENABLED) return null;
+
   const live = isLive(row);
 
   // On open / row change: fetch aspects and seed working state
   useEffect(() => {
     if (!open || !row) {
+      prevRowId.current = null; // SF1: reset so re-open for same row re-fetches
       setAspectFields([]);
       setStatus("idle");
       return;
     }
 
-    // Avoid re-fetching if the same row is already loaded
-    if (prevRowId.current === row.id && status === "loaded") return;
+    // Guard: same row already loading/loaded in this open — do not re-fetch
+    if (prevRowId.current === row.id) return;
     prevRowId.current = row.id;
 
-    setWorkingImages(row.image_urls ?? []);
+    // Snapshot row values — prevents stale-closure surprises in async callbacks
+    const rowId = row.id;
+    const imageUrls = row.image_urls ?? [];
+    const itemSpecifics = row.item_specifics ?? {};
+    const category = row.category;
 
-    const categoryId = extractCategoryId(row.category);
+    setWorkingImages(imageUrls);
+    setAspectFields([]); // B4: clear prior row's fields immediately on new load
+
+    const categoryId = extractCategoryId(category);
     if (!categoryId) {
       // No category set — show existing specifics as free-text fields
-      const fallback: AspectField[] = Object.entries(row.item_specifics ?? {}).map(
+      const fallback: AspectField[] = Object.entries(itemSpecifics).map(
         ([name, value]) => ({
           aspect: { name, required: false, mode: "FREE_TEXT" as const, allowedValues: [] },
           currentValue: value,
@@ -432,9 +441,10 @@ export function EbayListingDrawer({
     setStatus("loading");
     fetchCategoryAspects(categoryId)
       .then((result) => {
+        if (prevRowId.current !== rowId) return; // B3: stale result — row changed, discard
         if (!result) {
           // Edge fn unavailable — degrade to existing specifics
-          const fallback: AspectField[] = Object.entries(row.item_specifics ?? {}).map(
+          const fallback: AspectField[] = Object.entries(itemSpecifics).map(
             ([name, value]) => ({
               aspect: {
                 name,
@@ -447,15 +457,16 @@ export function EbayListingDrawer({
           );
           setAspectFields(fallback);
         } else {
-          const merged = mergeAspectsWithSpecifics(result.aspects, row.item_specifics ?? {});
+          const merged = mergeAspectsWithSpecifics(result.aspects, itemSpecifics);
           setAspectFields(merged);
         }
         setStatus("loaded");
       })
       .catch(() => {
+        if (prevRowId.current !== rowId) return; // B3: discard stale error
         setStatus("error");
       });
-  }, [open, row?.id]);
+  }, [open, row?.id, row?.image_urls, row?.item_specifics, row?.category]);
 
   // ---------------------------------------------------------------------------
   // Field updates
@@ -485,6 +496,9 @@ export function EbayListingDrawer({
       }
       await onSaveSpecifics(row.id, updated);
       onOpenChange(false);
+    } catch (err) {
+      toast.error("Save failed — check your connection and try again.");
+      console.error("[EbayListingDrawer] handleSave error:", err);
     } finally {
       setSaving(false);
     }
@@ -508,6 +522,9 @@ export function EbayListingDrawer({
       }
       await onPublish(row.id);
       onOpenChange(false);
+    } catch (err) {
+      toast.error("Publish failed — check your connection and try again.");
+      console.error("[EbayListingDrawer] handlePublish error:", err);
     } finally {
       setPublishing(false);
     }
@@ -520,7 +537,7 @@ export function EbayListingDrawer({
   const requiredFields = aspectFields.filter((f) => f.aspect.required);
   const recommendedFields = aspectFields.filter((f) => !f.aspect.required);
   const missing = missingRequired(aspectFields);
-  const canPublish = !live && missing.length === 0;
+  const canPublish = !live && status === "loaded" && missing.length === 0;
 
   // ---------------------------------------------------------------------------
   // Render
