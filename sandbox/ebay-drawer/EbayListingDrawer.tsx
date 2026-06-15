@@ -80,6 +80,8 @@ export interface DrawerEbayRow {
   upc: string | null;
   brand: string | null;
   mpn: string | null;
+  /** eBay-assigned listing ID — available after first successful publish */
+  ebay_item_id?: string | null;
 }
 
 export interface EbayListingDrawerProps {
@@ -88,6 +90,8 @@ export interface EbayListingDrawerProps {
   onOpenChange: (open: boolean) => void;
   /** Called when operator saves edited specifics. Parent should persist to DB. */
   onSaveSpecifics?: (rowId: string, specifics: Record<string, string>) => Promise<void>;
+  /** Called when operator reorders/removes images. Parent should persist to DB. */
+  onSaveImages?: (rowId: string, urls: string[]) => void;
   /** Called when operator clicks Publish. Parent triggers existing publish flow. */
   onPublish?: (rowId: string) => Promise<void>;
 }
@@ -488,13 +492,18 @@ export function EbayListingDrawer({
     if (!row || !onSaveSpecifics) return;
     setSaving(true);
     try {
-      const updated: Record<string, string> = {};
+      // SF2: merge edits into existing specifics — preserves keys not surfaced as aspects
+      const updated: Record<string, string> = { ...row.item_specifics };
       for (const f of aspectFields) {
         if (f.currentValue.trim()) {
           updated[f.aspect.name] = f.currentValue.trim();
+        } else {
+          delete updated[f.aspect.name];
         }
       }
       await onSaveSpecifics(row.id, updated);
+      // SF3: persist image reordering/removals if parent wired it
+      onSaveImages?.(row.id, workingImages);
       onOpenChange(false);
     } catch (err) {
       toast.error("Save failed — check your connection and try again.");
@@ -512,13 +521,17 @@ export function EbayListingDrawer({
     if (!row || !onPublish) return;
     setPublishing(true);
     try {
-      // Save specifics first, then publish
+      // Save specifics + images first, then publish
       if (onSaveSpecifics) {
-        const updated: Record<string, string> = {};
+        // SF2: merge edits into existing specifics — preserves keys not surfaced as aspects
+        const updated: Record<string, string> = { ...row.item_specifics };
         for (const f of aspectFields) {
           if (f.currentValue.trim()) updated[f.aspect.name] = f.currentValue.trim();
+          else delete updated[f.aspect.name];
         }
         await onSaveSpecifics(row.id, updated);
+        // SF3: persist image reordering/removals if parent wired it
+        onSaveImages?.(row.id, workingImages);
       }
       await onPublish(row.id);
       onOpenChange(false);
@@ -667,22 +680,24 @@ export function EbayListingDrawer({
         {/* ── Sticky footer ──────────────────────────────────── */}
         <div className="sticky bottom-0 z-10 border-t border-border px-5 py-4 bg-[hsl(20_14%_7%)] flex items-center gap-3">
           {live ? (
-            // Read-only: show "View live listing" link only
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              asChild
-            >
-              <a
-                href={`https://www.ebay.com/itm/${row.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
+            // SF4: only show link once ebay_item_id is available (row.id is the DB id, not eBay id)
+            row.ebay_item_id && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                asChild
               >
-                <ExternalLink className="h-3.5 w-3.5" />
-                View live listing
-              </a>
-            </Button>
+                <a
+                  href={`https://www.ebay.com/itm/${row.ebay_item_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  View live listing
+                </a>
+              </Button>
+            )
           ) : (
             <>
               {/* Save & close */}
