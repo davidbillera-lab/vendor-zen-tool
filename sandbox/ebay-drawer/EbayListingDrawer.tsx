@@ -392,6 +392,7 @@ export function EbayListingDrawer({
   open,
   onOpenChange,
   onSaveSpecifics,
+  onSaveImages,
   onPublish,
 }: EbayListingDrawerProps) {
   const [status, setStatus] = useState<DrawerStatus>("idle");
@@ -400,11 +401,6 @@ export function EbayListingDrawer({
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const prevRowId = useRef<string | null>(null);
-
-  // Feature flag guard — must come after all hooks to satisfy rules-of-hooks
-  if (!FEATURE_ENABLED) return null;
-
-  const live = isLive(row);
 
   // On open / row change: fetch aspects and seed working state
   useEffect(() => {
@@ -447,23 +443,12 @@ export function EbayListingDrawer({
       .then((result) => {
         if (prevRowId.current !== rowId) return; // B3: stale result — row changed, discard
         if (!result) {
-          // Edge fn unavailable — degrade to existing specifics
-          const fallback: AspectField[] = Object.entries(itemSpecifics).map(
-            ([name, value]) => ({
-              aspect: {
-                name,
-                required: false,
-                mode: "FREE_TEXT" as const,
-                allowedValues: [],
-              },
-              currentValue: value,
-            })
-          );
-          setAspectFields(fallback);
-        } else {
-          const merged = mergeAspectsWithSpecifics(result.aspects, itemSpecifics);
-          setAspectFields(merged);
+          // Edge fn unavailable — taxonomy unknown, block publish to avoid missing required fields
+          setStatus("error");
+          return;
         }
+        const merged = mergeAspectsWithSpecifics(result.aspects, itemSpecifics);
+        setAspectFields(merged);
         setStatus("loaded");
       })
       .catch(() => {
@@ -483,6 +468,11 @@ export function EbayListingDrawer({
       )
     );
   }, []);
+
+  // Feature flag guard — after ALL hooks (rules-of-hooks: no conditional return between hook calls)
+  if (!FEATURE_ENABLED) return null;
+
+  const live = isLive(row);
 
   // ---------------------------------------------------------------------------
   // Save
