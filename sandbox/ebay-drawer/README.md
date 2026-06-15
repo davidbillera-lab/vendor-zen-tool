@@ -24,7 +24,7 @@
 
 1. **Apply migration to staging Supabase:**
    ```bash
-   supabase db push --db-url <STAGING_DB_URL> < sandbox/ebay-drawer/migrations/ebay_category_aspects_cache.sql
+   psql "$STAGING_DB_URL" -f sandbox/ebay-drawer/migrations/ebay_category_aspects_cache.sql
    ```
    Verify the `ebay_category_aspects_cache` table exists with `category_id` PK, `aspects jsonb`, `fetched_at`.
 
@@ -58,7 +58,7 @@
 
 6. **Apply migration to production** after staging verification passes:
    ```bash
-   supabase db push --db-url <PROD_DB_URL> < sandbox/ebay-drawer/migrations/ebay_category_aspects_cache.sql
+   psql "$PROD_DB_URL" -f sandbox/ebay-drawer/migrations/ebay_category_aspects_cache.sql
    supabase functions deploy ebay-category-aspects --project-ref <PROD_REF>
    ```
 

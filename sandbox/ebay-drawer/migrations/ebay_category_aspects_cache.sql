@@ -40,11 +40,10 @@ COMMENT ON COLUMN public.ebay_category_aspects_cache.aspects IS
 -- Indexes
 -- ---------------------------------------------------------------------------
 
--- Lookup by category (most common query)
-CREATE INDEX IF NOT EXISTS idx_ebay_category_aspects_cache_category_id
-  ON public.ebay_category_aspects_cache (category_id);
+-- NOTE: no separate idx on category_id — already covered by the leading column
+-- of the composite PK (category_id, marketplace_id). Adding it would be redundant.
 
--- Staleness sweeps (identify expired cache rows)
+-- Staleness sweeps (identify expired cache rows for TTL housekeeping)
 CREATE INDEX IF NOT EXISTS idx_ebay_category_aspects_cache_fetched_at
   ON public.ebay_category_aspects_cache (fetched_at);
 
