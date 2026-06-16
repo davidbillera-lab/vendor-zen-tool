@@ -35,6 +35,7 @@ import { EbayItemSpecificsEditor } from "./EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "./EbayShippingSettings";
 import { DraggableImageGrid } from "../DraggableImageGrid";
 import { AIGenerateButton } from "../AIGenerateButton";
+import { EbayListingDrawer, type DrawerEbayRow } from "@/components/ebay/EbayListingDrawer";
 
 interface EbayRow {
   id: string;
@@ -188,6 +189,8 @@ export function EbayBatchPanel({
   // specFixes[rowId][specKey] = current draft value for an empty item_specific
   const [specFixes, setSpecFixes] = useState<Record<string, Record<string, string>>>({});
   const [crossPostRowId, setCrossPostRowId] = useState<string | null>(null);
+  const [drawerRow, setDrawerRow] = useState<DrawerEbayRow | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Reset AI state when edit dialog closes
   useEffect(() => {
@@ -1970,7 +1973,13 @@ export function EbayBatchPanel({
                       variant="ghost"
                       size="sm"
                       className="h-7 w-7 p-0"
-                      onClick={() => setViewingRow(row)}
+                      onClick={() => {
+                        if (import.meta.env.VITE_FEATURE_EBAY_DRAWER === "true") {
+                          setDrawerRow(row); setDrawerOpen(true);
+                        } else {
+                          setViewingRow(row);
+                        }
+                      }}
                     >
                       <Eye className="h-3 w-3" />
                     </Button>
@@ -2556,6 +2565,21 @@ export function EbayBatchPanel({
           </div>
         </DialogContent>
       </Dialog>
+      <EbayListingDrawer
+        row={drawerRow}
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        onSaveSpecifics={async (rowId, specifics) => {
+          await supabase
+            .from("ebay_batch_rows")
+            .update({ item_specifics: specifics })
+            .eq("id", rowId);
+        }}
+        onPublish={async (rowId) => {
+          const row = rows.find(r => r.id === rowId);
+          if (row) await handleRetrySingleRow(row);
+        }}
+      />
     </>
   );
 }
