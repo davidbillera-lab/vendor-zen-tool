@@ -219,13 +219,12 @@ async function logCost(
   try {
     const db = makeServiceClient();
     await db.from("model_costs").insert({
-      provider: "ebay",
+      source: "ebay",
       model: "taxonomy-api",
       operation: "get_aspects_for_category",
       input_tokens: 0,
       output_tokens: 0,
       cost_usd: 0,
-      metadata: { category_id: categoryId, from_cache: fromCache, duration_ms: durationMs },
     });
   } catch {
     // Non-fatal — don't let logging failure break the response
