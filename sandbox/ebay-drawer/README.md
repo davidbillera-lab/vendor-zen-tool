@@ -36,15 +36,16 @@
 
 3. **Verify cache read-through:**
    ```bash
+   # Get a user JWT first (Supabase signInWithPassword or grab from browser devtools)
    # First call — should hit eBay and write cache row
    curl -X POST https://<STAGING_URL>/functions/v1/ebay-category-aspects \
-     -H "Authorization: Bearer <ANON_KEY>" \
+     -H "Authorization: Bearer <USER_JWT>" \
      -H "Content-Type: application/json" \
      -d '{"categoryId":"66426"}'
 
    # Second call — should return fromCache: true
    curl -X POST https://<STAGING_URL>/functions/v1/ebay-category-aspects \
-     -H "Authorization: Bearer <ANON_KEY>" \
+     -H "Authorization: Bearer <USER_JWT>" \
      -H "Content-Type: application/json" \
      -d '{"categoryId":"66426"}'
    ```

@@ -492,8 +492,11 @@ export function EbayListingDrawer({
         }
       }
       await onSaveSpecifics(row.id, updated);
-      // SF3: persist image reordering/removals if parent wired it
-      onSaveImages?.(row.id, workingImages);
+      // SF3: persist image reordering/removals only when changed (avoid redundant saves)
+      const origImages = row.image_urls ?? [];
+      if (JSON.stringify(workingImages) !== JSON.stringify(origImages)) {
+        onSaveImages?.(row.id, workingImages);
+      }
       onOpenChange(false);
     } catch (err) {
       toast.error("Save failed — check your connection and try again.");
@@ -520,8 +523,11 @@ export function EbayListingDrawer({
           else delete updated[f.aspect.name];
         }
         await onSaveSpecifics(row.id, updated);
-        // SF3: persist image reordering/removals if parent wired it
-        onSaveImages?.(row.id, workingImages);
+        // SF3: persist image reordering/removals only when changed (avoid redundant saves)
+        const origImages = row.image_urls ?? [];
+        if (JSON.stringify(workingImages) !== JSON.stringify(origImages)) {
+          onSaveImages?.(row.id, workingImages);
+        }
       }
       await onPublish(row.id);
       onOpenChange(false);
