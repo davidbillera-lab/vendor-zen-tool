@@ -102,7 +102,7 @@ console.log(`[runAgent] Fetching EstateSales.net credentials for user ${job.user
 
 const { data: esCreds, error: esError } = await supabase
   .from('user_estatesales_credentials')
-  .select('estatesales_email, estatesales_password')
+  .select('estatesales_email, estatesales_password, estatesales_storage_state')
   .eq('user_id', job.user_id)
   .single();
 
@@ -124,6 +124,13 @@ process.env.DOA_URL               = job.doa_url;
 process.env.ESTATESALES_EMAIL     = esCreds.estatesales_email;
 process.env.ESTATESALES_PASSWORD  = await decryptCredential(esCreds.estatesales_password, CREDENTIALS_ENCRYPTION_KEY);
 process.env.ESTATESALES_URL       = job.estatesales_url;
+// Storage state is session-sensitive (its cookies ≈ account access), so it is
+// treated like a credential: encrypted at rest by the save-credentials edge
+// function and decrypted here. decryptCredential() is backward-compatible —
+// a legacy plaintext session JSON has no { iv, ciphertext } shape, so it is
+// returned unchanged. Encrypt-on-write: VZT Settings must store this column
+// via the same AES-GCM path as estatesales_password. Never log the raw value.
+process.env.ES_STORAGE_STATE      = await decryptCredential(esCreds.estatesales_storage_state || '', CREDENTIALS_ENCRYPTION_KEY);
 
 console.log(`[runAgent] Credentials loaded. Starting job ${JOB_ID}...`);
 console.log(`[runAgent]   DOA URL:          ${job.doa_url}`);
