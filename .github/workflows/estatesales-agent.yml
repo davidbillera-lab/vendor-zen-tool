@@ -1,0 +1,60 @@
+name: EstateSales Upload Agent
+
+on:
+  # Triggered automatically by the Supabase edge function via the GitHub API
+  repository_dispatch:
+    types: [run-estatesales-agent]
+
+  # Also allows manual runs from the GitHub Actions UI for testing
+  workflow_dispatch:
+    inputs:
+      triggered_by:
+        description: 'What triggered this run (e.g. "manual")'
+        required: false
+        default: 'manual'
+      job_id:
+        description: 'UUID of the estatesales_jobs row to process'
+        required: false
+
+jobs:
+  upload:
+    name: Upload to EstateSales
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: estatesales-agent/package-lock.json
+
+      - name: Install agent dependencies
+        working-directory: estatesales-agent
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: estatesales-agent
+        run: npx playwright install chromium --with-deps
+
+      - name: Run upload agent
+        working-directory: estatesales-agent
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          CREDENTIALS_ENCRYPTION_KEY: ${{ secrets.CREDENTIALS_ENCRYPTION_KEY }}
+          JOB_ID: ${{ github.event.client_payload.job_id || inputs.job_id }}
+        run: node runAgent.js
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: estatesales-screenshots
+          path: estatesales-agent/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
