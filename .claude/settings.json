@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Select-String *)",
+      "PowerShell(Get-CimInstance *)",
+      "PowerShell(git status *)",
+      "PowerShell(git log *)",
+      "PowerShell(gh run list *)",
+      "PowerShell(gh run view *)",
+      "PowerShell(gh run watch *)",
+      "PowerShell(vercel whoami)",
+      "Bash(npx tsc --noEmit *)",
+      "PowerShell(npx tsc --noEmit *)",
+      "Bash(vercel env ls *)",
+      "mcp__mission-control__mc_get_project_context",
+      "mcp__mission-control__mc_browse_vault",
+      "mcp__mission-control__mc_get_vault_context",
+      "mcp__mission-control__mc_get_pending_tasks",
+      "mcp__supabase__get_logs",
+      "mcp__supabase__list_tables",
+      "mcp__claude_ai_Supabase__get_logs",
+      "mcp__claude_ai_Supabase__list_tables",
+      "mcp__claude_ai_Vercel__get_runtime_logs",
+      "mcp__claude_ai_Vercel__list_deployments",
+      "mcp__claude_ai_Vercel__get_project",
+      "mcp__claude_ai_Vercel__list_projects",
+      "mcp__claude_ai_Vercel__list_teams"
+    ]
+  }
+}

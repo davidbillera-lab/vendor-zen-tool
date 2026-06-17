@@ -9,7 +9,7 @@ async function getCurrentUserId(): Promise<string> {
   return user.id;
 }
 
-export type Platform = 'ebay' | 'facebook' | 'liveauctioneers' | 'denver';
+export type Platform = 'ebay' | 'facebook' | 'liveauctioneers' | 'denver' | 'cross-post' | 'mercari' | 'poshmark' | 'etsy';
 
 export interface GeneratedListing {
   title: string;
@@ -19,6 +19,15 @@ export interface GeneratedListing {
   categoryId?: number; // eBay numeric category ID
   condition?: string;
   itemSpecifics?: Record<string, string>;
+  // eBay live pricing comps (set by generate-listing; price is derived from these)
+  compQuery?: string;
+  priceComps?: {
+    source: "ebay_active" | "ebay_sold" | "ai_estimate";
+    suggested?: number;
+    low?: number;
+    high?: number;
+    sampleSize?: number;
+  };
   // LiveAuctioneers specific
   lowEst?: number;
   highEst?: number;
@@ -37,12 +46,16 @@ export interface GeneratedListing {
   locationNickname?: string;
   // Denver specific
   startingBid?: number;
+  // v2.4: ids of the learned corrections injected into this generation, so the
+  // saved row can be tagged and re-corrections traced back to the lesson.
+  injectedCorrectionIds?: string[];
 }
 
 export async function generateListing(
   platform: Platform,
   imageUrls: string[],
-  additionalContext?: string
+  additionalContext?: string,
+  masterPrompt?: string | null
 ): Promise<GeneratedListing> {
   // Ensure user is authenticated before calling
   const { data: { session } } = await supabase.auth.getSession();
@@ -51,7 +64,7 @@ export async function generateListing(
   }
 
   const { data, error } = await supabase.functions.invoke('generate-listing', {
-    body: { platform, imageUrls, additionalContext }
+    body: { platform, imageUrls, additionalContext, masterPrompt: masterPrompt || undefined }
   });
 
   if (error) {
@@ -66,7 +79,12 @@ export async function generateListing(
     throw new Error(data.error);
   }
 
-  return data.listing;
+  return {
+    ...data.listing,
+    injectedCorrectionIds: Array.isArray(data.injectedCorrectionIds)
+      ? data.injectedCorrectionIds
+      : [],
+  };
 }
 
 // Compress image before upload for faster processing
@@ -240,6 +258,7 @@ export async function deleteListing(id: string) {
 export function generateEbayCSV(listings: any[]): string {
   const headers = [
     'Action(SiteID=US|Country=US|Currency=USD|Version=1193)',
+    'CustomLabel',
     'Title',
     'Description',
     'StartPrice',
@@ -252,6 +271,7 @@ export function generateEbayCSV(listings: any[]): string {
 
   const rows = listings.map(l => [
     'Add',
+    (l.custom_sku && String(l.custom_sku).trim()) || (l.lot_number ?? '') , // Custom Label (SKU) — prefer user SKU, else lot #
     l.title || '',
     l.description || '',
     l.price || '',

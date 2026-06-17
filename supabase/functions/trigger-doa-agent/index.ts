@@ -46,6 +46,17 @@ serve(async (req) => {
       { auth: { persistSession: false } }
     );
 
+    // — 0. Authenticate the caller ————————————————————————————————————————————
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const jwt = authHeader.replace(/^Bearer\s+/i, '');
+    const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     // — 1. Fetch existing batch data ——————————————————————————————————————————
     const { data: batchData, error: batchError } = await supabase
       .from('la_batches')
@@ -111,6 +122,7 @@ serve(async (req) => {
             batch_id,
             batch_name: batchData?.name ?? batch_id,
             pending_lots: pendingCount ?? 0,
+            user_id: user.id,
           },
         }),
       }

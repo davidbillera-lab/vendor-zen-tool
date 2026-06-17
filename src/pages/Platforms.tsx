@@ -1,212 +1,358 @@
+import { useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Store, 
-  Facebook, 
+import {
+  Store,
+  Facebook,
   Gavel,
   Truck,
   Settings,
-  RefreshCw,
-  ExternalLink,
   CheckCircle2,
   AlertCircle,
-  Clock
+  Clock,
+  Loader2,
+  Link2,
+  Link2Off,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface Platform {
-  id: string;
-  name: string;
-  description: string;
-  icon: typeof Store;
-  color: string;
-  bgColor: string;
-  status: "connected" | "disconnected" | "syncing";
-  lastSync?: string;
-  stats: {
-    listings: number;
-    sales: string;
-    orders: number;
-  };
-}
-
-const platforms: Platform[] = [
-  {
-    id: "ebay",
-    name: "eBay Store",
-    description: "Your main eBay seller account with store subscription",
-    icon: Store,
-    color: "text-platform-ebay",
-    bgColor: "bg-platform-ebay/20",
-    status: "connected",
-    lastSync: "2 minutes ago",
-    stats: { listings: 456, sales: "$5,230", orders: 89 },
-  },
-  {
-    id: "facebook",
-    name: "Facebook Marketplace",
-    description: "Personal and business listings on Facebook Marketplace",
-    icon: Facebook,
-    color: "text-platform-facebook",
-    bgColor: "bg-platform-facebook/20",
-    status: "connected",
-    lastSync: "5 minutes ago",
-    stats: { listings: 124, sales: "$2,180", orders: 34 },
-  },
-  {
-    id: "liveauctioneers",
-    name: "LiveAuctioneers",
-    description: "Online auction platform for antiques and collectibles",
-    icon: Gavel,
-    color: "text-platform-auction",
-    bgColor: "bg-platform-auction/20",
-    status: "connected",
-    lastSync: "10 minutes ago",
-    stats: { listings: 89, sales: "$3,450", orders: 23 },
-  },
-  {
-    id: "denver",
-    name: "Denver Online Auctions",
-    description: "Regional online auction house for estate sales",
-    icon: Gavel,
-    color: "text-platform-auction",
-    bgColor: "bg-platform-auction/20",
-    status: "syncing",
-    lastSync: "Syncing now...",
-    stats: { listings: 67, sales: "$1,890", orders: 15 },
-  },
-  {
-    id: "estate",
-    name: "Estate Services",
-    description: "Your estate cleanout and junk removal business",
-    icon: Truck,
-    color: "text-platform-estate",
-    bgColor: "bg-platform-estate/20",
-    status: "connected",
-    lastSync: "1 hour ago",
-    stats: { listings: 223, sales: "$1,590", orders: 12 },
-  },
-];
-
-const statusConfig = {
-  connected: { icon: CheckCircle2, color: "text-success", label: "Connected" },
-  disconnected: { icon: AlertCircle, color: "text-destructive", label: "Disconnected" },
-  syncing: { icon: Clock, color: "text-warning", label: "Syncing" },
-};
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 export default function Platforms() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [ebayConnected, setEbayConnected] = useState(false);
+  const [ebayConnectedAt, setEbayConnectedAt] = useState<string | null>(null);
+  const [ebayAction, setEbayAction] = useState<"loading" | "connecting" | "disconnecting" | null>("loading");
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const code = params.get("code");
+    const oauthError = params.get("error");
+    if (oauthError) {
+      // eBay bounced back with an error instead of a code (e.g. user declined,
+      // or a requested scope isn't authorized). Surface it instead of silently
+      // swallowing the redirect.
+      navigate("/platforms", { replace: true });
+      const desc = params.get("error_description");
+      const message =
+        oauthError === "access_denied"
+          ? "eBay connection was cancelled."
+          : oauthError === "invalid_scope"
+          ? "eBay rejected the connection — a requested permission isn't enabled. Please contact support."
+          : desc || `eBay connection failed: ${oauthError}`;
+      toast.error(message);
+      checkEbayStatus();
+    } else if (code) {
+      navigate("/platforms", { replace: true });
+      handleOAuthCallback(code);
+    } else {
+      checkEbayStatus();
+    }
+  }, []);
+
+  // After the eBay redirect the app cold-boots, and the Supabase client restores
+  // the user's session from storage ASYNCHRONOUSLY. functions.invoke does not wait
+  // for that — so the very first edge call on mount can go out with the anon key
+  // instead of the user's JWT. That makes exchange_code hit the "Authentication
+  // required" 401 ("Edge Function returned a non-2xx status code" in the UI), and
+  // makes get_status report Not Connected for a connected user. getSession() awaits
+  // initialization; we also pass the token explicitly so the right identity is used.
+  const getAuthHeaders = async (): Promise<Record<string, string> | undefined> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session ? { Authorization: `Bearer ${session.access_token}` } : undefined;
+  };
+
+  // supabase-js collapses any non-2xx response into a generic
+  // "Edge Function returned a non-2xx status code" and throws away the JSON body.
+  // The original Response is on error.context — read it so real eBay errors surface.
+  const extractEdgeError = async (error: any, fallback: string): Promise<string> => {
+    const ctx = error?.context;
+    if (ctx && typeof ctx.text === "function") {
+      try {
+        const raw = await ctx.text();
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            return parsed.error || parsed.details || raw;
+          } catch {
+            return raw;
+          }
+        }
+      } catch {
+        // fall through
+      }
+    }
+    return error?.message || fallback;
+  };
+
+  const checkEbayStatus = async () => {
+    try {
+      const headers = await getAuthHeaders();
+      const { data, error } = await supabase.functions.invoke("ebay-oauth", {
+        body: { action: "get_status" },
+        headers,
+      });
+      if (!error && data) {
+        setEbayConnected(data.connected ?? false);
+        setEbayConnectedAt(data.connected_at ?? null);
+      }
+    } catch {
+      // not connected
+    } finally {
+      setEbayAction(null);
+    }
+  };
+
+  const handleOAuthCallback = async (code: string) => {
+    setEbayAction("connecting");
+    try {
+      const headers = await getAuthHeaders();
+      if (!headers) {
+        toast.error("Please sign in before connecting your eBay account.");
+        return;
+      }
+      const { data, error } = await supabase.functions.invoke("ebay-oauth", {
+        body: { action: "exchange_code", code },
+        headers,
+      });
+      if (error) {
+        toast.error(await extractEdgeError(error, "Failed to connect eBay account"));
+        return;
+      }
+      if (data?.error) {
+        toast.error(data.error);
+        return;
+      }
+      setEbayConnected(true);
+      setEbayConnectedAt(new Date().toISOString());
+      toast.success("eBay account connected!");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to connect eBay account");
+    } finally {
+      setEbayAction(null);
+    }
+  };
+
+  const handleEbayConnect = async () => {
+    setEbayAction("connecting");
+    try {
+      const headers = await getAuthHeaders();
+      const { data, error } = await supabase.functions.invoke("ebay-oauth", {
+        body: { action: "get_auth_url" },
+        headers,
+      });
+      if (error || data?.error) {
+        toast.error(data?.error || error?.message || "Failed to get eBay auth URL");
+        setEbayAction(null);
+        return;
+      }
+      window.location.href = data.authUrl;
+    } catch (e: any) {
+      toast.error(e.message);
+      setEbayAction(null);
+    }
+  };
+
+  const handleEbayDisconnect = async () => {
+    setEbayAction("disconnecting");
+    try {
+      const headers = await getAuthHeaders();
+      const { data, error } = await supabase.functions.invoke("ebay-oauth", {
+        body: { action: "disconnect" },
+        headers,
+      });
+      if (error || data?.error) {
+        toast.error(data?.error || error?.message || "Failed to disconnect eBay account");
+        return;
+      }
+      setEbayConnected(false);
+      setEbayConnectedAt(null);
+      toast.success("eBay account disconnected");
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setEbayAction(null);
+    }
+  };
+
+  const ebayStatus = ebayAction === "loading" ? "syncing" : ebayConnected ? "connected" : "disconnected";
+
+  const otherPlatforms = [
+    {
+      id: "denver",
+      name: "Denver Online Auctions",
+      description: "Set up your DOA login in Settings, then push a batch from Denver Batches.",
+      icon: Gavel,
+      color: "text-platform-auction",
+      bgColor: "bg-platform-auction/20",
+      available: true,
+      route: "/denver-batches",
+      cta: "Open Denver Batches",
+    },
+    {
+      id: "estate",
+      name: "EstateSales.net",
+      description: "Set up your EstateSales.net login in Settings, then build an ad from EstateSales Upload.",
+      icon: Truck,
+      color: "text-platform-estate",
+      bgColor: "bg-platform-estate/20",
+      available: true,
+      route: "/estatesales-upload",
+      cta: "Open EstateSales Upload",
+    },
+    {
+      id: "facebook",
+      name: "Facebook Marketplace",
+      description: "Personal and business listings on Facebook Marketplace",
+      icon: Facebook,
+      color: "text-platform-facebook",
+      bgColor: "bg-platform-facebook/20",
+      available: false,
+    },
+    {
+      id: "liveauctioneers",
+      name: "LiveAuctioneers",
+      description: "Online auction platform for antiques and collectibles",
+      icon: Gavel,
+      color: "text-platform-auction",
+      bgColor: "bg-platform-auction/20",
+      available: false,
+    },
+  ];
+
   return (
-    <MainLayout 
-      title="Platforms" 
+    <MainLayout
+      title="Platforms"
       subtitle="Manage your connected selling platforms"
     >
-      <div className="space-y-6">
-        {/* Summary Cards */}
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="rounded-xl border border-border bg-card p-5">
-            <p className="text-sm text-muted-foreground">Total Platforms</p>
-            <p className="mt-1 text-3xl font-bold text-foreground">{platforms.length}</p>
-          </div>
-          <div className="rounded-xl border border-border bg-card p-5">
-            <p className="text-sm text-muted-foreground">Active Listings</p>
-            <p className="mt-1 text-3xl font-bold text-foreground">
-              {platforms.reduce((sum, p) => sum + p.stats.listings, 0)}
-            </p>
-          </div>
-          <div className="rounded-xl border border-border bg-card p-5">
-            <p className="text-sm text-muted-foreground">Total Revenue</p>
-            <p className="mt-1 text-3xl font-bold text-success">
-              ${platforms.reduce((sum, p) => sum + parseInt(p.stats.sales.replace(/[$,]/g, "")), 0).toLocaleString()}
-            </p>
-          </div>
-        </div>
-
-        {/* Platform Cards */}
-        <div className="space-y-4">
-          {platforms.map((platform, index) => {
-            const StatusIcon = statusConfig[platform.status].icon;
-            return (
-              <div
-                key={platform.id}
-                className="group rounded-xl border border-border bg-card transition-all duration-300 hover:border-primary/30 hover:shadow-card animate-fade-in"
-                style={{ animationDelay: `${index * 100}ms` }}
-              >
-                <div className="p-6">
-                  <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-                    {/* Platform Info */}
-                    <div className="flex items-start gap-4">
-                      <div className={cn("rounded-xl p-4", platform.bgColor)}>
-                        <platform.icon className={cn("h-8 w-8", platform.color)} />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-3">
-                          <h3 className="font-serif text-xl font-semibold text-foreground">
-                            {platform.name}
-                          </h3>
-                          <Badge 
-                            variant="outline" 
-                            className={cn(
-                              "gap-1",
-                              platform.status === "connected" && "border-success/30 bg-success/10 text-success",
-                              platform.status === "disconnected" && "border-destructive/30 bg-destructive/10 text-destructive",
-                              platform.status === "syncing" && "border-warning/30 bg-warning/10 text-warning"
-                            )}
-                          >
-                            <StatusIcon className={cn("h-3 w-3", platform.status === "syncing" && "animate-spin")} />
-                            {statusConfig[platform.status].label}
-                          </Badge>
-                        </div>
-                        <p className="mt-1 text-sm text-muted-foreground">{platform.description}</p>
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          Last synced: {platform.lastSync}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Stats */}
-                    <div className="flex gap-8">
-                      <div className="text-center">
-                        <p className="text-2xl font-bold text-foreground">{platform.stats.listings}</p>
-                        <p className="text-xs text-muted-foreground">Listings</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-2xl font-bold text-success">{platform.stats.sales}</p>
-                        <p className="text-xs text-muted-foreground">This Month</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-2xl font-bold text-foreground">{platform.stats.orders}</p>
-                        <p className="text-xs text-muted-foreground">Orders</p>
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm">
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Sync
-                      </Button>
-                      <Button variant="outline" size="sm">
-                        <Settings className="mr-2 h-4 w-4" />
-                        Settings
-                      </Button>
-                      <Button variant="ghost" size="icon">
-                        <ExternalLink className="h-4 w-4" />
-                      </Button>
-                    </div>
+      <div className="space-y-4">
+        {/* eBay — live connection */}
+        <div className="rounded-xl border border-border bg-card transition-all duration-300 hover:border-primary/30 hover:shadow-card animate-fade-in">
+          <div className="p-6">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-4">
+                <div className="rounded-xl p-4 bg-platform-ebay/20">
+                  <Store className="h-8 w-8 text-platform-ebay" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-3">
+                    <h3 className="font-serif text-xl font-semibold text-foreground">eBay Store</h3>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "gap-1",
+                        ebayStatus === "connected" && "border-success/30 bg-success/10 text-success",
+                        ebayStatus === "disconnected" && "border-destructive/30 bg-destructive/10 text-destructive",
+                        ebayStatus === "syncing" && "border-warning/30 bg-warning/10 text-warning"
+                      )}
+                    >
+                      {ebayStatus === "connected" && <CheckCircle2 className="h-3 w-3" />}
+                      {ebayStatus === "disconnected" && <AlertCircle className="h-3 w-3" />}
+                      {ebayStatus === "syncing" && <Clock className="h-3 w-3 animate-spin" />}
+                      {ebayStatus === "connected" ? "Connected" : ebayStatus === "disconnected" ? "Not Connected" : "Loading..."}
+                    </Badge>
                   </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Your eBay seller account for listing and publishing
+                  </p>
+                  {ebayConnected && ebayConnectedAt && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Connected {new Date(ebayConnectedAt).toLocaleDateString()}
+                    </p>
+                  )}
+                  {!ebayConnected && ebayAction !== "loading" && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Connect your eBay account to publish listings
+                    </p>
+                  )}
                 </div>
               </div>
-            );
-          })}
+
+              <div className="flex gap-2">
+                {ebayConnected ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleEbayDisconnect}
+                    disabled={ebayAction !== null}
+                  >
+                    {ebayAction === "disconnecting" ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Link2Off className="mr-2 h-4 w-4" />
+                    )}
+                    Disconnect
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={handleEbayConnect}
+                    disabled={ebayAction !== null}
+                  >
+                    {ebayAction === "connecting" ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Link2 className="mr-2 h-4 w-4" />
+                    )}
+                    Connect eBay
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Add Platform */}
-        <div className="flex justify-center">
-          <Button variant="outline" className="border-dashed">
-            + Connect New Platform
-          </Button>
-        </div>
+        {/* Other platforms — coming soon */}
+        {otherPlatforms.map((platform, index) => (
+          <div
+            key={platform.id}
+            className="rounded-xl border border-border bg-card transition-all duration-300 hover:border-primary/30 hover:shadow-card animate-fade-in"
+            style={{ animationDelay: `${(index + 1) * 100}ms` }}
+          >
+            <div className="p-6">
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-start gap-4">
+                  <div className={cn("rounded-xl p-4", platform.bgColor)}>
+                    <platform.icon className={cn("h-8 w-8", platform.color)} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-3">
+                      <h3 className="font-serif text-xl font-semibold text-foreground">{platform.name}</h3>
+                      {platform.available ? (
+                        <Badge variant="outline" className="gap-1 border-success/30 bg-success/10 text-success">
+                          <CheckCircle2 className="h-3 w-3" />
+                          Available
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="gap-1 border-muted-foreground/30 bg-muted/10 text-muted-foreground">
+                          <Clock className="h-3 w-3" />
+                          Coming Soon
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">{platform.description}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  {platform.available ? (
+                    <Button variant="outline" size="sm" onClick={() => navigate(platform.route!)}>
+                      <Settings className="mr-2 h-4 w-4" />
+                      {platform.cta}
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" disabled>
+                      <Settings className="mr-2 h-4 w-4" />
+                      Configure
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </MainLayout>
   );

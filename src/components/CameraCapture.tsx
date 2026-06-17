@@ -11,15 +11,31 @@ interface CapturedPhoto {
 interface CameraCaptureProps {
   onCapture: (files: File[]) => void;
   disabled?: boolean;
+  /** Visual size of the trigger button. Defaults to "lg" (the empty-state look). */
+  size?: "sm" | "lg";
+  /** Trigger button label. Defaults to "Take Photos". */
+  label?: string;
+  /** Trigger button variant. Defaults to "outline". */
+  variant?: "outline" | "default";
 }
 
-export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
+export function CameraCapture({
+  onCapture,
+  disabled,
+  size = "lg",
+  label = "Take Photos",
+  variant = "outline",
+}: CameraCaptureProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
   const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Mirrors of stream/photos so the unmount cleanup can read the latest values
+  // WITHOUT re-running (and stopping the camera) every time a photo is taken.
+  const streamRef = useRef<MediaStream | null>(null);
+  const capturedPhotosRef = useRef<CapturedPhoto[]>([]);
 
   const startCamera = useCallback(async (facing: "user" | "environment") => {
     try {
@@ -95,6 +111,10 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
         }]);
       }
     }, "image/jpeg", 0.9);
+
+    // iOS Safari freezes the live feed after drawing a frame to canvas.
+    // Nudge the video back into playback so the next shot isn't a frozen frame.
+    video.play().catch(() => { /* ignore — feed will resume on its own */ });
   }, []);
 
   const removePhoto = useCallback((index: number) => {
@@ -132,27 +152,35 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
     }
   }, [isOpen, stream, facingMode, startCamera]);
 
-  // Cleanup on unmount
+  // Keep refs in sync with the latest state for the unmount cleanup below.
+  useEffect(() => { streamRef.current = stream; }, [stream]);
+  useEffect(() => { capturedPhotosRef.current = capturedPhotos; }, [capturedPhotos]);
+
+  // Cleanup ONLY on unmount. Reads from refs so taking a photo (which changes
+  // capturedPhotos) no longer triggers this and stops the live camera stream.
   useEffect(() => {
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
       }
-      capturedPhotos.forEach(photo => URL.revokeObjectURL(photo.preview));
+      capturedPhotosRef.current.forEach(photo => URL.revokeObjectURL(photo.preview));
     };
-  }, [stream, capturedPhotos]);
+  }, []);
 
   if (!isOpen) {
     return (
       <Button
-        variant="outline"
-        size="lg"
+        variant={variant}
+        size={size}
         onClick={() => setIsOpen(true)}
         disabled={disabled}
-        className="flex items-center gap-2 border-primary/30 hover:bg-primary/10"
+        className={cn(
+          "flex items-center gap-2",
+          variant === "outline" && "border-primary/30 hover:bg-primary/10"
+        )}
       >
-        <Camera className="h-5 w-5" />
-        Take Photos
+        <Camera className={size === "sm" ? "h-4 w-4" : "h-5 w-5"} />
+        {label}
       </Button>
     );
   }
@@ -228,24 +256,34 @@ export function CameraCapture({ onCapture, disabled }: CameraCaptureProps) {
       )}
 
       {/* Controls */}
-      <div className="p-6 bg-black/50 flex items-center justify-center gap-8">
-        <button
-          onClick={capturePhoto}
-          className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/10 transition-colors"
-        >
-          <div className="w-16 h-16 rounded-full bg-white" />
-        </button>
-        
-        {capturedPhotos.length > 0 && (
-          <Button
-            size="lg"
-            onClick={confirmPhotos}
-            className="bg-primary hover:bg-primary/90"
+      <div className="p-6 bg-black/50">
+        {/* Hint — makes it obvious the shutter is tapped repeatedly */}
+        <p className="text-center text-white/70 text-xs mb-3">
+          {capturedPhotos.length > 0
+            ? "Tap to keep adding — hit Done when you're finished"
+            : "Tap the shutter. You can take several in a row."}
+        </p>
+        <div className="relative flex items-center justify-center">
+          {/* Shutter — the primary, repeated action */}
+          <button
+            onClick={capturePhoto}
+            className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/10 transition-colors"
           >
-            <Check className="h-5 w-5 mr-2" />
-            Use {capturedPhotos.length} Photo{capturedPhotos.length > 1 ? 's' : ''}
-          </Button>
-        )}
+            <div className="w-16 h-16 rounded-full bg-white" />
+          </button>
+
+          {/* Done — only the exit, parked in the corner so it doesn't read as "Use Photo" */}
+          {capturedPhotos.length > 0 && (
+            <Button
+              size="sm"
+              onClick={confirmPhotos}
+              className="absolute right-0 bg-primary hover:bg-primary/90"
+            >
+              <Check className="h-4 w-4 mr-1" />
+              Done · {capturedPhotos.length}
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Hidden canvas for capture */}

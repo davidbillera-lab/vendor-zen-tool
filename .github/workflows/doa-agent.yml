@@ -12,6 +12,12 @@ on:
         description: 'What triggered this run (e.g. batch name or "manual")'
         required: false
         default: 'manual'
+      user_id:
+        description: 'UUID of the user whose DOA credentials to use'
+        required: false
+      batch_id:
+        description: 'UUID of the denver_batch_rows batch to process'
+        required: false
 
 jobs:
   fill-doa:
@@ -43,8 +49,10 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          DOA_EMAIL: ${{ secrets.DOA_EMAIL }}
-          DOA_PASSWORD: ${{ secrets.DOA_PASSWORD }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CREDENTIALS_ENCRYPTION_KEY: ${{ secrets.CREDENTIALS_ENCRYPTION_KEY }}
+          USER_ID: ${{ github.event.client_payload.user_id || inputs.user_id }}
+          BATCH_ID: ${{ github.event.client_payload.batch_id || inputs.batch_id }}
         run: node runAgent.js
 
       - name: Upload screenshots on failure

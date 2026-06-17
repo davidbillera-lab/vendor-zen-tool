@@ -3,11 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { 
-  Download, 
-  Loader2, 
-  Check, 
-  Store, 
+import {
+  Download,
+  Loader2,
+  Check,
+  Store,
   Trash2,
   Edit2,
   Eye,
@@ -17,6 +17,8 @@ import {
   ImagePlus,
   Send,
   Sparkles,
+  RefreshCw,
+  Share2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -32,7 +34,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { EbayItemSpecificsEditor } from "./EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "./EbayShippingSettings";
 import { DraggableImageGrid } from "../DraggableImageGrid";
-import { ImageEnhancer } from "../ImageEnhancer";
+import { AIGenerateButton } from "../AIGenerateButton";
+import { EbayListingDrawer, type DrawerEbayRow } from "@/components/ebay/EbayListingDrawer";
 
 interface EbayRow {
   id: string;
@@ -67,6 +70,69 @@ interface EbayRow {
   upc: string | null;
   brand: string | null;
   mpn: string | null;
+  custom_sku: string | null;
+  // v2.4: ids of the learned corrections injected when this row was generated, so a
+  // re-correction on the same row can flag the failed lesson(s). Null = none injected.
+  injected_correction_ids: string[] | null;
+}
+
+// Fire-and-forget: record a human correction of an AI identification so the
+// generation prompt can learn from it (self-improving loop). Never throws —
+// a capture failure must never block the listing flow.
+async function captureCorrection(input: {
+  source: "ai_verify" | "refine";
+  category?: string | null;
+  wrongTitle?: string | null;
+  correctedTitle?: string | null;
+  wrongSpecifics?: Record<string, string> | null;
+  correctedSpecifics?: Record<string, string> | null;
+  correctionNote?: string | null;
+  imageUrls?: string[] | null;
+  // v2.4: when this correction lands on a row that was generated WITH learned
+  // corrections injected, the injected lesson(s) failed -> flag them so they get
+  // down-weighted/retired. All optional; absent = nothing to flag (v1 behavior).
+  rowId?: string | null;
+  injectedCorrectionIds?: string[] | null;
+  correctedField?: "title" | "specifics" | "both";
+}) {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from("listing_corrections").insert({
+      user_id: user.id,
+      source: input.source,
+      platform: "ebay",
+      category: input.category ?? null,
+      wrong_title: input.wrongTitle ?? null,
+      corrected_title: input.correctedTitle ?? null,
+      wrong_specifics: input.wrongSpecifics ?? null,
+      corrected_specifics: input.correctedSpecifics ?? null,
+      correction_note: input.correctionNote ?? null,
+      image_urls: input.imageUrls ?? null,
+    });
+    // v2.4: if this row was shaped by injected lessons and got re-corrected on the
+    // same kind of field, the lesson failed -> mark it (bumps times_failed, retires
+    // at threshold, feeds the re-correction-rate metric). Fire-and-forget.
+    if (input.rowId && input.injectedCorrectionIds?.length) {
+      supabase.rpc("mark_corrections_re_corrected", {
+        p_row_id: input.rowId,
+        p_field: input.correctedField ?? "both",
+        p_ids: input.injectedCorrectionIds,
+      }).then(({ error }) => {
+        if (error) console.warn("mark_corrections_re_corrected skipped (non-blocking):", error.message);
+      });
+    }
+    // Fire-and-forget: embed the new correction(s) so semantic retrieval can
+    // surface them later. Never awaited into the UI path; failures are ignored.
+    supabase.functions
+      .invoke("embed-corrections", { body: { limit: 25 } })
+      .catch((e) => console.warn("embed-corrections invoke skipped (non-blocking):", e));
+    supabase.functions
+      .invoke("distill-lessons", { body: {} })
+      .catch((e) => console.warn("distill-lessons trigger skipped (non-blocking):", e));
+  } catch (e) {
+    console.warn("captureCorrection failed (non-blocking):", e);
+  }
 }
 
 interface EbayBatchPanelProps {
@@ -75,14 +141,16 @@ interface EbayBatchPanelProps {
   onRowsChange: (rows: EbayRow[]) => void;
   nextLotNumber: number;
   onLotNumberChange: (num: number) => void;
+  masterPrompt?: string | null;
 }
 
-export function EbayBatchPanel({ 
-  projectId, 
-  rows, 
-  onRowsChange, 
-  nextLotNumber, 
-  onLotNumberChange 
+export function EbayBatchPanel({
+  projectId,
+  rows,
+  onRowsChange,
+  nextLotNumber,
+  onLotNumberChange,
+  masterPrompt,
 }: EbayBatchPanelProps) {
   const [editingRow, setEditingRow] = useState<EbayRow | null>(null);
   const [viewingRow, setViewingRow] = useState<EbayRow | null>(null);
@@ -99,11 +167,41 @@ export function EbayBatchPanel({
   const [zapierWebhookUrl, setZapierWebhookUrl] = useState("https://hooks.zapier.com/hooks/catch/26172063/uqfpdh0/");
   const [sendingToZapier, setSendingToZapier] = useState(false);
   const [showZapierConfig, setShowZapierConfig] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [enriching, setEnriching] = useState(false);
   const [shippingProfileName, setShippingProfileName] = useState<string>("");
   const [returnProfileName, setReturnProfileName] = useState<string>("");
   const [paymentProfileName, setPaymentProfileName] = useState<string>("");
   const [fullCsvContent, setFullCsvContent] = useState<string>("");
+  const [correctionPrompt, setCorrectionPrompt] = useState("");
+  const [isRefining, setIsRefining] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyReport, setVerifyReport] = useState<{ text: string; passed: boolean; correctedListing?: Record<string, any> } | null>(null);
+  const [verifyPanel, setVerifyPanel] = useState<{ row: EbayRow; report: string; passed: boolean; correctedListing: Record<string, any> } | null>(null);
+  const [toolbarPrompt, setToolbarPrompt] = useState("");
+  const [isToolbarRefining, setIsToolbarRefining] = useState(false);
+  const [hasPublished, setHasPublished] = useState(false);
+  const [showRemovePublishedDialog, setShowRemovePublishedDialog] = useState(false);
+  const [publishedCount, setPublishedCount] = useState(0);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [inlineEdit, setInlineEdit] = useState<{ id: string; field: 'title' | 'price'; value: string } | null>(null);
+  // specFixes[rowId][specKey] = current draft value for an empty item_specific
+  const [specFixes, setSpecFixes] = useState<Record<string, Record<string, string>>>({});
+  const [crossPostRowId, setCrossPostRowId] = useState<string | null>(null);
+  const [drawerRow, setDrawerRow] = useState<DrawerEbayRow | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Reset AI state when edit dialog closes
+  useEffect(() => {
+    if (!editingRow) {
+      setCorrectionPrompt("");
+      setVerifyReport(null);
+    }
+  }, [editingRow]);
+
+  // Rows to act on: selected subset, or all if nothing checked
+  const activeRows = selectedIds.size > 0 ? rows.filter(r => selectedIds.has(r.id)) : rows;
+  const allSelected = rows.length > 0 && rows.every(r => selectedIds.has(r.id));
 
   // Persist default category and location per project
   useEffect(() => {
@@ -184,7 +282,59 @@ export function EbayBatchPanel({
     }
     
     onRowsChange(rows.filter(r => r.id !== id));
+    setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     toast({ title: "Listing deleted" });
+  };
+
+  const handleCrossPost = async (row: EbayRow, platforms: string[]) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { toast({ title: "Not authenticated", variant: "destructive" }); return; }
+
+    const formattedData = {
+      title: row.title,
+      description: row.description,
+      price: row.price,
+      imageUrls: row.image_urls || [],
+      item_specifics: row.item_specifics || {},
+    };
+
+    let failed = false;
+    for (const platform of platforms) {
+      const { error } = await (supabase as any).from('crosspost_jobs').insert({
+        listing_id: null,
+        batch_id: row.batch_id ?? null,
+        user_id: user.id,
+        platform,
+        status: 'pending',
+        formatted_data: formattedData,
+      });
+      if (error) {
+        toast({ title: `Failed to queue ${platform}`, variant: "destructive" });
+        failed = true;
+        break;
+      }
+    }
+    if (!failed) {
+      toast({ title: `Queued for ${platforms.join(' + ')} — launch the desktop agent to post` });
+    }
+    setCrossPostRowId(null);
+  };
+
+  const saveInlineEdit = async () => {
+    if (!inlineEdit) return;
+    const row = rows.find(r => r.id === inlineEdit.id);
+    if (!row) return;
+    const updates: Partial<EbayRow> = {};
+    if (inlineEdit.field === 'title') {
+      updates.title = inlineEdit.value.trim().substring(0, 80) || row.title;
+    }
+    if (inlineEdit.field === 'price') {
+      const parsed = parseFloat(inlineEdit.value);
+      updates.price = isNaN(parsed) ? row.price : parsed;
+    }
+    await supabase.from('ebay_batch_rows').update(updates).eq('id', inlineEdit.id);
+    onRowsChange(rows.map(r => r.id === inlineEdit.id ? { ...r, ...updates } : r));
+    setInlineEdit(null);
   };
 
   const handleClearAll = async () => {
@@ -193,17 +343,221 @@ export function EbayBatchPanel({
     
     const { error } = await supabase
       .from('ebay_batch_rows')
-      .delete()
+      .update({ status: 'archived' })
       .eq('batch_id', projectId);
-    
+
     if (error) {
       toast({ title: "Clear failed", variant: "destructive" });
       return;
     }
-    
+
     onRowsChange([]);
     onLotNumberChange(1);
-    toast({ title: "All eBay listings cleared" });
+    toast({ title: "Listings archived" });
+  };
+
+  const refineListing = async (targetRow?: EbayRow, prompt?: string) => {
+    const row = targetRow || editingRow;
+    const promptText = prompt ?? correctionPrompt;
+    if (!promptText.trim() || !row) return;
+
+    if (targetRow) {
+      setIsToolbarRefining(true);
+    } else {
+      setIsRefining(true);
+    }
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          currentListing: {
+            title: row.title,
+            description: row.description,
+            price: row.price,
+            condition: row.condition,
+            itemSpecifics: row.item_specifics,
+          },
+          correctionPrompt: promptText.trim(),
+          imageUrls: row.image_urls || [],
+          platform: 'ebay',
+          mode: 'refine',
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Refinement failed');
+
+      const refined = data.listing ?? {};
+      if (targetRow) {
+        onRowsChange(rows.map(r => r.id === row.id ? {
+          ...r,
+          title: (refined.title || r.title).substring(0, 80),
+          description: refined.description || r.description,
+          price: refined.price ?? r.price,
+          condition: refined.condition || r.condition,
+          item_specifics: refined.itemSpecifics || r.item_specifics,
+        } : r));
+        setToolbarPrompt("");
+      } else {
+        setEditingRow(prev => prev ? {
+          ...prev,
+          title: (refined.title || prev.title).substring(0, 80),
+          description: refined.description || prev.description,
+          price: refined.price ?? prev.price,
+          condition: refined.condition || prev.condition,
+          item_specifics: refined.itemSpecifics || prev.item_specifics,
+        } : prev);
+        setCorrectionPrompt("");
+      }
+      // Capture the human-driven correction so generation can learn from it.
+      const refTitleChanged = refined.title &&
+        String(refined.title).substring(0, 80) !== row.title;
+      const refSpecsChanged = refined.itemSpecifics &&
+        JSON.stringify(refined.itemSpecifics) !== JSON.stringify(row.item_specifics);
+      captureCorrection({
+        source: "refine",
+        category: row.category,
+        wrongTitle: row.title,
+        correctedTitle: refined.title || row.title,
+        wrongSpecifics: row.item_specifics,
+        correctedSpecifics: refined.itemSpecifics || row.item_specifics,
+        correctionNote: promptText.trim(),
+        imageUrls: row.image_urls,
+        rowId: row.id,
+        injectedCorrectionIds: row.injected_correction_ids,
+        correctedField: refTitleChanged && refSpecsChanged
+          ? "both" : refTitleChanged ? "title" : "specifics",
+      });
+      toast({ title: "Listing Updated", description: "AI refined your listing" });
+    } catch (error) {
+      toast({
+        title: "Refinement Failed",
+        description: error instanceof Error ? error.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      if (targetRow) {
+        setIsToolbarRefining(false);
+      } else {
+        setIsRefining(false);
+      }
+    }
+  };
+
+  const verifyListing = async (targetRow?: EbayRow) => {
+    const row = targetRow || editingRow;
+    if (!row) return;
+    setIsVerifying(true);
+    setVerifyReport(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          currentListing: {
+            title: row.title,
+            description: row.description,
+            price: row.price,
+            condition: row.condition,
+            itemSpecifics: row.item_specifics,
+          },
+          correctionPrompt: '',
+          imageUrls: row.image_urls || [],
+          platform: 'ebay',
+          mode: 'verify',
+          masterPrompt: masterPrompt || undefined,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Verification failed');
+
+      setVerifyPanel({
+        row,
+        report: data.report,
+        passed: data.passed,
+        correctedListing: data.correctedListing || {},
+      });
+    } catch (error) {
+      toast({
+        title: "Verification Failed",
+        description: error instanceof Error ? error.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleToolbarVerify = () => {
+    const target = activeRows[0];
+    if (!target) {
+      toast({ title: "No row selected", description: "Select a row to verify", variant: "destructive" });
+      return;
+    }
+    verifyListing(target);
+  };
+
+  const handleToolbarRefine = () => {
+    const target = activeRows[0];
+    if (!target) {
+      toast({ title: "No row selected", description: "Select a row to edit", variant: "destructive" });
+      return;
+    }
+    refineListing(target, toolbarPrompt);
+  };
+
+  const handleAcceptVerify = () => {
+    if (!verifyPanel) return;
+    const cl = verifyPanel.correctedListing;
+    const original = verifyPanel.row;
+    // Only capture when the accepted correction actually changed identification.
+    const titleChanged = cl.title && String(cl.title).substring(0, 80) !== original.title;
+    const specsChanged = cl.itemSpecifics &&
+      JSON.stringify(cl.itemSpecifics) !== JSON.stringify(original.item_specifics);
+    if (titleChanged || specsChanged) {
+      captureCorrection({
+        source: "ai_verify",
+        category: original.category,
+        wrongTitle: original.title,
+        correctedTitle: cl.title ? String(cl.title) : original.title,
+        wrongSpecifics: original.item_specifics,
+        correctedSpecifics: cl.itemSpecifics || original.item_specifics,
+        imageUrls: original.image_urls,
+        rowId: original.id,
+        injectedCorrectionIds: original.injected_correction_ids,
+        correctedField: titleChanged && specsChanged
+          ? "both" : titleChanged ? "title" : "specifics",
+      });
+    }
+    onRowsChange(rows.map(r => r.id === verifyPanel.row.id ? {
+      ...r,
+      title: cl.title ? String(cl.title).substring(0, 80) : r.title,
+      description: cl.description || r.description,
+      price: cl.price ?? r.price,
+      condition: cl.condition || r.condition,
+      item_specifics: cl.itemSpecifics || r.item_specifics,
+    } : r));
+    if (editingRow?.id === verifyPanel.row.id) {
+      setEditingRow(prev => prev ? {
+        ...prev,
+        title: cl.title ? String(cl.title).substring(0, 80) : prev.title,
+        description: cl.description || prev.description,
+        price: cl.price ?? prev.price,
+        condition: cl.condition || prev.condition,
+        item_specifics: cl.itemSpecifics || prev.item_specifics,
+      } : prev);
+    }
+    setVerifyPanel(null);
+    toast({ title: "Listing Updated", description: "AI corrections applied" });
   };
 
   const handleSaveEdit = async () => {
@@ -241,6 +595,7 @@ export function EbayBatchPanel({
         upc: editingRow.upc,
         brand: editingRow.brand,
         mpn: editingRow.mpn,
+        custom_sku: editingRow.custom_sku,
       })
       .eq('id', editingRow.id);
     
@@ -368,8 +723,8 @@ export function EbayBatchPanel({
   // Get lots missing required item specifics for their category
   const getMissingItemSpecificsLots = (): { lotNumber: number; missing: string[] }[] => {
     const results: { lotNumber: number; missing: string[] }[] = [];
-    
-    rows.forEach((row, idx) => {
+
+    activeRows.forEach((row, idx) => {
       const categoryId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
       const missing: string[] = [];
       
@@ -394,13 +749,13 @@ export function EbayBatchPanel({
 
   // Generate CSV content using eBay's official category listing template format
   // Matches the template downloaded from Seller Hub Reports (Version=1193)
-  const generateCSVContent = (skipImages: boolean = false) => {
+  const generateCSVContent = (skipImages: boolean = false, rowsToExport: EbayRow[] = activeRows) => {
     const savedLocation = itemLocation.trim() || localStorage.getItem(`ebay_location_${projectId}`) || "";
-    
+
     // Collect ALL item specifics across rows - ensure required ones come first
     const requiredSpecifics = ["Brand", "Type", "Department", "Size Type", "Size", "Color", "Material", "Style"];
     const allSpecifics = new Set<string>(requiredSpecifics);
-    rows.forEach(r => {
+    rowsToExport.forEach(r => {
       if (r.item_specifics) {
         Object.keys(r.item_specifics).forEach(k => allSpecifics.add(k));
       }
@@ -482,7 +837,7 @@ export function EbayBatchPanel({
       }
     };
 
-    const csvRows = rows.map((row, index) => {
+    const csvRows = rowsToExport.map((row, index) => {
       // Extract numeric category ID
       const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
@@ -496,7 +851,7 @@ export function EbayBatchPanel({
       
       const base = [
         "Add",                                                           // *Action
-        row.lot_number?.toString() || (index + 1).toString(),            // Custom Label (SKU)
+        row.custom_sku?.trim() || row.lot_number?.toString() || (index + 1).toString(), // Custom Label (SKU) — prefer user SKU, else lot #
         categoryId,                                                      // Category (numeric leaf ID)
         sanitizeForCSV((row.title || "").substring(0, 80)),              // Title
         "",                                                              // Relationship (empty for non-variation)
@@ -562,7 +917,7 @@ export function EbayBatchPanel({
 
   const getMissingCategoryLots = (): number[] => {
     const missing: number[] = [];
-    rows.forEach((row, idx) => {
+    activeRows.forEach((row, idx) => {
       const extractedCategoryId = row.category?.match(/\d{3,}/)?.[0] || "";
       const fallbackCategoryId = defaultCategoryId.trim().match(/^\d{3,}$/) ? defaultCategoryId.trim() : "";
       const categoryId = extractedCategoryId || fallbackCategoryId;
@@ -576,7 +931,7 @@ export function EbayBatchPanel({
   // Get lots with deprecated/remapped categories and auto-fix them
   const getDeprecatedCategoryLots = (): { lotNumber: number; oldCat: number; newCat: number; label: string }[] => {
     const results: { lotNumber: number; oldCat: number; newCat: number; label: string }[] = [];
-    rows.forEach((row, idx) => {
+    activeRows.forEach((row, idx) => {
       const catId = parseInt(row.category?.match(/\d{3,}/)?.[0] || "0");
       if (catId && DEPRECATED_CATEGORIES[catId]) {
         const dep = DEPRECATED_CATEGORIES[catId];
@@ -616,7 +971,7 @@ export function EbayBatchPanel({
 
   // Get lots with titles exceeding 80 characters
   const getOverlongTitleLots = (): number[] => {
-    return rows
+    return activeRows
       .filter(row => (row.title?.length || 0) > 80)
       .map((row, idx) => row.lot_number ?? (idx + 1));
   };
@@ -944,7 +1299,7 @@ export function EbayBatchPanel({
     let succeeded = 0;
     let failed = 0;
 
-    for (const row of rows) {
+    for (const row of activeRows) {
       const categoryId = row.category?.match(/\d{3,}/)?.[0] || defaultCategoryId.trim() || "";
       const conditionId = conditionToZapierMap[row.condition || ""] || "3000";
 
@@ -1005,16 +1360,21 @@ export function EbayBatchPanel({
       toast({ title: "Missing Location", description: "Set an Item Location (ZIP or City, ST) before pushing to eBay.", variant: "destructive" });
       return;
     }
-    if (!confirm(`Push ${rows.length} listing(s) as drafts to your eBay Seller Hub?`)) return;
+    if (!confirm(`Push ${activeRows.length} listing(s) as drafts to your eBay Seller Hub?`)) return;
 
     setPublishing(true);
     try {
       const { data, error } = await supabase.functions.invoke("ebay-publish", {
-        body: { rowIds: rows.map(r => r.id), location: loc },
+        body: { rows: activeRows },
       });
 
       if (error) {
-        toast({ title: "Push failed", description: error.message, variant: "destructive" });
+        let description = error.message;
+        try {
+          const body = await (error as any).context?.json?.();
+          if (body?.error) description = body.error;
+        } catch {}
+        toast({ title: "Push failed", description, variant: "destructive" });
         return;
       }
 
@@ -1022,10 +1382,29 @@ export function EbayBatchPanel({
       if (succeeded > 0) {
         const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
         onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
+        setHasPublished(true);
+        setPublishedCount(succeeded);
+        setShowRemovePublishedDialog(true);
       }
 
       if (failed > 0) {
         const firstError = results.find((r: any) => !r.success)?.error || "Unknown";
+        // Parse missing item specifics from eBay error messages and auto-add as empty fields
+        const newErrors: Record<string, string> = {};
+        for (const result of results.filter((r: any) => !r.success)) {
+          const err = result.error || "";
+          const match = err.match(/item\s+specific[s]?\s+["']?([^"'.]+?)["']?\s+(is\s+missing|required)/i)
+                     || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
+          if (match && result.id) {
+            const missingSpec = match[1].trim();
+            onRowsChange(rows.map(r => r.id === result.id
+              ? { ...r, status: "error", item_specifics: { ...r.item_specifics, [missingSpec]: "" } }
+              : r
+            ));
+          }
+          if (result.id) newErrors[result.id] = err;
+        }
+        setRowErrors(prev => ({ ...prev, ...newErrors }));
         toast({
           title: `${succeeded} pushed, ${failed} failed`,
           description: `First error: ${firstError.substring(0, 120)}`,
@@ -1036,6 +1415,48 @@ export function EbayBatchPanel({
       }
     } catch (e) {
       toast({ title: "Push failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const handleRetrySingleRow = async (row: EbayRow) => {
+    setPublishing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("ebay-publish", {
+        body: { rows: [row] },
+      });
+      if (error) {
+        let description = error.message;
+        try {
+          const body = await (error as any).context?.json?.();
+          if (body?.error) description = body.error;
+        } catch {}
+        toast({ title: "Retry failed", description, variant: "destructive" });
+        return;
+      }
+      const { succeeded, failed, results } = data;
+      if (succeeded > 0) {
+        onRowsChange(rows.filter(r => r.id !== row.id));
+        setRowErrors(prev => { const next = { ...prev }; delete next[row.id]; return next; });
+        setSpecFixes(prev => { const next = { ...prev }; delete next[row.id]; return next; });
+        toast({ title: "Pushed!", description: "Listing is now in your Seller Hub drafts." });
+        if (editingRow?.id === row.id) setEditingRow(null);
+      } else {
+        const err = results?.[0]?.error || "Unknown";
+        const match = err.match(/item\s+specific[s]?\s+["']?([^"'.]+?)["']?\s+(is\s+missing|required)/i)
+                   || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
+        if (match) {
+          const missingSpec = match[1].trim();
+          const updated = { ...row, item_specifics: { ...row.item_specifics, [missingSpec]: "" } };
+          onRowsChange(rows.map(r => r.id === row.id ? updated : r));
+          if (editingRow?.id === row.id) setEditingRow(updated);
+        }
+        setRowErrors(prev => ({ ...prev, [row.id]: err }));
+        toast({ title: "Retry failed", description: err.substring(0, 120), variant: "destructive" });
+      }
+    } catch (e) {
+      toast({ title: "Retry failed", description: e instanceof Error ? e.message : "Unknown", variant: "destructive" });
     } finally {
       setPublishing(false);
     }
@@ -1058,17 +1479,27 @@ export function EbayBatchPanel({
         "rounded-xl border p-4 space-y-4 transition-colors",
         rows.length > 0 ? "border-blue-500/50 bg-blue-500/5" : "border-border bg-card"
       )}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Store className="h-5 w-5 text-blue-500" />
-            <div>
-              <span className="font-semibold text-foreground">eBay Batch</span>
-              <span className="text-muted-foreground ml-2">
-                {rows.length} listings • Next: #{nextLotNumber}
-              </span>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Store className="h-5 w-5 text-blue-500" />
+              <div>
+                <span className="font-semibold text-foreground">eBay Batch</span>
+                <span className="text-muted-foreground ml-2">
+                  {rows.length} listings • Next: #{nextLotNumber}
+                </span>
+              </div>
             </div>
+            {rows.length > 0 && (
+              <div className="flex gap-2">
+                <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
+                  {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push to eBay (${activeRows.length})` : "Push to eBay"}
+                </Button>
+              </div>
+            )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Input
               type="number"
               value={nextLotNumber}
@@ -1159,6 +1590,40 @@ export function EbayBatchPanel({
             )}
 
             {rows.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={handleToolbarVerify}
+                disabled={isVerifying || activeRows.length === 0}
+                className="gap-2"
+              >
+                {isVerifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+                {isVerifying ? "Verifying…" : "AI Verify"}
+              </Button>
+            )}
+
+            {rows.length > 0 && (
+              <div className="flex items-center gap-1">
+                <Input
+                  placeholder="AI edit selected row…"
+                  value={toolbarPrompt}
+                  onChange={(e) => setToolbarPrompt(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !isToolbarRefining && handleToolbarRefine()}
+                  disabled={isToolbarRefining}
+                  className="h-9 w-52 text-xs"
+                />
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={handleToolbarRefine}
+                  disabled={!toolbarPrompt.trim() || isToolbarRefining || activeRows.length === 0}
+                  className="h-9 w-9 shrink-0"
+                >
+                  {isToolbarRefining ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </Button>
+              </div>
+            )}
+
+            {rows.length > 0 && (
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="exclude-images"
@@ -1175,23 +1640,27 @@ export function EbayBatchPanel({
             {rows.length > 0 && (
               <Button variant="gold" onClick={downloadCSV} className="gap-2">
                 <Download className="h-4 w-4" />
-                Download CSV for eBay
+                {selectedIds.size > 0 ? `Download CSV (${activeRows.length})` : "Download CSV for eBay"}
               </Button>
             )}
             {rows.length > 0 && (
-              <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
-                {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {publishing ? "Pushing…" : "Push to eBay"}
-              </Button>
-            )}
-            {rows.length > 0 && (
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setShowZapierConfig(!showZapierConfig)}
                 className="gap-2"
               >
                 <ExternalLink className="h-4 w-4" />
                 Zapier
+              </Button>
+            )}
+            {hasPublished && (
+              <Button
+                variant="outline"
+                className="gap-2 border-green-500 text-green-600 hover:bg-green-50"
+                onClick={() => setShowRemovePublishedDialog(true)}
+              >
+                <Check className="h-4 w-4" />
+                {publishedCount} Published
               </Button>
             )}
             {rows.length > 0 && (
@@ -1201,6 +1670,40 @@ export function EbayBatchPanel({
             )}
           </div>
         </div>
+
+        {/* Post-publish remove dialog */}
+        <Dialog open={showRemovePublishedDialog} onOpenChange={setShowRemovePublishedDialog}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>
+                <Check className="inline h-5 w-5 text-green-500 mr-2" />
+                {publishedCount} listing{publishedCount !== 1 ? "s" : ""} pushed to eBay
+              </DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Remove them from this view? They'll stay in the database and remain visible in your other apps.
+            </p>
+            <div className="flex gap-3 pt-2">
+              <Button
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => {
+                  onRowsChange(rows.filter(r => r.status !== "published"));
+                  setHasPublished(false);
+                  setShowRemovePublishedDialog(false);
+                }}
+              >
+                Remove from View
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setShowRemovePublishedDialog(false)}
+              >
+                Keep in View
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Zapier Webhook Config */}
         {showZapierConfig && (
@@ -1225,7 +1728,7 @@ export function EbayBatchPanel({
                 className="gap-2"
               >
                 {sendingToZapier ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {sendingToZapier ? `Sending…` : `Send ${rows.length} to Zapier`}
+                {sendingToZapier ? `Sending…` : `Send ${activeRows.length} to Zapier`}
               </Button>
             </div>
           </div>
@@ -1308,49 +1811,200 @@ export function EbayBatchPanel({
 
         {rows.length > 0 && (
           <div className="border-t border-border pt-4 space-y-2">
-            <div className="flex items-center gap-2 mb-2">
-              <Check className="h-4 w-4 text-green-500" />
-              <span className="text-sm font-medium">{rows.length} listings ready for export</span>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Check className="h-4 w-4 text-green-500" />
+                <span className="text-sm font-medium">
+                  {selectedIds.size > 0
+                    ? `${selectedIds.size} of ${rows.length} selected`
+                    : `${rows.length} listings ready for export`}
+                </span>
+              </div>
+              <button
+                className="text-xs text-muted-foreground hover:text-foreground underline"
+                onClick={() =>
+                  setSelectedIds(allSelected ? new Set() : new Set(rows.map(r => r.id)))
+                }
+              >
+                {allSelected ? "Deselect all" : "Select all"}
+              </button>
             </div>
-            
+
             <div className="max-h-48 overflow-y-auto space-y-1">
               {rows.map((row) => (
-                <div 
-                  key={row.id} 
-                  className="text-xs flex justify-between items-center py-2 px-3 bg-background/50 rounded hover:bg-background/80 transition-colors"
-                >
+                <div
+                  key={row.id}
+                  className={cn(
+                    "text-xs py-2 px-3 rounded hover:bg-background/80 transition-colors",
+                    rowErrors[row.id] ? "bg-red-500/10 border border-red-500/30" :
+                    selectedIds.has(row.id) ? "bg-primary/10 border border-primary/20" : "bg-background/50"
+                  )}
+                ><div className="flex justify-between items-center">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <Checkbox
+                      checked={selectedIds.has(row.id)}
+                      onCheckedChange={(checked) => {
+                        setSelectedIds(prev => {
+                          const next = new Set(prev);
+                          if (checked) next.add(row.id);
+                          else next.delete(row.id);
+                          return next;
+                        });
+                      }}
+                    />
                     <span className="font-mono text-muted-foreground">#{row.lot_number}</span>
-                    <span className="truncate font-medium">{row.title}</span>
+                    {inlineEdit?.id === row.id && inlineEdit.field === 'title' ? (
+                      <input
+                        autoFocus
+                        className="flex-1 min-w-0 bg-background border border-primary rounded px-1 py-0 text-xs font-medium focus:outline-none"
+                        value={inlineEdit.value}
+                        maxLength={80}
+                        onChange={e => setInlineEdit(prev => prev ? { ...prev, value: e.target.value } : prev)}
+                        onBlur={saveInlineEdit}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); saveInlineEdit(); }
+                          if (e.key === 'Escape') setInlineEdit(null);
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="truncate font-medium cursor-text hover:underline decoration-dotted"
+                        title="Click to edit title"
+                        onClick={() => setInlineEdit({ id: row.id, field: 'title', value: row.title || '' })}
+                      >{row.title}</span>
+                    )}
+                    {rowErrors[row.id] && (
+                      <span className="text-red-400 text-xs shrink-0" title={rowErrors[row.id]}>⚠ Push failed — click Edit to fix</span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-primary font-semibold">${row.price || 0}</span>
+                    {inlineEdit?.id === row.id && inlineEdit.field === 'price' ? (
+                      <input
+                        autoFocus
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="w-16 bg-background border border-primary rounded px-1 py-0 text-xs font-semibold text-primary focus:outline-none"
+                        value={inlineEdit.value}
+                        onChange={e => setInlineEdit(prev => prev ? { ...prev, value: e.target.value } : prev)}
+                        onBlur={saveInlineEdit}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); saveInlineEdit(); }
+                          if (e.key === 'Escape') setInlineEdit(null);
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="text-primary font-semibold cursor-text hover:underline decoration-dotted"
+                        title="Click to edit price"
+                        onClick={() => setInlineEdit({ id: row.id, field: 'price', value: String(row.price || 0) })}
+                      >${row.price || 0}</span>
+                    )}
                     <span className="text-muted-foreground capitalize">{row.condition || "—"}</span>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0"
-                      onClick={() => setViewingRow(row)}
+                      onClick={() => {
+                        if (import.meta.env.VITE_FEATURE_EBAY_DRAWER === "true") {
+                          setDrawerRow(row); setDrawerOpen(true);
+                        } else {
+                          setViewingRow(row);
+                        }
+                      }}
                     >
                       <Eye className="h-3 w-3" />
                     </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0"
                       onClick={() => setEditingRow(row)}
                     >
                       <Edit2 className="h-3 w-3" />
                     </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0 text-blue-400 hover:text-blue-300"
+                      title="Cross-post to Poshmark / Mercari"
+                      onClick={() => setCrossPostRowId(crossPostRowId === row.id ? null : row.id)}
+                    >
+                      <Share2 className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-7 w-7 p-0 text-destructive hover:text-destructive"
                       onClick={() => handleDelete(row.id)}
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
+                  {crossPostRowId === row.id && (
+                    <div className="mt-1 flex items-center gap-2 pt-1 border-t border-border">
+                      <span className="text-xs text-muted-foreground">Cross-post to:</span>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['poshmark'])}>
+                        Poshmark
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['mercari'])}>
+                        Mercari
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-6 text-xs"
+                        onClick={() => handleCrossPost(row, ['poshmark', 'mercari'])}>
+                        Both
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-6 text-xs"
+                        onClick={() => setCrossPostRowId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                {/* Inline fix for missing item specifics after a failed push */}
+                {rowErrors[row.id] && (() => {
+                  const emptySpecs = Object.entries(row.item_specifics || {}).filter(([, v]) => v === '');
+                  if (emptySpecs.length === 0) return null;
+                  return (
+                    <div className="mt-1 flex flex-wrap items-center gap-2 pt-1 border-t border-red-500/20">
+                      {emptySpecs.map(([key]) => (
+                        <label key={key} className="flex items-center gap-1">
+                          <span className="text-muted-foreground">{key}:</span>
+                          <input
+                            className="w-24 bg-background border border-border rounded px-1 py-0 text-xs focus:outline-none focus:border-primary"
+                            placeholder="required"
+                            value={specFixes[row.id]?.[key] ?? ''}
+                            onChange={e => setSpecFixes(prev => ({
+                              ...prev,
+                              [row.id]: { ...(prev[row.id] || {}), [key]: e.target.value },
+                            }))}
+                          />
+                        </label>
+                      ))}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 text-xs gap-1 border-red-500/50 text-red-400 hover:text-red-300"
+                        disabled={publishing}
+                        onClick={() => {
+                          const fixes = specFixes[row.id] || {};
+                          const updatedRow = {
+                            ...row,
+                            item_specifics: { ...row.item_specifics, ...fixes },
+                          };
+                          onRowsChange(rows.map(r => r.id === row.id ? updatedRow : r));
+                          setSpecFixes(prev => { const n = { ...prev }; delete n[row.id]; return n; });
+                          handleRetrySingleRow(updatedRow);
+                        }}
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Fix & Retry
+                      </Button>
+                    </div>
+                  );
+                })()}
                 </div>
               ))}
             </div>
@@ -1431,10 +2085,10 @@ export function EbayBatchPanel({
                   <Label className="text-xs text-muted-foreground uppercase">
                     Images (drag to reorder, hover for AI)
                   </Label>
-                  <ImageEnhancer
-                    onImageGenerated={(url) => setEditingRow({ 
-                      ...editingRow, 
-                      image_urls: [...(editingRow.image_urls || []), url] 
+                  <AIGenerateButton
+                    onImageGenerated={(url) => setEditingRow({
+                      ...editingRow,
+                      image_urls: [...(editingRow.image_urls || []), url]
                     })}
                     trigger={
                       <Button variant="outline" size="sm" className="gap-1 h-7">
@@ -1542,7 +2196,7 @@ export function EbayBatchPanel({
               <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
                 <div>
                   <Label>Brand</Label>
-                  <Input 
+                  <Input
                     value={editingRow.brand || ""}
                     onChange={(e) => setEditingRow({ ...editingRow, brand: e.target.value })}
                     placeholder="e.g. Nike, Handmade"
@@ -1550,7 +2204,7 @@ export function EbayBatchPanel({
                 </div>
                 <div>
                   <Label>UPC</Label>
-                  <Input 
+                  <Input
                     value={editingRow.upc || ""}
                     onChange={(e) => setEditingRow({ ...editingRow, upc: e.target.value })}
                     placeholder="12-digit barcode"
@@ -1558,7 +2212,7 @@ export function EbayBatchPanel({
                 </div>
                 <div>
                   <Label>MPN</Label>
-                  <Input 
+                  <Input
                     value={editingRow.mpn || ""}
                     onChange={(e) => setEditingRow({ ...editingRow, mpn: e.target.value })}
                     placeholder="Manufacturer Part #"
@@ -1570,6 +2224,19 @@ export function EbayBatchPanel({
                 itemSpecifics={editingRow.item_specifics || {}}
                 onChange={(specifics) => setEditingRow({ ...editingRow, item_specifics: specifics })}
               />
+
+              {/* Custom SKU — shown as the last item specific. Optional, never blocks a push. */}
+              <div className="pt-3 border-t border-border">
+                <Label>Custom SKU (optional)</Label>
+                <Input
+                  value={editingRow.custom_sku || ""}
+                  onChange={(e) => setEditingRow({ ...editingRow, custom_sku: e.target.value })}
+                  placeholder="Your internal SKU — leave blank to skip"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Maps to eBay's "Custom Label (SKU)". Optional.
+                </p>
+              </div>
 
               {/* Best Offer Settings */}
               <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
@@ -1710,7 +2377,81 @@ export function EbayBatchPanel({
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-4">
+              {/* AI Verify Result */}
+              {verifyReport && (
+                <div className={cn(
+                  "rounded-lg p-3 text-sm border",
+                  verifyReport.passed
+                    ? "bg-green-950/40 border-green-800 text-green-300"
+                    : "bg-yellow-950/40 border-yellow-700 text-yellow-300"
+                )}>
+                  <div className="flex items-center gap-2 mb-1 font-medium">
+                    {verifyReport.passed ? <Check className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {verifyReport.passed ? "Listing looks good" : "Issues found"}
+                  </div>
+                  <p className="leading-snug">{verifyReport.text}</p>
+                </div>
+              )}
+
+              {/* AI Chat Bar */}
+              <div className="pt-2 border-t border-border">
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Ask AI to make changes</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto h-7 text-xs"
+                    onClick={() => verifyListing()}
+                    disabled={isVerifying || isRefining}
+                  >
+                    {isVerifying ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Eye className="h-3 w-3 mr-1" />
+                    )}
+                    AI Verify
+                  </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="e.g., 'Make title more SEO friendly' or 'Lower price to 25'"
+                    value={correctionPrompt}
+                    onChange={(e) => setCorrectionPrompt(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !isRefining && refineListing()}
+                    disabled={isRefining}
+                  />
+                  <Button
+                    onClick={() => refineListing()}
+                    disabled={!correctionPrompt.trim() || isRefining}
+                    size="icon"
+                  >
+                    {isRefining ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Push error banner with retry */}
+              {editingRow && rowErrors[editingRow.id] && (
+                <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-3 text-sm text-red-400">
+                  <p className="font-medium mb-1">Push failed</p>
+                  <p className="text-xs mb-2 opacity-80">{rowErrors[editingRow.id].substring(0, 200)}</p>
+                  {Object.entries(editingRow.item_specifics || {}).some(([, v]) => v === "") && (
+                    <p className="text-xs mb-2 text-yellow-400">Fill in the highlighted fields below, then retry.</p>
+                  )}
+                  <Button
+                    size="sm"
+                    className="gap-2 bg-red-600 hover:bg-red-700 text-white"
+                    disabled={publishing}
+                    onClick={() => handleRetrySingleRow(editingRow)}
+                  >
+                    {publishing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                    Retry This Listing
+                  </Button>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
                 <Button variant="outline" onClick={() => setEditingRow(null)}>
                   Cancel
                 </Button>
@@ -1723,6 +2464,54 @@ export function EbayBatchPanel({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* AI Verify Panel — standalone Accept/Reject dialog */}
+      <Dialog open={!!verifyPanel} onOpenChange={(open) => { if (!open) setVerifyPanel(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {verifyPanel?.passed ? (
+                <Check className="h-5 w-5 text-green-400" />
+              ) : (
+                <Eye className="h-5 w-5 text-yellow-400" />
+              )}
+              AI Verification — {verifyPanel?.row.title?.substring(0, 40)}
+            </DialogTitle>
+          </DialogHeader>
+          <div className={cn(
+            "rounded-lg p-3 text-sm border",
+            verifyPanel?.passed
+              ? "bg-green-950/40 border-green-800 text-green-300"
+              : "bg-yellow-950/40 border-yellow-700 text-yellow-300"
+          )}>
+            <p className="leading-snug whitespace-pre-wrap">{verifyPanel?.report}</p>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setVerifyPanel(null)}>
+              Reject
+            </Button>
+            <Button variant="gold" onClick={handleAcceptVerify}>
+              <Check className="h-4 w-4 mr-1" />
+              Accept Changes
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <EbayListingDrawer
+        row={drawerRow}
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        onSaveSpecifics={async (rowId, specifics) => {
+          await supabase
+            .from("ebay_batch_rows")
+            .update({ item_specifics: specifics })
+            .eq("id", rowId);
+        }}
+        onPublish={async (rowId) => {
+          const row = rows.find(r => r.id === rowId);
+          if (row) await handleRetrySingleRow(row);
+        }}
+      />
     </>
   );
 }

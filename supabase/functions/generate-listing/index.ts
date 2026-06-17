@@ -10,6 +10,113 @@ interface GenerateRequest {
   platform: 'ebay' | 'facebook' | 'liveauctioneers' | 'denver';
   imageUrls: string[];
   additionalContext?: string;
+  masterPrompt?: string;
+}
+
+// --- v2.2 semantic correction retrieval helpers ---
+const CAPTION_MODEL = 'claude-haiku-4-5';        // Tier-1 vision pass
+const EMBED_MODEL = 'text-embedding-3-small';    // 1536 dims, Tier-1
+// USD per 1M tokens (approx; for the model_costs ledger only).
+const CAPTION_IN_PER_1M = 1.0;
+const CAPTION_OUT_PER_1M = 5.0;
+const EMBED_IN_PER_1M = 0.02;
+
+// One short visual descriptor of the item, used as the embedding query so we
+// can retrieve semantically-similar past corrections even though there's no
+// title yet at generation time. Returns null on any failure (caller falls back).
+async function captionItem(
+  imageUrls: string[],
+  anthropicKey: string
+): Promise<{ caption: string; inputTokens: number; outputTokens: number } | null> {
+  try {
+    const max = Math.min(imageUrls.length, 3);
+    const content: any[] = [];
+    for (let i = 0; i < max; i++) {
+      content.push({ type: 'image', source: { type: 'url', url: imageUrls[i] } });
+    }
+    content.push({
+      type: 'text',
+      text: 'In one short line (max 15 words), describe this item for resale identification: type, material, style, era. Just the descriptor, no sentence.',
+    });
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ model: CAPTION_MODEL, max_tokens: 60, messages: [{ role: 'user', content }] }),
+    });
+    if (!res.ok) {
+      console.warn(`caption pass failed (${res.status})`);
+      return null;
+    }
+    const j = await res.json();
+    const caption = j.content?.[0]?.text?.trim();
+    if (!caption) return null;
+    return {
+      caption,
+      inputTokens: j.usage?.input_tokens ?? 0,
+      outputTokens: j.usage?.output_tokens ?? 0,
+    };
+  } catch (e) {
+    console.warn('captionItem error (non-blocking):', e);
+    return null;
+  }
+}
+
+// Embed a text query with the same model used to embed stored corrections.
+async function embedQuery(
+  text: string,
+  openaiKey: string
+): Promise<{ vector: number[]; inputTokens: number } | null> {
+  try {
+    const res = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, input: text }),
+    });
+    if (!res.ok) {
+      console.warn(`embed query failed (${res.status})`);
+      return null;
+    }
+    const j = await res.json();
+    const vector = j.data?.[0]?.embedding;
+    if (!vector) return null;
+    return { vector, inputTokens: j.usage?.prompt_tokens ?? 0 };
+  } catch (e) {
+    console.warn('embedQuery error (non-blocking):', e);
+    return null;
+  }
+}
+
+// Shared formatter: turn correction rows into deduped guardrail lines.
+function formatCorrectionLines(
+  corrections: Array<{
+    wrong_title?: string | null;
+    corrected_title?: string | null;
+    correction_note?: string | null;
+    category?: string | null;
+  }> | null
+): string[] {
+  if (!corrections || corrections.length === 0) return [];
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const c of corrections) {
+    const key = `${c.wrong_title ?? ''}→${c.corrected_title ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const parts: string[] = [];
+    if (c.wrong_title && c.corrected_title && c.wrong_title !== c.corrected_title) {
+      parts.push(`Was mis-identified as "${c.wrong_title}" — correct is "${c.corrected_title}"`);
+    } else if (c.corrected_title) {
+      parts.push(`Correct identification: "${c.corrected_title}"`);
+    }
+    if (c.correction_note) parts.push(`Note: ${c.correction_note}`);
+    if (c.category) parts.push(`(category: ${c.category})`);
+    if (parts.length) lines.push(`- ${parts.join(' ')}`);
+  }
+  return lines;
 }
 
 const PLATFORM_PROMPTS = {
@@ -36,10 +143,20 @@ Before anything else, carefully study the image(s) and determine EXACTLY what th
 - What is its primary PURPOSE or function?
 - What CATEGORY does a buyer search for when looking for this item?
 
+CRITICAL ITEM IDENTIFICATION RULES — READ BEFORE CATEGORIZING:
+
+CLOTHING — COUNT THE PIECES FIRST:
+- SUIT = matching jacket + pants (or jacket + pants + vest) as a SET. You must see BOTH pieces to call it a suit.
+- BLAZER / SPORT COAT = single jacket only, structured, worn over dress shirt. NOT a suit.
+- JACKET = single outerwear piece (puffer, bomber, denim, fleece, windbreaker, etc.)
+- COAT = long outerwear (reaches at or past the knee)
+- If you only see ONE piece of clothing in the image → it is NOT a suit. Period.
+
 COMMON MISTAKES TO AVOID:
-- A jacket is NOT underwear - it's outerwear (Coats, Jackets & Vests)
-- A lamp is NOT a ceiling fan - check category carefully
+- A single jacket is NOT a suit — suits require matching pants
+- A lamp is NOT a ceiling fan — check category carefully
 - A decorative plate is NOT dinnerware if it's meant for display
+- Shower gel / body wash is NOT a fragrance — it's Bath & Body
 - Always match the item to how a BUYER would search for it
 
 === STEP 2: CATEGORY ID (MUST BE LEAF CATEGORY - CRITICAL) ===
@@ -55,64 +172,190 @@ HOW TO PICK THE RIGHT LEAF CATEGORY:
 4. If you're unsure, pick the broader leaf category rather than guessing a specific one
 
 VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
-- Men's Coats, Jackets & Vests: 3001
+
+-- CLOTHING & SHOES (root: 11450) --
+- Men's T-Shirts: 21235
 - Men's Casual Shirts: 57990
 - Men's Dress Shirts: 57991
 - Men's Jeans: 11483
 - Men's Sweaters: 11484
 - Men's Dress Pants: 57989
+- Men's Suits (2-piece or 3-piece matching set with pants): 3002
+- Men's Blazers & Sport Coats (single jacket, structured): 3002
+- Men's Coats, Jackets & Vests (standalone outerwear): 3001
+- Men's Athletic Shoes: 15709
+- Men's Casual Shoes / Loafers: 24087
+- Men's Dress Shoes: 53120
 - Women's Coats & Jackets: 63862
 - Women's Tops & Blouses: 53159
 - Women's Dresses: 63861
 - Women's Jeans: 11554
 - Women's Sweaters: 63866
 - Women's Activewear Tops: 185176
+- Women's Heels & Pumps: 55793
+- Women's Flats: 45333
+- Women's Athletic Shoes: 95672
+- Women's Handbags & Purses: 169291
+- Men's Bags & Backpacks: 4250
+
+-- JEWELRY & WATCHES (root: 281) --
 - Wristwatches: 31387
 - Fine Rings: 67681
 - Fine Necklaces & Pendants: 67652
-- Fashion Jewelry Necklaces: 10968
+- Fashion Jewelry: 10968
+- Vintage & Antique Jewelry: 48579
+
+-- ART (root: 550) --
 - Art Prints: 360
-- Paintings: 551 (DO NOT use 118429 or 117089 — those are deprecated)
+- Paintings: 551 (DO NOT use 118429 or 117089 — deprecated)
 - Sculptures & Carvings: 60628
-- Mixed Media Art & Collage Art: 158658
+- Mixed Media & Collage Art: 158658
+
+-- COLLECTIBLES (root: 1) --
 - Decorative Collectible Figurines: 162032
-- Kitchen Glassware: 20625
-- Decorative Plates & Bowls: 36018
+- Decorative Plates & Platters: 36018
+- Christmas Wreaths & Garlands: 33164 (NOT 159769 — remapped)
+- Christmas Ornaments: 170091
+- Christmas Stockings: 170098
+- Other Christmas Décor: 170083
+- Seasonal Home Décor: 116022
+
+-- HOME & GARDEN (root: 11700) --
+- Kitchen & Steak Knives (paring, chef, santoku, slicer, boning, cleaver): 177005
 - Table Lamps: 112581
 - Floor Lamps: 20706
 - Area Rugs: 45510
-- Men's Athletic Shoes: 15709
-- Men's Casual Shoes: 24087
-- Men's Dress Shoes: 53120
-- Women's Heels: 55793
-- Women's Flats: 45333
-- Women's Athletic Shoes: 95672
-- Women's Handbags: 169291
-- Men's Bags: 4250
-- Wireless/Bluetooth Headphones: 112529
-- Digital Cameras: 31388
-- Video Game Consoles: 139971
-- Action Figures & Accessories: 261068
-- Board & Traditional Games: 180349
-- Christmas Wreaths, Garlands & Plants: 33164 (NOT 159769 — that was remapped!)
-- Christmas Ornaments: 170091
-- Christmas Stockings & Hangers: 170098
-- Other Christmas Décor: 170083
-- Seasonal Home Décor: 116022
-- Candles: 46782
-- Vases: 20625
-- Bookends: 261
-- Picture Frames: 16041
 - Mirrors: 20580
 - Clocks: 20562
-- Baskets: 20563
-- Pottery & Glass: 870
+- Picture Frames: 16041
+- Candles: 46782
+- Baskets & Bowls: 20563
+- Blankets & Throws: 20668
+- Bed Pillows: 20677
+- Comforters & Sets: 20672
+- Sheet Sets: 20675
+- Mattress Pads & Toppers: 20681
 
-IMPORTANT RULES:
-- NEVER use parent/intermediate categories (e.g., 11450 "Clothing, Shoes & Accessories" is a PARENT - do not use it)
+-- CAMERAS & PHOTO (root: 625) --
+- Digital Cameras: 31388
+- Vintage Cameras & Film Cameras: 15230
+- Camcorders & Video Cameras: 11724
+- Camera Lenses: 30106
+
+-- CONSUMER ELECTRONICS (root: 293) --
+- Wireless / Bluetooth Headphones: 112529
+
+-- VIDEO GAMES & CONSOLES (root: 1249) --
+- Video Game Consoles: 139971
+
+-- POTTERY & GLASS (root: 870) --
+- Pottery & China: 870 (use this for pottery, ceramics, china dishware, porcelain)
+- Glass: 916 (use this for decorative glass, glassware, crystal)
+- Vases: 45237
+
+-- ANTIQUES (root: 20081) --
+- Antique Furniture: 20091
+- Antique Decorative Arts: 20086
+- Antique Rugs & Carpets: 37978
+- Antique Clocks: 1192
+
+-- BOOKS & MAGAZINES (root: 267) --
+- Antiquarian & Collectible Books: 29223
+- Fiction & Literature Books: 171228
+- Nonfiction Books: 183387
+- Magazines: 280
+
+-- COINS & PAPER MONEY (root: 11116) --
+- US Coins: 253
+- World / Foreign Coins: 256
+- US Paper Money: 3412
+- Coin Collections & Lots: 18880
+
+-- DOLLS & BEARS (root: 237) --
+- Barbie Dolls: 238
+- Vintage & Antique Dolls: 16497
+- Teddy Bears: 2228
+- Action Figures (non-toy): 261068
+
+-- MOVIES & TV (root: 11232) --
+- DVDs & Blu-ray Discs: 617
+- VHS Tapes: 309
+
+-- MUSIC (root: 11233) --
+- Vinyl Records: 306
+- CDs: 176984
+
+-- MUSICAL INSTRUMENTS (root: 619) --
+- Guitars: 33034
+- Pianos & Keyboards: 16220
+- Brass Instruments: 180014
+- String Instruments: 183085
+- Percussion & Drums: 12229
+- Vintage Musical Instruments: 41833
+
+-- SPORTING GOODS (root: 888) --
+- Exercise & Fitness Equipment: 15273
+- Golf Clubs: 1513
+- Fishing Equipment: 1492
+- Camping & Hiking Gear: 16034
+
+-- TOYS & HOBBIES (root: 220) --
+- Military & Aircraft Model Kits (tanks, planes, armor — any scale): 31787
+- Aircraft Model Kits: 31787 (DO NOT use 2611 — DEPRECATED, eBay remaps to video games)
+- Ship/Boat Model Kits: 37278
+- Car/Truck Model Kits (non-military): 51023
+- Figure Model Kits (sci-fi, fantasy, Gundam): 19063
+- HO Scale Model Trains: 262318
+- N Scale Model Trains: 47006
+- O Scale Model Trains: 47004
+- G Scale Model Trains: 47002
+- Model Train Accessories: 4748
+- Action Figures & Accessories: 261068
+- Board & Traditional Games: 180349
+
+-- HEALTH & BEAUTY (root: 11836) --
+- Fragrances / Women's Perfume: 11848
+- Fragrances / Men's Cologne & Aftershave: 11846
+- Body Wash & Shower Gel: 26262
+- Body Lotion & Moisturizer: 67537
+- Shampoo & Conditioner: 67538
+NOTE: Shower gel, body wash, lotion, shampoo are NEVER fragrances — use the Bath & Body categories above.
+
+-- STAMPS (root: 260) --
+- US Stamps: 261
+- World Stamps: 262
+
+IMPORTANT RULES — PARENT CATEGORY IDs: NEVER USE THESE IN A LISTING
+These are ALL root/parent categories — eBay error 87 if used directly. Always drill to a leaf:
+- 11450 = Clothing, Shoes & Accessories (PARENT)
+- 220   = Toys & Hobbies (PARENT) — use 31787, 261068, 262318, etc.
+- 267   = Books & Magazines (PARENT) — use 29223, 171228, 183387, 280
+- 281   = Jewelry & Watches (PARENT) — use 31387, 67681, etc.
+- 293   = Consumer Electronics (PARENT) — use 112529, etc.
+- 550   = Art (PARENT) — use 360, 551, 60628, 158658
+- 619   = Musical Instruments & Gear (PARENT) — use 33034, 16220, etc.
+- 625   = Cameras & Photo (PARENT) — use 31388, 15230, 11724, 30106
+- 237   = Dolls & Bears (PARENT) — use 238, 16497, 2228
+- 260   = Stamps (PARENT) — use 261, 262
+- 870   = Pottery & Glass (PARENT) — use 916, 45237, etc.
+- 888   = Sporting Goods (PARENT) — use 15273, 1513, 1492, etc.
+- 1     = Collectibles (PARENT) — use 162032, 36018, 33164, etc.
+- 1249  = Video Games & Consoles (PARENT) — use 139971
+- 11116 = Coins & Paper Money (PARENT) — use 253, 256, 3412
+- 11232 = Movies & TV (PARENT) — use 617, 309
+- 11233 = Music (PARENT) — use 306, 176984
+- 11700 = Home & Garden (PARENT) — use 177005, 112581, 20706, etc.
+- 20081 = Antiques (PARENT) — use 20091, 20086, etc.
+- 45100 = Entertainment Memorabilia (PARENT)
+- 20601 = Bedding (PARENT) — use 20668, 20677, 20672, 20675
+- 51028 = Models & Kits (PARENT) — use 31787, 37278, 51023, 19063
+- 180250 = Model Railroads & Trains (PARENT) — use 262318, 47006, 47004, 47002
+
+ADDITIONAL RULES:
 - If an item is seasonal décor (wreaths, ornaments, etc.), use the Holiday/Seasonal category tree, NOT "Home Décor" generically
 - The categoryId MUST be a number, not a string
-- When in doubt, pick from the VERIFIED list above rather than guessing
+- When in doubt, pick from the VERIFIED list above rather than guessing a random number
+- NEVER invent a category ID — if you are not certain, pick the closest verified ID from this list
 
 === STEP 3: TITLE (HARD LIMIT: 80 CHARACTERS MAX — CASSINI OPTIMIZED) ===
 **THIS IS CRITICAL - COUNT YOUR CHARACTERS!**
@@ -193,11 +436,12 @@ ALWAYS INCLUDE:
 - Style/Era
 - Country/Region of Manufacture
 
-**REQUIRED FOR CLOTHING CATEGORIES (eBay will REJECT without these):**
-- Department: "Men", "Women", "Boys", "Girls", or "Unisex" (REQUIRED!)
-- Size Type: "Regular", "Petite", "Plus", "Tall", "Big & Tall", "Maternity" (REQUIRED!)
-- Size: Actual size like "M", "L", "XL", "32", "10", etc.
+**REQUIRED FOR CLOTHING CATEGORIES (eBay error 21919303 if missing — ALWAYS include these):**
+- Department: EXACTLY "Men", "Women", "Boys", "Girls", or "Unisex Adults" — derive from category (Men's T-Shirts → "Men", Women's Dresses → "Women")
+- Size: Actual size like "S", "M", "L", "XL", "2XL", "32", "10", etc. — read from label in photo if visible; use "See Description" only if truly unreadable
+- Size Type: "Regular", "Petite", "Plus", "Tall", "Big & Tall", "Maternity" — default "Regular" if not apparent
 - Gender: "Men's", "Women's", "Unisex"
+- DO NOT omit Department or Size — the listing will be rejected by eBay
 
 CATEGORY-SPECIFIC:
 - Clothing: Size, Size Type, Department, Gender, Pattern, Sleeve Length
@@ -210,6 +454,7 @@ CATEGORY-SPECIFIC:
   "title": "string (MUST be 80 chars or less - Cassini optimized, keyword-dense)",
   "description": "string (150+ words, Cassini optimized, structured with specs/condition/includes)",
   "price": number (based on sold comps, not random),
+  "compQuery": "string (3-6 word search phrase a shopper would type to find THIS exact item — brand + item type + key descriptor, e.g. 'Coach Willis leather satchel'. NOT the full keyword-stuffed title. Used to pull live market comps.)",
   "category": "string (human readable like 'Men's Coats, Jackets & Vests')",
   "categoryId": number (REQUIRED - must be a LEAF category ID, not parent),
   "condition": "string",
@@ -246,9 +491,9 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
   "condition": "string"
 }`,
 
-  liveauctioneers: `You are an expert auction catalog writer for LiveAuctioneers bulk CSV uploads with deep knowledge of antique and collectible market values.
+  liveauctioneers: `You are an expert auction catalog writer for LiveAuctioneers bulk CSV uploads with deep knowledge of antique and collectible market values, art history, and provenance research.
 
-TASK: Identify the item from photos and generate a LiveAuctioneers-ready listing with ACCURATE price estimates.
+TASK: Identify the item from photos and generate a LiveAuctioneers-ready listing with ACCURATE price estimates and an IN-DEPTH catalog description.
 
 CRITICAL: You MUST ALWAYS respond with valid JSON, even if the image is unclear. If you cannot identify a sellable item, return JSON with your best guess.
 
@@ -278,32 +523,47 @@ CONSIDER THESE FACTORS:
 
 IMPORTANT: The highEst should typically be 2-4x the lowEst. Never use round arbitrary numbers like 100/200 - be specific based on your assessment.
 
-TITLE REQUIREMENTS (VERY IMPORTANT):
-- Maximum 100 characters INCLUDING spaces - this is a HARD LIMIT
-- Pack with SEO keywords: brand, maker, material, style, era, type
-- Be specific and descriptive - avoid generic terms
-- Include key identifiers: maker marks, model numbers, patterns
-- Example: "Tiffany & Co Sterling Silver Art Deco Flatware Set 48pc Faneuil Pattern c1920"
-- Example: "Antique French Bronze Ormolu Mantel Clock Japy Freres Movement c1880"
+=== TITLE (HARD LIMIT: 100 CHARACTERS INCLUDING SPACES — SEO + GEO OPTIMIZED) ===
+- MUST be 100 characters or fewer including spaces — COUNT EVERY CHARACTER
+- Front-load SEO keywords: Brand/Maker + Item Type + Material + Style/Era
+- Include GEO-relevant terms: regional makers, cultural origins, geographic identifiers
+- Pack with long-tail search keywords collectors actually use
+- Include key identifiers: maker marks, model numbers, patterns, dates
+- NO filler words — every word must serve a search purpose
 
-DESCRIPTION REQUIREMENTS (VERY IMPORTANT):
-- Write a DETAILED, comprehensive description - minimum 3-4 sentences
-- Include: materials, dimensions (if apparent), age/era, style, maker/origin
-- Describe notable features, craftsmanship, design elements
-- Mention provenance or history if known
-- Include any markings, signatures, labels visible
-- Describe functionality and intended use
-- Make it compelling for bidders - highlight what makes this item special
+GOOD EXAMPLES:
+- "Tiffany & Co Sterling Silver Art Deco Flatware Set 48pc Faneuil Pattern c1920" (77 chars)
+- "Antique French Bronze Ormolu Mantel Clock Japy Freres Movement c1880" (68 chars)
+- "Native American Zuni Petit Point Turquoise Sterling Cuff Bracelet Signed" (72 chars)
 
-CONDITION ANALYSIS (VERY IMPORTANT):
-Examine photos carefully and provide a DETAILED condition report including:
-- Overall condition grade (Excellent, Very Good, Good, Fair, Poor)
-- Visible wear, scratches, chips, cracks, stains, fading, discoloration
-- Missing parts or damage
-- Signs of age, patina, or restoration
-- Functionality issues if apparent
-- Any notable flaws or imperfections
-Example: "Good condition with light wear consistent with age. Minor scratches to base, small chip to rim (1/4 inch), original patina intact. No cracks or repairs noted."
+=== DESCRIPTION (IN-DEPTH CATALOG ENTRY — MINIMUM 6-10 SENTENCES) ===
+Write like a professional auction house cataloger. This is a COMPREHENSIVE catalog entry.
+
+REQUIRED CONTENT (weave together naturally):
+1. **PRECISE IDENTIFICATION**: Exactly what this item is — maker, brand, model, pattern, period, origin
+2. **PHYSICAL DETAILS**: Materials, construction, colors, decorative elements, dimensions (estimate if needed), weight class
+3. **HISTORICAL CONTEXT & PROVENANCE**:
+   - Manufacturing era and production history
+   - Maker/artist biography and significance
+   - Design movement or stylistic context (Art Nouveau, Arts & Crafts, Bauhaus, etc.)
+   - Cultural or historical significance
+   - Is this from a known series, collection, or limited production?
+4. **EXPERT OBSERVATIONS**:
+   - Maker's marks, hallmarks, stamps, signatures, labels, patent numbers visible
+   - Construction techniques indicating quality or era (hand-dovetailed, hand-blown, hand-forged)
+   - Rarity indicators: discontinued, limited edition, regional specialty, scarce variant
+   - Comparable auction results or market context if known
+   - Features that distinguish this from reproductions or lesser examples
+5. **DETAILED CONDITION REPORT** (MANDATORY):
+   - Overall grade: Excellent, Very Good, Good, Fair, Poor
+   - Surface condition: scratches, chips, cracks, dents, stains, foxing, tarnish, patina
+   - Structural: loose joints, wobbles, missing parts, repairs, restoration evidence
+   - Finish: original, refinished, retouched, faded, sun-bleached
+   - Functionality: working/non-working, missing components
+   - Completeness: all original parts, original case/box, documentation
+   - Example: "Very good condition with light wear consistent with age. Minor tarnish to silverplate, small 1/4-inch nick to rim edge, original felt pads intact on base. No dents, monograms, or repairs."
+
+DESCRIPTION TONE: Authoritative, factual, collector-oriented. Make bidders confident and excited.
 
 DEFAULTS:
 - Consigner: "JSG"
@@ -312,12 +572,12 @@ DEFAULTS:
 
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
-  "title": "string (max 100 chars - KEYWORD RICH, DETAILED)",
-  "description": "string (DETAILED 3-4+ sentences, comprehensive)",
+  "title": "string (max 100 chars including spaces - SEO/GEO KEYWORD RICH)",
+  "description": "string (6-10+ sentences, comprehensive catalog entry with condition report, history, provenance)",
   "lowEst": number (realistic based on market knowledge),
   "highEst": number (typically 2-4x lowEst),
   "startPrice": 5,
-  "condition": "string (DETAILED condition report)",
+  "condition": "string (DETAILED condition report paragraph)",
   "consigner": "JSG",
   "buyNowPrice": null,
   "excludeFromBuyNow": null,
@@ -339,41 +599,165 @@ ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
   "locationNickname": "Highlands Ranch"
 }`,
 
-  denver: `You are an expert auction catalog writer and SEO specialist for Denver Online Auctions.
-Generate a professional lot listing optimized for search visibility and buyer discovery.
+  denver: `You are an expert auction catalog writer, SEO/GEO specialist, and antiques appraiser for Denver Online Auctions.
+Generate a professional lot listing optimized for BOTH search engine optimization (SEO) AND geographic/local search optimization (GEO) for the Colorado auction market.
 
 CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanation. Even if the image is unclear, provide your best guess.
 
-=== TITLE (HARD LIMIT: 100 CHARACTERS — SEO KEYWORD RICH) ===
-- MUST be 100 characters or fewer including spaces — COUNT CAREFULLY
+=== TITLE (HARD LIMIT: 100 CHARACTERS INCLUDING SPACES — SEO + GEO OPTIMIZED) ===
+- MUST be 100 characters or fewer including spaces — COUNT EVERY CHARACTER CAREFULLY
 - Front-load the most searchable keywords: Brand/Maker + Item Type + Material + Style/Era
 - Use exact terms buyers search for (e.g., "Mid Century Modern Teak Credenza" not "Nice Wood Cabinet")
-- Include differentiators: color, size, pattern name, model, origin
-- NO filler words (beautiful, nice, great, amazing, wow, look)
-- Every word must serve a search purpose
+- Include GEO-relevant terms when applicable: regional makers, Colorado-relevant items, Western/Southwestern styles
+- Include differentiators: color, size, pattern name, model, origin, era dates
+- NO filler words (beautiful, nice, great, amazing, wow, look, stunning, gorgeous)
+- Every single word must serve a search purpose — maximize keyword density naturally
 
 GOOD EXAMPLES:
 - "Vintage Pyrex Pink Gooseberry Casserole Dish 1.5 Qt with Lid 1950s Ovenware" (76 chars)
-- "Henredon Campaign Style Mahogany Nightstand Brass Hardware Mid Century" (70 chars)
-- "Waterford Crystal Lismore Wine Glasses Set of 6 Cut Glass Stemware" (66 chars)
+- "Native American Navajo Sterling Silver Turquoise Squash Blossom Necklace c1970" (78 chars)
+- "Antique Cast Iron Griswold #8 Skillet 704 Erie PA Small Logo Heat Ring" (70 chars)
 
-=== DESCRIPTION (FULL, COMPLETE TEXT — NO TRUNCATION) ===
-- Write a complete description in natural language (2-4 sentences)
-- Include condition, notable features, materials, dimensions (if known), and any defects
-- Do NOT cut off words or sentences
-- Keep it buyer-friendly and keyword-rich without sounding robotic
+=== DESCRIPTION (IN-DEPTH, COMPREHENSIVE — MINIMUM 5-8 SENTENCES) ===
+Write like a professional auction house cataloger with expert-level detail.
+
+REQUIRED CONTENT (weave naturally, don't use headers):
+1. **IDENTIFICATION**: Precise ID — maker, brand, model, pattern, era, origin
+2. **PHYSICAL DESCRIPTION**: Materials, construction, colors, textures, dimensions (estimate from photos), decorative elements, hardware
+3. **HISTORICAL CONTEXT & PROVENANCE**: Manufacturing era, maker history/significance, design movement connections, cultural relevance, production history, series/collection info
+4. **EXPERT OBSERVATIONS**: Maker's marks/stamps/signatures, construction techniques indicating quality/era, rarity indicators, distinguishing features vs reproductions
+5. **CONDITION REPORT** (MANDATORY — thorough and honest):
+   - Overall grade (Excellent, Very Good, Good, Fair, Poor)
+   - Specific wear: scratches, chips, cracks, dents, stains, fading, tarnish, patina
+   - Structural integrity: loose joints, wobble, missing parts, repairs, restoration
+   - Functionality and completeness
+   - Example: "Shows honest wear consistent with 60+ years of use including light surface scratches to the top, a small chip to the rear left foot (3/8 inch), and expected patina to the brass pulls."
+
+DESCRIPTION TONE: Knowledgeable, factual, collector-oriented. Make buyers confident about what they're bidding on.
 
 === STARTING BID ===
 - Suggest a conservative starting bid in dollars (integer, no decimals)
-- Consider item type, condition, brand value, and typical Denver auction values
+- Low starting bids ($5-$25) generate more bidding activity
 
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
-  "title": "string (MUST be ≤100 chars, keyword-rich SEO title)",
-  "description": "string (full complete description, no truncation)",
+  "title": "string (MUST be ≤100 chars including spaces, SEO/GEO keyword-rich)",
+  "description": "string (5-8+ sentences, comprehensive with condition report, history, expert observations)",
   "startingBid": number
 }`
 };
+
+// Shape returned to the caller (and stored on the listing as `priceComps`).
+// Marketplace-Insights-ready: when we get approved for real SOLD data, only the
+// fetch step below changes — this contract and the band math stay identical.
+interface PriceComps {
+  suggested: number;
+  low: number;
+  high: number;
+  sampleSize: number;
+  source: "ebay_active" | "ebay_sold";
+}
+
+// Pull live eBay FIXED_PRICE asking prices for `query`, reject outliers, and
+// return an honest suggested price + range. Returns null if there isn't enough
+// trustworthy data — the caller then keeps the AI's price (no regression).
+//
+// Outlier defense (David's #1 requirement):
+//   1. FIXED_PRICE filter excludes auctions — kills the "auction giveaway" lows.
+//   2. Trim the top & bottom 15% — kills the "lists 4x higher" moron and junk.
+//   3. Median (not mean) of the trimmed set — one survivor can't drag it.
+//   4. Trust gate: need >= 5 priced comps after trim, else return null.
+async function fetchEbayComps(
+  query: string,
+  _conditionHint: string
+): Promise<PriceComps | null> {
+  const q = (query || "").trim();
+  if (q.length < 3) return null;
+
+  const ebayClientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+  const ebayClientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+  if (!ebayClientId || !ebayClientSecret) return null;
+
+  // ── Step 1: fetch the raw price array (the ONLY part that changes for SOLD) ──
+  const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${btoa(`${ebayClientId}:${ebayClientSecret}`)}`,
+    },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "https://api.ebay.com/oauth/api_scope",
+    }),
+  });
+  if (!tokenRes.ok) return null;
+  const appToken = (await tokenRes.json()).access_token as string;
+  if (!appToken) return null;
+
+  const searchUrl =
+    `https://api.ebay.com/buy/browse/v1/item_summary/search` +
+    `?q=${encodeURIComponent(q)}` +
+    `&filter=${encodeURIComponent("buyingOptions:{FIXED_PRICE}")}` +
+    `&limit=100`;
+
+  const searchRes = await fetch(searchUrl, {
+    headers: {
+      Authorization: `Bearer ${appToken}`,
+      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+    },
+  });
+  if (!searchRes.ok) return null;
+
+  const searchData = await searchRes.json();
+  const summaries: any[] = Array.isArray(searchData.itemSummaries)
+    ? searchData.itemSummaries
+    : [];
+
+  const prices = summaries
+    .map((it) =>
+      it?.price?.currency === "USD" ? parseFloat(it.price.value) : NaN
+    )
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+
+  // ── Step 2: compute the band from the array (UNCHANGED for SOLD data) ──
+  return computeBand(prices, "ebay_active");
+}
+
+// Reject outliers and collapse a sorted price array into a suggested median +
+// honest range. Separated from the fetch so the Marketplace Insights swap reuses
+// it verbatim. Returns null when there's too little data to trust.
+function computeBand(
+  sortedPrices: number[],
+  source: PriceComps["source"]
+): PriceComps | null {
+  if (sortedPrices.length < 5) return null;
+
+  const trimCount = Math.floor(sortedPrices.length * 0.15);
+  const trimmed =
+    trimCount > 0
+      ? sortedPrices.slice(trimCount, sortedPrices.length - trimCount)
+      : sortedPrices;
+
+  // Trust gate: need a real cluster after trimming, not 2 survivors.
+  if (trimmed.length < 5) return null;
+
+  const mid = Math.floor(trimmed.length / 2);
+  const median =
+    trimmed.length % 2 === 0
+      ? (trimmed[mid - 1] + trimmed[mid]) / 2
+      : trimmed[mid];
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  return {
+    suggested: round2(median),
+    low: round2(trimmed[0]),
+    high: round2(trimmed[trimmed.length - 1]),
+    sampleSize: trimmed.length,
+    source,
+  };
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -391,21 +775,16 @@ serve(async (req) => {
       );
     }
 
-    // Create Supabase client with the user's auth context
+    // Create Supabase client
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-      {
-        global: {
-          headers: {
-            Authorization: authHeader
-          }
-        }
-      }
+      Deno.env.get('SUPABASE_ANON_KEY')!
     );
 
-    // Verify the user is authenticated
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    // Verify the user is authenticated by validating the JWT directly
+    const { data: { user }, error: authError } = await supabase.auth.getUser(
+      authHeader.replace('Bearer ', '')
+    );
 
     if (authError || !user) {
       console.error('Authentication failed:', authError?.message || 'No user found');
@@ -417,30 +796,174 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
-    const { platform, imageUrls, additionalContext } = await req.json() as GenerateRequest;
+    const { platform, imageUrls, additionalContext, masterPrompt } = await req.json() as GenerateRequest;
     
     console.log(`Generating listing for platform: ${platform}`);
     console.log(`Image URLs: ${imageUrls.length}`);
+    if (masterPrompt) console.log(`Master prompt active (${masterPrompt.length} chars)`);
 
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
+    const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
+    if (!ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY is not configured');
     }
 
-    const systemPrompt = PLATFORM_PROMPTS[platform];
+    let systemPrompt = PLATFORM_PROMPTS[platform];
     if (!systemPrompt) {
       throw new Error(`Unknown platform: ${platform}`);
+    }
+
+    // Inject master prompt as a guardrail if provided
+    if (masterPrompt) {
+      systemPrompt = `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY — OVERRIDE DEFAULTS) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${systemPrompt}`;
+    }
+
+    // Inject learned corrections (self-improving loop v2.2): retrieve the
+    // caller's *most semantically-similar* past corrections and prepend them so
+    // the model stops repeating identification mistakes. Pipeline: caption the
+    // photos (Haiku) → embed the caption (OpenAI) → match_listing_corrections
+    // RPC (pgvector nearest-neighbour, RLS-scoped to the caller). Falls back to
+    // v1 global-recent when there are no images, captioning/embedding fails, or
+    // no semantic matches. eBay only. Zero behavior change when there are none.
+    // Non-blocking on any failure.
+    // v2.4: ids of the corrections actually injected, surfaced in the response so
+    // the generated row can be tagged and re-corrections traced back to the lesson.
+    let injectedCorrectionIds: string[] = [];
+    if (platform === 'ebay') {
+      try {
+        const authedClient = createClient(
+          Deno.env.get('SUPABASE_URL')!,
+          Deno.env.get('SUPABASE_ANON_KEY')!,
+          { global: { headers: { Authorization: authHeader } } }
+        );
+
+        // Cost-log helper — own-row insert is RLS-allowed (auth.uid() = user.id).
+        const logCost = (
+          operation: string,
+          model: string,
+          inputTokens: number | null,
+          outputTokens: number | null,
+          costUsd: number | null
+        ) => {
+          authedClient
+            .from('model_costs')
+            .insert({
+              user_id: user.id,
+              source: 'generate-listing',
+              operation,
+              model,
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              cost_usd: costUsd,
+            })
+            .then(({ error }) => {
+              if (error) console.warn('model_costs log skipped (non-blocking):', error.message);
+            });
+        };
+
+        let corrections:
+          | Array<{
+              id?: string | null;
+              wrong_title?: string | null;
+              corrected_title?: string | null;
+              correction_note?: string | null;
+              category?: string | null;
+            }>
+          | null = null;
+        let retrievalMode = 'semantic';
+
+        const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+
+        // --- v2.2 semantic path: caption → embed → nearest-neighbour RPC ---
+        if (imageUrls.length > 0 && OPENAI_API_KEY) {
+          const cap = await captionItem(imageUrls, ANTHROPIC_API_KEY);
+          if (cap) {
+            const capCost = Number(
+              (
+                (cap.inputTokens / 1_000_000) * CAPTION_IN_PER_1M +
+                (cap.outputTokens / 1_000_000) * CAPTION_OUT_PER_1M
+              ).toFixed(6)
+            );
+            logCost('caption', CAPTION_MODEL, cap.inputTokens, cap.outputTokens, capCost);
+
+            const emb = await embedQuery(cap.caption, OPENAI_API_KEY);
+            if (emb) {
+              const embCost = Number(((emb.inputTokens / 1_000_000) * EMBED_IN_PER_1M).toFixed(6));
+              logCost('embedding', EMBED_MODEL, emb.inputTokens, null, embCost);
+
+              const { data: matches, error: rpcErr } = await authedClient.rpc(
+                'match_listing_corrections',
+                { query_embedding: JSON.stringify(emb.vector), match_count: 8 }
+              );
+              if (rpcErr) {
+                console.warn('match_listing_corrections RPC failed (non-blocking):', rpcErr.message);
+              } else if (matches && matches.length > 0) {
+                corrections = matches;
+                console.log(`Semantic retrieval: ${matches.length} match(es) for "${cap.caption}"`);
+              }
+            }
+          }
+        }
+
+        // --- fallback: v1 global most-recent (no images / no key / no matches) ---
+        if (!corrections || corrections.length === 0) {
+          retrievalMode = 'recent';
+          const { data: recent } = await authedClient
+            .from('listing_corrections')
+            .select('id,wrong_title,corrected_title,correction_note,category')
+            .eq('retired', false)
+            .order('created_at', { ascending: false })
+            .limit(20);
+          corrections = recent ?? null;
+        }
+
+        const lines = formatCorrectionLines(corrections);
+        if (lines.length > 0) {
+          systemPrompt = `=== LEARNED CORRECTIONS (avoid repeating these identification mistakes) ===\n${lines.join('\n')}\n=== END LEARNED CORRECTIONS ===\n\n${systemPrompt}`;
+          console.log(`Injected ${lines.length} learned corrections (${retrievalMode})`);
+          // v2.4: surface which corrections actually shaped this listing so the
+          // generated row can be tagged and re-corrections traced back to the lesson.
+          injectedCorrectionIds = (corrections ?? [])
+            .map((c) => c.id)
+            .filter((id): id is string => typeof id === 'string');
+        }
+
+        // v2.3: distilled lessons — general rules the distill-lessons batch pass
+        // extracted from this seller's correction history. Prepended after the
+        // corrections block so LEARNED LESSONS sits above LEARNED CORRECTIONS in
+        // the final prompt: lessons generalize, raw cases give precision. Zero
+        // change when none exist.
+        const { data: lessons, error: lessonsErr } = await authedClient
+          .from('listing_correction_lessons')
+          .select('id, lesson_text')
+          .eq('retired', false)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        if (lessonsErr) {
+          console.warn('Lesson retrieval failed (non-blocking):', lessonsErr.message);
+        } else if (lessons && lessons.length > 0) {
+          const lessonLines = lessons.map((l) => `- ${l.lesson_text}`);
+          systemPrompt = `=== LEARNED LESSONS (general rules from this seller's correction history) ===\n${lessonLines.join('\n')}\n=== END LEARNED LESSONS ===\n\n${systemPrompt}`;
+          console.log(`Injected ${lessons.length} distilled lesson(s)`);
+          authedClient
+            .rpc('record_lesson_injections', { p_ids: lessons.map((l: { id: string }) => l.id) })
+            .then(({ error }) => {
+              if (error) console.warn('record_lesson_injections skipped (non-blocking):', error.message);
+            });
+        }
+      } catch (e) {
+        console.warn('Learned-corrections injection skipped (non-blocking):', e);
+      }
     }
 
     // Build content array with images - limit to 4 for speed (AI gets diminishing returns beyond that)
     const content: any[] = [];
     const maxImagesForAI = Math.min(imageUrls.length, 4);
     
-    // Add images first for visual analysis
+    // Add images first for visual analysis (Anthropic format)
     for (let i = 0; i < maxImagesForAI; i++) {
       content.push({
-        type: "image_url",
-        image_url: { url: imageUrls[i] }
+        type: "image",
+        source: { type: "url", url: imageUrls[i] }
       });
     }
     
@@ -455,54 +978,48 @@ serve(async (req) => {
     }
     content.push({ type: "text", text: textPrompt });
 
-    console.log('Calling Lovable AI...');
-    
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    console.log(`Calling Anthropic API (claude-sonnet-4-6)...`);
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: platform === 'ebay' ? 'google/gemini-2.5-flash' : 'google/gemini-2.5-flash-lite',
+        model: 'claude-sonnet-4-6',
+        system: systemPrompt,
         messages: [
-          { role: 'system', content: systemPrompt },
           { role: 'user', content }
         ],
-        max_tokens: platform === 'ebay' ? 2000 : 1500,
+        max_tokens: (platform === 'ebay' || platform === 'liveauctioneers' || platform === 'denver') ? 2500 : 1500,
         temperature: 0.3,
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('AI gateway error:', response.status, errorText);
-      
+      console.error('Anthropic API error:', response.status, errorText);
+
       if (response.status === 429) {
         return new Response(
           JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: 'AI credits exhausted. Please add credits to continue.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      
-      throw new Error(`AI gateway error: ${response.status}`);
+
+      throw new Error(`Anthropic API error: ${response.status}`);
     }
 
     const data = await response.json();
-    const aiResponse = data.choices?.[0]?.message?.content;
+    const aiResponse = data.content?.[0]?.text;
     
-    console.log('AI Response received');
+    console.log('Primary AI response received');
 
     // Parse the JSON from the response
     let parsedListing: any;
     try {
-      // Extract JSON from potential markdown code blocks
       const jsonMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, aiResponse];
       const jsonStr = jsonMatch[1].trim();
       parsedListing = JSON.parse(jsonStr);
@@ -510,6 +1027,9 @@ serve(async (req) => {
       console.error('Failed to parse AI response:', aiResponse);
       throw new Error('Failed to parse AI response as JSON');
     }
+
+    // eBay verification is now on-demand via refine-listing endpoint
+    // The user can click "Verify with AI" after reviewing Pass 1 results
 
     // Normalize common key variants so the frontend reliably receives camelCase fields.
     // Some models occasionally emit "CategoryId" or "category_id" even when instructed otherwise.
@@ -551,13 +1071,23 @@ serve(async (req) => {
         // Deprecated seasonal
         159769: 33164,   // Old Christmas Wreaths → Christmas Wreaths, Garlands & Plants
         128035: 170083,  // Old holiday décor → Other Christmas Décor (common remap)
-        // Parent categories that are NOT leaf
+        // Deprecated model kit IDs
+        2611: 31787,     // Aircraft Model Kits (DEPRECATED — eBay remaps to video games!) → Military Model Kits
+        // Parent categories that are NOT leaf (eBay error 87)
         11450: 57990,    // Clothing parent → Men's Casual Shirts (fallback)
         550: 360,        // Art parent → Art Prints
         20081: 162032,   // Home Décor parent → Figurines
         281: 261068,     // Toys parent → Action Figures
         625: 112529,     // Audio parent → Wireless Headphones
         14339: 31388,    // Cameras parent → Digital Cameras
+        1188: 31787,     // Toys & Hobbies top-level parent → Military Vehicle Model Kits (fallback)
+        51028: 31787,    // Models & Kits parent → Military Vehicle Model Kits (fallback)
+        20601: 20668,    // Bedding parent → Blankets & Throws (fallback)
+        19130: 262318,   // Old HO Trains category → HO Scale (eBay's own remap)
+        // Knife parent categories (eBay error 87)
+        11700: 177005,   // Home & Garden parent → Kitchen & Steak Knives (if knife context)
+        20625: 177005,   // Kitchen, Dining & Bar parent → Kitchen & Steak Knives
+        20637: 177005,   // Flatware, Knives & Cutlery parent → Kitchen & Steak Knives (leaf)
       };
 
       if (typeof anyListing['categoryId'] === 'number') {
@@ -567,6 +1097,155 @@ serve(async (req) => {
           anyListing['categoryId'] = remapped;
         }
       }
+
+      // ── eBay Category Suggestions API ─────────────────────────────────────
+      // Trust the AI only when it picks a category from our curated verified
+      // list (same list in the prompt above). Any ID outside that list — even
+      // if it looks numeric — gets validated against the Taxonomy API. This
+      // catches hallucinated IDs like 177009/177040 that aren't in CATEGORY_REMAPS.
+      const VERIFIED_LEAF_CATEGORIES = new Set<number>([
+        // Clothing
+        21235, 57990, 57991, 11483, 57989, 11484, 3001, 3002, 15709, 24087, 53120,
+        63862, 53159, 63861, 11554, 63866, 185176, 55793, 45333, 95672, 169291, 4250,
+        // Jewelry
+        31387, 67681, 67652, 10968, 48579,
+        // Art
+        360, 551, 60628, 158658,
+        // Collectibles
+        162032, 36018, 33164, 170091, 170098, 170083, 116022,
+        // Home & Garden
+        177005, 112581, 20706, 45510, 20580, 20562, 16041, 46782, 20563, 20668, 20677, 20672, 20675, 20681,
+        // Cameras
+        31388, 15230, 11724, 30106,
+        // Electronics
+        112529,
+        // Video Games
+        139971,
+        // Pottery & Glass
+        45237, 916,
+        // Antiques
+        20091, 20086, 37978, 1192,
+        // Books
+        29223, 171228, 183387, 280,
+        // Coins
+        253, 256, 3412, 18880,
+        // Dolls & Bears
+        238, 16497, 2228, 261068,
+        // Movies & Music
+        617, 309, 306, 176984,
+        // Musical Instruments
+        33034, 16220, 180014, 183085, 12229, 41833,
+        // Sporting Goods
+        15273, 1513, 1492, 16034,
+        // Toys & Hobbies
+        31787, 37278, 51023, 19063, 262318, 47006, 47004, 47002, 4748, 180349,
+        // Stamps
+        261, 262,
+        // Fragrances & Bath/Body
+        11848, 11849, 11850, 11846, 26262, 67537, 67538,
+      ]);
+
+      // ── Query category learnings (highest priority after remaps) ──────────
+      // If we've successfully pushed this item type before with confidence ≥ 3,
+      // use the learned category — skip AI guess and Taxonomy API entirely.
+      let learnedCategoryApplied = false;
+      try {
+        const learnTitle = (anyListing['title'] as string) || '';
+        const stop = new Set(['a','an','the','and','or','of','in','for','with','to','is','by','as','at','its','this','that','lot','set','new','used','vintage']);
+        const learnKeywords = learnTitle.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/)
+          .filter((w: string) => w.length > 2 && !stop.has(w)).slice(0, 6).sort().join(' ');
+
+        if (learnKeywords.length >= 3) {
+          const sbAdmin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+          const { data: learnings } = await sbAdmin
+            .from('ebay_category_learnings')
+            .select('category_id, category_name, confidence')
+            .textSearch('item_keywords', learnKeywords, { config: 'english' })
+            .order('confidence', { ascending: false })
+            .limit(1);
+
+          const top = learnings?.[0] as { category_id: number; category_name: string; confidence: number } | undefined;
+          if (top && top.confidence >= 3) {
+            console.log(`[generate-listing] LEARNED category: "${top.category_name}" (${top.category_id}) — confidence ${top.confidence}`);
+            anyListing['categoryId'] = top.category_id;
+            anyListing['category'] = top.category_name;
+            VERIFIED_LEAF_CATEGORIES.add(top.category_id);
+            learnedCategoryApplied = true;
+          }
+        }
+      } catch (learnErr) {
+        console.warn('[generate-listing] Category learnings query failed (non-fatal):', learnErr);
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      const aiCatId = anyListing['categoryId'] as number | null;
+      // Always use Taxonomy API unless a high-confidence learned category was applied.
+      // This prevents Claude's guessed IDs (even "verified" ones) from slipping through
+      // when eBay's own suggestion engine would pick a more accurate leaf category.
+      const needsTaxonomyFallback = !learnedCategoryApplied;
+
+      if (needsTaxonomyFallback) {
+        try {
+          const title = (anyListing['title'] as string) || "";
+          if (title.length >= 3) {
+            const suggestUrl =
+              `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions` +
+              `?q=${encodeURIComponent(title)}`;
+
+            const ebayClientId = (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+            const ebayClientSecret = (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+
+            if (ebayClientId && ebayClientSecret) {
+              const tokenRes = await fetch(
+                "https://api.ebay.com/identity/v1/oauth2/token",
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    Authorization: `Basic ${btoa(`${ebayClientId}:${ebayClientSecret}`)}`,
+                  },
+                  body: new URLSearchParams({
+                    grant_type: "client_credentials",
+                    scope: "https://api.ebay.com/oauth/api_scope",
+                  }),
+                }
+              );
+
+              if (tokenRes.ok) {
+                const tokenData = await tokenRes.json();
+                const appToken = tokenData.access_token as string;
+
+                const suggestRes = await fetch(suggestUrl, {
+                  headers: { Authorization: `Bearer ${appToken}` },
+                });
+
+                if (suggestRes.ok) {
+                  const suggestData = await suggestRes.json();
+                  const topSuggestion = suggestData.categorySuggestions?.[0];
+
+                  if (topSuggestion) {
+                    const ebayId = parseInt(topSuggestion.category.categoryId, 10);
+                    const ebayName = topSuggestion.category.categoryName as string;
+
+                    if (ebayId && !Number.isNaN(ebayId)) {
+                      console.log(
+                        `[generate-listing] Taxonomy fallback: AI=${aiCatId} (missing/invalid) → eBay suggestion=${ebayId} (${ebayName}) for title="${title}"`
+                      );
+                      anyListing['categoryId'] = ebayId;
+                      anyListing['category'] = ebayName;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (catErr) {
+          console.warn("[generate-listing] Category suggestion API error (non-fatal):", catErr);
+        }
+      } else {
+        console.log(`[generate-listing] Category retained: AI=${aiCatId} (valid leaf — skipping Taxonomy override)`);
+      }
+      // ─────────────────────────────────────────────────────────────────────
 
       if (anyListing['itemSpecifics'] == null && anyListing['ItemSpecifics'] != null) {
         anyListing['itemSpecifics'] = anyListing['ItemSpecifics'];
@@ -594,10 +1273,41 @@ serve(async (req) => {
         }
         anyListing['itemSpecifics'] = itemSpecs;
       }
+
+      // ── Live pricing comps (eBay Browse API) ──────────────────────────────
+      // Replace the AI's hallucinated price with a real, outlier-trimmed median
+      // of live eBay asking prices. PURELY ADDITIVE: runs after the AI already
+      // returned a complete listing. If it finds too few comps or errors, we
+      // keep the AI's price exactly as before — no regression possible.
+      try {
+        const compQuery =
+          ((anyListing['compQuery'] as string) || (anyListing['title'] as string) || "").trim();
+        const comps = compQuery
+          ? await fetchEbayComps(compQuery, (anyListing['condition'] as string) || "")
+          : null;
+
+        if (comps) {
+          console.log(
+            `[generate-listing] Comps applied: AI price=${anyListing['price']} → market median=${comps.suggested} ` +
+            `(range $${comps.low}-$${comps.high}, n=${comps.sampleSize}, source=${comps.source}) for query="${compQuery}"`
+          );
+          anyListing['price'] = comps.suggested;
+          anyListing['priceComps'] = comps;
+        } else {
+          console.log(
+            `[generate-listing] No usable comps for query="${compQuery}" — keeping AI price=${anyListing['price']}`
+          );
+          anyListing['priceComps'] = { source: "ai_estimate" };
+        }
+      } catch (compErr) {
+        console.warn("[generate-listing] Comp lookup error (non-fatal, keeping AI price):", compErr);
+        anyListing['priceComps'] = { source: "ai_estimate" };
+      }
+      // ─────────────────────────────────────────────────────────────────────
     }
 
     return new Response(
-      JSON.stringify({ listing: parsedListing, rawResponse: aiResponse }),
+      JSON.stringify({ listing: parsedListing, rawResponse: aiResponse, injectedCorrectionIds }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 

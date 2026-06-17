@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -38,6 +39,8 @@ import { format } from "date-fns";
 interface Project {
   id: string;
   name: string;
+  consignor_name: string | null;
+  consignor_email: string | null;
   created_at: string;
   updated_at: string;
   created_by: string | null;
@@ -52,8 +55,14 @@ export default function Projects() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
+  const [newConsignorName, setNewConsignorName] = useState("");
+  const [newConsignorEmail, setNewConsignorEmail] = useState("");
   const [creating, setCreating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editConsignorProject, setEditConsignorProject] = useState<Project | null>(null);
+  const [editConsignorName, setEditConsignorName] = useState("");
+  const [editConsignorEmail, setEditConsignorEmail] = useState("");
+  const [savingConsignor, setSavingConsignor] = useState(false);
 
   useEffect(() => {
     fetchProjects();
@@ -115,6 +124,8 @@ export default function Projects() {
         .from('la_batches')
         .insert({
           name: newProjectName.trim(),
+          consignor_name: newConsignorName.trim() || null,
+          consignor_email: newConsignorEmail.trim() || null,
           created_by: user?.id,
           platforms: []
         })
@@ -125,6 +136,8 @@ export default function Projects() {
 
       toast({ title: "Project Created", description: `"${data.name}" is ready` });
       setNewProjectName("");
+      setNewConsignorName("");
+      setNewConsignorEmail("");
       setDialogOpen(false);
       
       // Navigate to the create listing page with this project
@@ -156,6 +169,39 @@ export default function Projects() {
     } catch (error) {
       console.error('Error deleting project:', error);
       toast({ title: "Delete failed", variant: "destructive" });
+    }
+  };
+
+  const openEditConsignor = (project: Project, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditConsignorProject(project);
+    setEditConsignorName(project.consignor_name || "");
+    setEditConsignorEmail(project.consignor_email || "");
+  };
+
+  const saveConsignor = async () => {
+    if (!editConsignorProject) return;
+    setSavingConsignor(true);
+    try {
+      const { error } = await supabase
+        .from('la_batches')
+        .update({
+          consignor_name: editConsignorName.trim() || null,
+          consignor_email: editConsignorEmail.trim() || null,
+        })
+        .eq('id', editConsignorProject.id);
+      if (error) throw error;
+      setProjects(prev => prev.map(p =>
+        p.id === editConsignorProject.id
+          ? { ...p, consignor_name: editConsignorName.trim() || null, consignor_email: editConsignorEmail.trim() || null }
+          : p
+      ));
+      toast({ title: "Consignor updated" });
+      setEditConsignorProject(null);
+    } catch {
+      toast({ title: "Save failed", variant: "destructive" });
+    } finally {
+      setSavingConsignor(false);
     }
   };
 
@@ -218,6 +264,23 @@ export default function Projects() {
                     value={newProjectName}
                     onChange={(e) => setNewProjectName(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && createProject()}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Consignor Name <span className="text-muted-foreground font-normal">(optional)</span></label>
+                  <Input
+                    placeholder="e.g., Smith Family Estate"
+                    value={newConsignorName}
+                    onChange={(e) => setNewConsignorName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Consignor Email <span className="text-muted-foreground font-normal">(optional)</span></label>
+                  <Input
+                    type="email"
+                    placeholder="consignor@email.com"
+                    value={newConsignorEmail}
+                    onChange={(e) => setNewConsignorEmail(e.target.value)}
                   />
                 </div>
                 <Button 
@@ -299,6 +362,12 @@ export default function Projects() {
                       <h3 className="font-semibold text-foreground group-hover:text-primary transition-colors line-clamp-1">
                         {project.name}
                       </h3>
+                      {project.consignor_name && (
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                          <Users className="h-3 w-3" />
+                          {project.consignor_name}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground flex items-center gap-1">
                         <Clock className="h-3 w-3" />
                         {format(new Date(project.updated_at), 'MMM d, yyyy')}
@@ -313,7 +382,7 @@ export default function Projects() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem 
+                      <DropdownMenuItem
                         onClick={(e) => {
                           e.stopPropagation();
                           openProject(project.id);
@@ -322,7 +391,13 @@ export default function Projects() {
                         <FolderOpen className="h-4 w-4 mr-2" />
                         Open Project
                       </DropdownMenuItem>
-                      <DropdownMenuItem 
+                      <DropdownMenuItem
+                        onClick={(e) => openEditConsignor(project, e)}
+                      >
+                        <Users className="h-4 w-4 mr-2" />
+                        Edit Consignor
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
                         onClick={(e) => {
                           e.stopPropagation();
                           deleteProject(project.id, project.name);
@@ -371,6 +446,40 @@ export default function Projects() {
           </div>
         )}
       </div>
+
+      {/* Edit Consignor Dialog */}
+      <Dialog open={!!editConsignorProject} onOpenChange={(open) => !open && setEditConsignorProject(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Consignor — {editConsignorProject?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Consignor Name</label>
+              <Input
+                placeholder="e.g., Smith Family Estate"
+                value={editConsignorName}
+                onChange={(e) => setEditConsignorName(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-2 block">Consignor Email</label>
+              <Input
+                type="email"
+                placeholder="consignor@email.com"
+                value={editConsignorEmail}
+                onChange={(e) => setEditConsignorEmail(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditConsignorProject(null)}>Cancel</Button>
+            <Button onClick={saveConsignor} disabled={savingConsignor}>
+              {savingConsignor ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving...</> : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </MainLayout>
   );
 }

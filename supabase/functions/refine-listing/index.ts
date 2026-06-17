@@ -10,6 +10,9 @@ interface RefineRequest {
   currentListing: Record<string, any>;
   correctionPrompt: string;
   imageUrls: string[];
+  platform?: 'ebay' | 'liveauctioneers' | 'denver';
+  mode?: 'refine' | 'verify';
+  masterPrompt?: string;
 }
 
 serve(async (req) => {
@@ -47,104 +50,224 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
-    const { currentListing, correctionPrompt, imageUrls } = await req.json() as RefineRequest;
-    
-    console.log(`Refining listing with prompt: ${correctionPrompt}`);
+    const authedClient = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+      { global: { headers: { Authorization: authHeader } } }
+    );
 
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
+    const { currentListing, correctionPrompt, imageUrls = [], platform = 'liveauctioneers', mode = 'refine', masterPrompt } = await req.json() as RefineRequest;
+
+    console.log(`Mode: ${mode}, Platform: ${platform}`);
+
+    const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
+    if (!ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY is not configured');
     }
 
-    const systemPrompt = `You are an expert auction catalog editor for LiveAuctioneers. 
+    // Build Anthropic content with images for reference
+    const imageContent: any[] = [];
+    for (const url of imageUrls.filter(Boolean)) {
+      imageContent.push({ type: "image", source: { type: "url", url } });
+    }
+
+    if (mode === 'verify') {
+      console.log('Running listing verification with Claude...');
+
+      let lessons: { id: string; lesson_text: string }[] = [];
+      try {
+        const { data, error: lessonsErr } = await authedClient
+          .from('listing_correction_lessons')
+          .select('id, lesson_text')
+          .eq('retired', false)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        if (lessonsErr) {
+          console.warn('lesson fetch skipped:', lessonsErr.message);
+        } else {
+          lessons = data ?? [];
+          if (lessons.length > 0) console.log(`Injected ${lessons.length} distilled lesson(s)`);
+        }
+      } catch (e) {
+        console.warn('lesson fetch failed (non-blocking):', e);
+      }
+
+      const lessonsSection = lessons.length > 0
+        ? `=== LEARNED LESSONS (from this seller's correction history) ===\n${lessons.map(l => `- ${l.lesson_text}`).join('\n')}\n=== END LEARNED LESSONS ===\n\n`
+        : '';
+
+      const masterPromptSection = masterPrompt
+        ? `\nBUSINESS CONTEXT (apply to all evaluations):\n${masterPrompt}\n`
+        : '';
+
+      const verifySystemPrompt = `${lessonsSection}You are an expert eBay listing quality auditor with deep knowledge of current market prices.${masterPromptSection}
+
+Analyze the listing title, description, price, condition, and item specifics for quality and accuracy.
+
+Check for:
+1. Title clarity and keyword optimization (eBay limit: 80 characters)
+2. Description completeness and accuracy based on images
+3. Condition accuracy vs. what images show
+4. Item specifics completeness
+
+PRICING VERIFICATION (CRITICAL):
+- Research recent eBay SOLD listings (last 90 days) for this exact item or close equivalents.
+- If the listed price is more than 20% below the median sold price, flag as UNDERPRICED.
+- If the listed price is more than 50% above median sold price, flag as OVERPRICED.
+- State the specific median sold comp price you found and your reasoning.
+- A price that would sell within minutes indicates underpricing — treat suspiciously low prices as a red flag.
+
+Return a JSON object with exactly these fields:
+{
+  "passed": true/false,
+  "report": "2-5 sentences summarizing quality, flagging problems, and citing specific sold comp prices found",
+  "correctedListing": { ...the full listing JSON with any corrections applied, or original values if no changes needed }
+}
+
+No markdown fences. Return only the JSON object.`;
+
+      const anthropicContent: any[] = [];
+      anthropicContent.push(...imageContent);
+      anthropicContent.push({
+        type: "text",
+        text: `Listing to verify:\n${JSON.stringify(currentListing, null, 2)}\n\nPlease audit this listing and return your assessment as JSON.`
+      });
+
+      const verifyResponse = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1500,
+          system: verifySystemPrompt,
+          messages: [{ role: 'user', content: anthropicContent }],
+        }),
+      });
+
+      if (!verifyResponse.ok) {
+        const errorText = await verifyResponse.text();
+        console.error('Anthropic API error:', verifyResponse.status, errorText);
+        if (verifyResponse.status === 429 || verifyResponse.status === 529 || verifyResponse.status === 503) {
+          return new Response(
+            JSON.stringify({ error: 'AI service is temporarily busy. Please try again in a moment.' }),
+            { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        throw new Error(`Anthropic API error: ${verifyResponse.status}`);
+      }
+
+      const verifyData = await verifyResponse.json();
+      const verifyAiResponse = verifyData.content?.[0]?.text ?? '';
+
+      let verifyResult: { passed: boolean; report: string; correctedListing?: Record<string, any> } = {
+        passed: false,
+        report: verifyAiResponse,
+        correctedListing: currentListing,
+      };
+      try {
+        const jsonMatch = verifyAiResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, verifyAiResponse];
+        const parsed = JSON.parse(jsonMatch[1].trim());
+        verifyResult = {
+          passed: parsed.passed ?? false,
+          report: parsed.report ?? verifyAiResponse,
+          correctedListing: parsed.correctedListing ?? currentListing,
+        };
+      } catch {
+        // If JSON parse fails, use the raw text as the report with original listing as correctedListing
+      }
+
+      return new Response(
+        JSON.stringify(verifyResult),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Refine mode
+    console.log(`Refining listing with prompt: ${correctionPrompt}`);
+
+    const titleLimit = platform === 'ebay' ? 80 : 100;
+    const platformRules = platform === 'ebay'
+      ? `5. eBay title limit is ${titleLimit} characters — never exceed it
+6. For description, use clear HTML-friendly formatting; include model, brand, dimensions, and condition details
+7. For condition: use eBay standard values (New, Used, For Parts or Not Working, etc.)
+8. Keep itemSpecifics keys/values accurate for eBay catalog`
+      : `5. If the user asks about the title, keep it under ${titleLimit} characters
+6. If the user asks about description, make it detailed and compelling
+7. For condition updates, be specific about flaws and wear`;
+
+    const systemPrompt = `You are an expert ${platform === 'ebay' ? 'eBay' : 'auction catalog'} listing editor.
 Your task is to refine an existing listing based on user feedback.
 
 IMPORTANT RULES:
 1. ONLY modify the fields that the user's correction prompt relates to
 2. Keep all other fields EXACTLY as they are
 3. Maintain the same JSON structure
-4. If the user asks about pricing (lowEst, highEst, startPrice), adjust those fields appropriately
-5. If the user asks about the title, keep it under 100 characters
-6. If the user asks about description, make it detailed and compelling
-7. For condition updates, be specific about flaws and wear
+4. If the user asks about pricing, adjust those fields appropriately
+${platformRules}
 
 ALWAYS return valid JSON with the same structure as the input, no markdown, no explanation.`;
 
-    // Build content with images for reference
-    const content: any[] = [];
-    
-    // Add images for visual reference
-    for (const url of imageUrls) {
-      content.push({
-        type: "image_url",
-        image_url: { url }
-      });
-    }
-
-    // Add the refinement request
-    content.push({ 
-      type: "text", 
-      text: `Current listing JSON:
-${JSON.stringify(currentListing, null, 2)}
-
-User's correction request: "${correctionPrompt}"
-
-Please update the listing based on the user's request and return the complete updated JSON. Remember to keep fields the user didn't mention unchanged.`
+    const content = [...imageContent];
+    content.push({
+      type: "text",
+      text: `Current listing JSON:\n${JSON.stringify(currentListing, null, 2)}\n\nUser's correction request: "${correctionPrompt}"\n\nPlease update the listing based on the user's request and return the complete updated JSON. Remember to keep fields the user didn't mention unchanged.`
     });
 
-    console.log('Calling Lovable AI for refinement...');
-    
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    console.log('Calling Anthropic API for refinement...');
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-lite',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content }
-        ],
-        max_tokens: 1500,
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2500,
+        system: systemPrompt,
+        messages: [{ role: 'user', content }],
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('AI gateway error:', response.status, errorText);
-      
-      if (response.status === 429) {
+      console.error('Anthropic API error:', response.status, errorText);
+
+      if (response.status === 429 || response.status === 529 || response.status === 503) {
         return new Response(
-          JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+          JSON.stringify({ error: 'AI service is temporarily busy. Please try again in a moment.' }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: 'AI credits exhausted. Please add credits to continue.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      
-      throw new Error(`AI gateway error: ${response.status}`);
+      throw new Error(`Anthropic API error: ${response.status}`);
     }
 
     const data = await response.json();
-    const aiResponse = data.choices?.[0]?.message?.content;
-    
+    const aiResponse = data.content?.[0]?.text ?? '';
+
     console.log('AI Response received for refinement');
 
     // Parse the JSON from the response
     let refinedListing;
     try {
-      // Extract JSON from potential markdown code blocks
-      const jsonMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, aiResponse];
-      const jsonStr = jsonMatch[1].trim();
-      refinedListing = JSON.parse(jsonStr);
+      const codeBlockMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        refinedListing = JSON.parse(codeBlockMatch[1].trim());
+      } else {
+        const objMatch = aiResponse.match(/\{[\s\S]*\}/);
+        refinedListing = JSON.parse(objMatch ? objMatch[0] : aiResponse.trim());
+      }
     } catch (parseError) {
-      console.error('Failed to parse AI response:', aiResponse);
-      throw new Error('Failed to parse AI response as JSON');
+      console.error('Failed to parse AI response as JSON:', aiResponse.substring(0, 500));
+      return new Response(
+        JSON.stringify({ error: 'AI returned an unparseable response. Please try again.' }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     return new Response(
