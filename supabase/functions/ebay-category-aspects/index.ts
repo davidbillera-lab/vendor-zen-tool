@@ -33,7 +33,7 @@ interface AspectMeta {
 const CACHE_TTL_DAYS = 7;
 const FETCH_TIMEOUT_MS = 10_000;
 const EBAY_TAXONOMY_URL =
-  "https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_aspects_for_category";
+  "https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
