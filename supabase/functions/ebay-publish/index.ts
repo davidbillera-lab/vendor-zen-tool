@@ -10,14 +10,16 @@ const corsHeaders = {
 
 type EbayEnvironment = "production" | "sandbox";
 
-const EBAY_ENV_CONFIG: Record<EbayEnvironment, { tradingApiUrl: string; oauthTokenUrl: string }> = {
+const EBAY_ENV_CONFIG: Record<EbayEnvironment, { tradingApiUrl: string; oauthTokenUrl: string; inventoryApiBase: string }> = {
   production: {
     tradingApiUrl: "https://api.ebay.com/ws/api.dll",
     oauthTokenUrl: "https://api.ebay.com/identity/v1/oauth2/token",
+    inventoryApiBase: "https://api.ebay.com/sell/inventory/v1",
   },
   sandbox: {
     tradingApiUrl: "https://api.sandbox.ebay.com/ws/api.dll",
     oauthTokenUrl: "https://api.sandbox.ebay.com/identity/v1/oauth2/token",
+    inventoryApiBase: "https://api.sandbox.ebay.com/sell/inventory/v1",
   },
 };
 
@@ -100,6 +102,43 @@ async function getAccessToken(userCreds?: { clientId: string; clientSecret: stri
   };
 }
 
+async function getInventoryAccessToken(userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null): Promise<{ accessToken: string; environment: EbayEnvironment; inventoryApiBase: string }> {
+  const environment = getEnvironment();
+  const clientId = userCreds?.clientId ?? sanitizeSecret("EBAY_CLIENT_ID");
+  const clientSecret = userCreds?.clientSecret ?? sanitizeSecret("EBAY_CLIENT_SECRET");
+  const refreshToken = userCreds?.refreshToken ?? "";
+
+  const b64Auth = btoa(`${clientId}:${clientSecret}`);
+  const oauthUrl = EBAY_ENV_CONFIG[environment].oauthTokenUrl;
+
+  // Try sell.inventory scope first; fall back to basic api_scope for tokens
+  // connected before sell.inventory was added to REQUIRED_SCOPES.
+  for (const scope of [
+    "https://api.ebay.com/oauth/api_scope/sell.inventory",
+    "https://api.ebay.com/oauth/api_scope",
+  ]) {
+    const res = await fetch(oauthUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${b64Auth}`,
+      },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken, scope }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      console.log(`[ebay-publish] Inventory token obtained with scope: ${scope}`);
+      return { accessToken: data.access_token, environment, inventoryApiBase: EBAY_ENV_CONFIG[environment].inventoryApiBase };
+    }
+
+    const text = await res.text();
+    console.warn(`[ebay-publish] Token refresh failed for scope ${scope} (${res.status}): ${text}`);
+  }
+
+  throw new Error("Inventory API OAuth token refresh failed for all scopes. Re-authorize eBay in Settings → Platforms.");
+}
+
 /* ──────────── Condition ID mapping (Trading API) ──────────── */
 
 function mapConditionId(condition: string | null): number {
@@ -120,6 +159,28 @@ function mapConditionId(condition: string | null): number {
     "For parts or not working": 7000,
   };
   return map[condition || ""] ?? 3000;
+}
+
+/* ──────────── Condition enum mapping (Inventory API) ──────────── */
+
+function mapConditionEnum(condition: string | null): string {
+  const map: Record<string, string> = {
+    "New": "NEW",
+    "New with tags": "NEW",
+    "New without tags": "NEW_OTHER",
+    "New other": "NEW_OTHER",
+    "Open box": "LIKE_NEW",
+    "Used": "USED_GOOD",
+    "Pre-owned": "USED_GOOD",
+    "Pre-owned - Excellent": "USED_EXCELLENT",
+    "Pre-owned - Good": "USED_GOOD",
+    "Pre-owned - Fair": "USED_ACCEPTABLE",
+    "Certified refurbished": "CERTIFIED_REFURBISHED",
+    "Seller refurbished": "SELLER_REFURBISHED",
+    "For parts": "FOR_PARTS_OR_NOT_WORKING",
+    "For parts or not working": "FOR_PARTS_OR_NOT_WORKING",
+  };
+  return map[condition || ""] ?? "USED_GOOD";
 }
 
 /* ──────────── Category learning helpers ──────────── */
@@ -728,6 +789,195 @@ async function applyPromotedListings(
   return messages.join("; ");
 }
 
+/* ──────────── Inventory API — draft path ──────────── */
+
+async function getOrCreateMerchantLocation(accessToken: string, inventoryApiBase: string): Promise<string> {
+  const LOCATION_KEY = "JSG_HIGHLANDS_RANCH";
+
+  const listRes = await fetch(`${inventoryApiBase}/location`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Accept-Language": "en-US" },
+  });
+
+  if (listRes.ok) {
+    const listData = await listRes.json();
+    const locations = listData.locations ?? [];
+    if (locations.length > 0) {
+      const jsgLoc = locations.find((l: any) => l.merchantLocationKey === LOCATION_KEY);
+      return jsgLoc ? LOCATION_KEY : locations[0].merchantLocationKey;
+    }
+  }
+
+  const createRes = await fetch(`${inventoryApiBase}/location/${LOCATION_KEY}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Accept-Language": "en-US" },
+    body: JSON.stringify({
+      location: {
+        address: {
+          city: "Highlands Ranch",
+          stateOrProvince: "CO",
+          postalCode: "80129",
+          country: "US",
+        },
+      },
+      locationTypes: ["WAREHOUSE"],
+      name: "JSG Estate Liquidators",
+      merchantLocationStatus: "ENABLED",
+    }),
+  });
+
+  if (!createRes.ok) {
+    const err = await createRes.text();
+    console.warn(`[ebay-publish] Failed to create merchant location (non-fatal): ${err}`);
+  }
+
+  return LOCATION_KEY;
+}
+
+async function createInventoryItem(
+  sku: string,
+  row: EbayRow,
+  effectiveSpecifics: Record<string, string>,
+  accessToken: string,
+  inventoryApiBase: string
+): Promise<void> {
+  const aspects: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(effectiveSpecifics)) {
+    if (v) aspects[k] = [String(v)];
+  }
+
+  const imageUrls = (row.image_urls || []).slice(0, 24);
+
+  const body: Record<string, any> = {
+    availability: { shipToLocationAvailability: { quantity: 1 } },
+    condition: mapConditionEnum(row.condition),
+    product: {
+      title: (row.title || "").substring(0, 80),
+      description: row.description || "",
+      aspects,
+      ...(imageUrls.length > 0 ? { imageUrls } : {}),
+    },
+  };
+
+  const res = await fetch(`${inventoryApiBase}/inventory_item/${encodeURIComponent(sku)}`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      "Content-Language": "en-US",
+      "Accept-Language": "en-US",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok && res.status !== 204) {
+    const err = await res.text();
+    throw new Error(`createInventoryItem failed (${res.status}): ${err}`);
+  }
+}
+
+async function createOffer(
+  sku: string,
+  row: EbayRow,
+  categoryId: string,
+  merchantLocationKey: string,
+  accessToken: string,
+  inventoryApiBase: string
+): Promise<string> {
+  const price = (row.price || 0).toFixed(2);
+
+  const offerBody: Record<string, any> = {
+    sku,
+    marketplaceId: "EBAY_US",
+    format: "FIXED_PRICE",
+    availableQuantity: 1,
+    categoryId,
+    listingDescription: row.description || "",
+    pricingSummary: {
+      price: { value: price, currency: "USD" },
+    },
+    listingDuration: "GTC",
+    merchantLocationKey,
+    ...(row.subtitle ? { subtitle: row.subtitle.substring(0, 55) } : {}),
+    ...(row.best_offer_enabled ? {
+      bestOfferTerms: {
+        bestOfferEnabled: true,
+        ...(row.best_offer_auto_accept ? { autoAcceptPrice: { value: row.best_offer_auto_accept.toFixed(2), currency: "USD" } } : {}),
+        ...(row.minimum_best_offer ? { autoDeclinePrice: { value: row.minimum_best_offer.toFixed(2), currency: "USD" } } : {}),
+      },
+    } : {}),
+  };
+
+  const res = await fetch(`${inventoryApiBase}/offer`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      "Content-Language": "en-US",
+      "Accept-Language": "en-US",
+    },
+    body: JSON.stringify(offerBody),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`createOffer failed (${res.status}): ${err}`);
+  }
+
+  const data = await res.json();
+  return data.offerId as string;
+}
+
+async function publishRowAsDraft(
+  row: EbayRow,
+  accessToken: string,
+  inventoryApiBase: string,
+  merchantLocationKey: string,
+  userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null
+): Promise<{ success: boolean; error?: string; offerId?: string; usedCategoryId?: string; categoryName?: string }> {
+  try {
+    let categoryId = row.category?.match(/\d{3,}/)?.[0];
+    if (!categoryId) {
+      return {
+        success: false,
+        error: `Lot ${row.lot_number}: No eBay category ID found. Category field is: "${row.category || "empty"}". Set a numeric eBay category ID before pushing.`,
+      };
+    }
+
+    const categoryName = row.category || categoryId;
+    const requiredAspects = await getRequiredAspectsForCategory(categoryId, userCreds);
+    const qa = await runPrePublishQA(row, categoryId, categoryName, requiredAspects, userCreds);
+
+    if (qa.correctedCategoryId && qa.correctedCategoryId !== categoryId) {
+      console.log(`[ebay-publish/draft] LOT-${row.lot_number}: QA OVERRIDE category ${categoryId} → ${qa.correctedCategoryId}. Reason: ${qa.qaLog}`);
+      categoryId = qa.correctedCategoryId;
+    } else {
+      console.log(`[ebay-publish/draft] LOT-${row.lot_number}: QA OK — ${qa.qaLog}`);
+    }
+
+    const qaRow: EbayRow = Object.keys(qa.filledSpecifics).length > 0
+      ? { ...row, item_specifics: { ...(row.item_specifics || {}), ...qa.filledSpecifics } }
+      : row;
+
+    const effectiveSpecifics = buildEffectiveSpecifics(categoryId, { ...qaRow, category: categoryId });
+    const stillMissing = requiredAspects.filter(a => !effectiveSpecifics[a]);
+    if (stillMissing.length > 0) {
+      return {
+        success: false,
+        error: `Lot ${row.lot_number}: Missing required item specifics: ${stillMissing.join(", ")}. Add these before pushing.`,
+      };
+    }
+
+    const sku = qaRow.custom_sku?.trim() || String(qaRow.lot_number);
+
+    await createInventoryItem(sku, qaRow, effectiveSpecifics, accessToken, inventoryApiBase);
+    const offerId = await createOffer(sku, qaRow, categoryId, merchantLocationKey, accessToken, inventoryApiBase);
+
+    return { success: true, offerId, usedCategoryId: categoryId, categoryName: row.category || categoryId };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /* ──────────────────── Main handler ──────────────────── */
 
 Deno.serve(async (req: Request) => {
@@ -761,6 +1011,49 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({ error: "rows array required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Draft mode: Inventory API → Seller Hub drafts (unpublished offers)
+    if (body.mode === "draft") {
+      let inventoryAuth: { accessToken: string; environment: EbayEnvironment; inventoryApiBase: string };
+      try {
+        inventoryAuth = await getInventoryAccessToken(userCreds);
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: `Inventory API auth failed: ${e instanceof Error ? e.message : String(e)}` }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      console.log(`Creating drafts via Inventory API — ${inventoryAuth.environment}`);
+
+      const merchantLocationKey = await getOrCreateMerchantLocation(inventoryAuth.accessToken, inventoryAuth.inventoryApiBase);
+
+      const draftResults = [];
+      for (const row of rows) {
+        const result = await publishRowAsDraft(
+          row as unknown as EbayRow,
+          inventoryAuth.accessToken,
+          inventoryAuth.inventoryApiBase,
+          merchantLocationKey,
+          userCreds
+        );
+        draftResults.push({ id: row.id, lot_number: row.lot_number, ...result });
+        if (result.success && result.usedCategoryId) {
+          await saveCategoryLearning((row as any).title || "", result.usedCategoryId, result.categoryName || result.usedCategoryId);
+        }
+      }
+
+      const succeeded = draftResults.filter(r => r.success).length;
+      const failed = draftResults.filter(r => !r.success).length;
+      return new Response(
+        JSON.stringify({
+          succeeded,
+          failed,
+          results: draftResults,
+          promotionMessage: succeeded > 0 ? "Promotion applied at publish time — open Seller Hub to review and publish drafts." : undefined,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
