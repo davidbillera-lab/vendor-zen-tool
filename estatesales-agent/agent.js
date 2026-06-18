@@ -61,8 +61,11 @@ const IMAGES_DIR         = './downloaded-images';
 const NAV_TIMEOUT        = 30_000;
 const WAIT_TIMEOUT       = 15_000;
 
-// Stale reservation threshold: if a 'reserved' row is older than this, a dead
-// run is assumed and the claim can be taken over by the current run.
+// Stale reservation threshold: a 'reserved' row older than this is LIKELY a dead
+// run rather than a live concurrent one. This is used ONLY to label the skip log
+// for manual reconciliation — we never auto-reclaim a stale reservation (see
+// reserveLot: a dead run may have saved the item on ES before dying, so
+// re-uploading risks the exact duplicate the ledger prevents).
 const STALE_RESERVATION_MS = 30 * 60 * 1000; // 30 minutes
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
@@ -125,8 +128,9 @@ async function fetchUploadedLotUrls() {
  *
  * Conflict resolution:
  *   - 'uploaded'  row found → already done, skip
- *   - 'reserved'  row found → another run is mid-flight; conservatively skip
- *                             UNLESS reserved_at is stale (>30 min) → reclaim
+ *   - 'reserved'  row found → conservatively skip (never auto-reclaimed, even
+ *                             once stale — a dead run may have saved on ES before
+ *                             dying; stale rows are flagged for manual reconciliation)
  *   - 'failed'    row found → conservatively skip to avoid duplicate risk
  *
  * Lots without a source_url cannot be keyed in the ledger (no unique key) and
@@ -761,7 +765,7 @@ async function scrapeLots(page) {
  * Downloads DOA images to disk, then re-uploads them to EstateSales.net.
  *
  * State machine per lot:
- *   1. reserveLot()   — atomic insert; conflict → skip or reclaim stale row
+ *   1. reserveLot()   — atomic insert; conflict → conservatively skip (no reclaim)
  *   2. Upload form    — fill fields, images, click Save
  *   3. checkSaveConfirmation() — positive signal required
  *      → signal found  → confirmLotUploaded() (throws on DB error)
@@ -774,7 +778,8 @@ async function uploadLots(page, lots) {
 
   // ── Dedup: skip lots CONFIRMED uploaded to this sale ─────────────────────
   // Only 'uploaded' rows are pre-skipped here; 'reserved' and 'failed' rows
-  // are handled per-lot via reserveLot() which can reclaim stale reservations.
+  // are handled per-lot via reserveLot(), which conservatively skips them
+  // (no auto-reclaim — see reserveLot for the duplicate-safety reasoning).
   // Lots without a source_url can't be matched against the ledger and are
   // treated as pending (they pass through to upload without dedup).
   const uploadedUrls = await fetchUploadedLotUrls();
