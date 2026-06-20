@@ -93,9 +93,16 @@ serve(async (req) => {
       );
     }
 
+    // Reserved columns the client must never set — the authenticated user_id
+    // and server-managed timestamps. Stripping these prevents a crafted request
+    // from overwriting the row's user_id (a privilege-escalation vector) since
+    // processedFields is spread after user_id in the upsert below.
+    const RESERVED_FIELDS = new Set(['user_id', 'id', 'created_at', 'updated_at']);
+
     // Encrypt password fields; pass through everything else (including null)
     const processedFields: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields as Record<string, unknown>)) {
+      if (RESERVED_FIELDS.has(k)) continue;
       if (typeof v === 'string' && PASSWORD_FIELDS.has(k) && v.length > 0) {
         processedFields[k] = await encryptValue(v, encKey);
       } else {
