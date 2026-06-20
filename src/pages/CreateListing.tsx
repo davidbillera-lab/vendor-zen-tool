@@ -800,8 +800,13 @@ export default function CreateListing() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Session expired');
 
-      const { data, error } = await supabase.functions.invoke('refine-listing', {
-        body: {
+      const verifyResp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
           currentListing: {
             title: generatedListing.title,
             description: generatedListing.description,
@@ -815,16 +820,19 @@ export default function CreateListing() {
           platform: 'ebay',
           mode: 'verify',
           masterPrompt: masterPrompt || undefined
-        }
+        })
       });
+      if (!verifyResp.ok) {
+        const errBody = await verifyResp.json().catch(() => ({}));
+        throw new Error(errBody.error || `Verify request failed (${verifyResp.status})`);
+      }
+      const data = await verifyResp.json();
 
-      if (error) throw new Error(error.message);
-
-      const refined = data.listing;
+      const refined = data.correctedListing ?? {};
       setEbayVerifyResult({
-        verified: data.verified,
+        verified: data.passed,
         confidence: data.confidence,
-        notes: data.notes
+        notes: data.report
       });
 
       // Update generatedListing with verified/corrected data
@@ -859,8 +867,8 @@ export default function CreateListing() {
       }
 
       toast({
-        title: data.verified ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
-        description: data.notes || (data.verified ? "AI confirmed the identification is correct" : "Listing updated with corrections"),
+        title: data.passed ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
+        description: data.report || (data.passed ? "AI confirmed the identification is correct" : "Listing updated with corrections"),
       });
     } catch (error) {
       toast({
@@ -880,8 +888,16 @@ export default function CreateListing() {
 
     setEbayRefining(true);
     try {
-      const { data, error } = await supabase.functions.invoke('refine-listing', {
-        body: {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Session expired');
+
+      const refineResp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
           currentListing: {
             title: generatedListing.title,
             description: generatedListing.description,
@@ -895,12 +911,15 @@ export default function CreateListing() {
           platform: 'ebay',
           mode: 'refine',
           masterPrompt: masterPrompt || undefined
-        }
+        })
       });
+      if (!refineResp.ok) {
+        const errBody = await refineResp.json().catch(() => ({}));
+        throw new Error(errBody.error || `Refine request failed (${refineResp.status})`);
+      }
+      const data = await refineResp.json();
 
-      if (error) throw new Error(error.message);
-
-      const refined = data.listing;
+      const refined = data.listing ?? {};
       const updates: any = {};
       if (refined.title) updates.title = String(refined.title).substring(0, 80);
       if (refined.description) updates.description = refined.description;

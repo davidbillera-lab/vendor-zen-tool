@@ -32,3 +32,14 @@ dist-ssr
 # Agent runtime state — not source
 *.progress.json
 *.lnk
+
+# Supabase CLI temp files — generated, not source
+supabase/.temp/
+
+# Local MCP server config — machine-specific
+.mcp.json
+.vercel
+
+# EstateSales local test credentials + captured session (treat as credentials)
+estatesales-agent/.estatesales-test.env
+estatesales-agent/es-session.json

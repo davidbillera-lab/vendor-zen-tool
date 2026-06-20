@@ -11,8 +11,6 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 
-type AiProvider = 'gpt-image-2' | 'nano-banana';
-
 interface AIGenerateButtonProps {
   onImageGenerated: (url: string) => void;
   trigger?: React.ReactNode;
@@ -21,7 +19,6 @@ interface AIGenerateButtonProps {
 export function AIGenerateButton({ onImageGenerated, trigger }: AIGenerateButtonProps) {
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
-  const [provider, setProvider] = useState<AiProvider>('gpt-image-2');
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState<string | null>(null);
 
@@ -44,7 +41,7 @@ export function AIGenerateButton({ onImageGenerated, trigger }: AIGenerateButton
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ imageUrl: '', prompt: prompt.trim(), mode: 'generate', provider }),
+          body: JSON.stringify({ imageUrl: '', prompt: prompt.trim(), mode: 'generate' }),
         }
       );
 
@@ -83,14 +80,19 @@ export function AIGenerateButton({ onImageGenerated, trigger }: AIGenerateButton
 
   return (
     <>
-      <div onClick={() => setOpen(true)}>
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen(true)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setOpen(true); }}
+      >
         {trigger ?? (
           <Button variant="outline" size="sm" className="gap-1">
             <ImagePlus className="h-4 w-4" />
             AI Generate
           </Button>
         )}
-      </div>
+      </span>
 
       <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
         <DialogContent className="max-w-md">
@@ -102,26 +104,6 @@ export function AIGenerateButton({ onImageGenerated, trigger }: AIGenerateButton
           </DialogHeader>
 
           <div className="space-y-3">
-            {/* Provider toggle */}
-            <div className="flex gap-1">
-              <Button
-                size="sm"
-                variant={provider === 'gpt-image-2' ? 'default' : 'outline'}
-                className="flex-1 h-7 text-xs"
-                onClick={() => setProvider('gpt-image-2')}
-              >
-                GPT-Image-2
-              </Button>
-              <Button
-                size="sm"
-                variant={provider === 'nano-banana' ? 'default' : 'outline'}
-                className="flex-1 h-7 text-xs"
-                onClick={() => setProvider('nano-banana')}
-              >
-                Nano Banana
-              </Button>
-            </div>
-
             <Textarea
               value={prompt}
               onChange={e => setPrompt(e.target.value)}

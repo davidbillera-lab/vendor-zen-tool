@@ -244,7 +244,7 @@ export function LiveAuctioneersCaptureMode({
       }
 
       const data = await response.json();
-      setGeneratedListing(data.listing);
+      if (data.listing) setGeneratedListing(data.listing);
       setCorrectionPrompt("");
       toast({
         title: "Listing Updated",

@@ -35,6 +35,7 @@ import { EbayItemSpecificsEditor } from "./EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "./EbayShippingSettings";
 import { DraggableImageGrid } from "../DraggableImageGrid";
 import { AIGenerateButton } from "../AIGenerateButton";
+import { EbayListingDrawer, type DrawerEbayRow } from "@/components/ebay/EbayListingDrawer";
 
 interface EbayRow {
   id: string;
@@ -126,6 +127,9 @@ async function captureCorrection(input: {
     supabase.functions
       .invoke("embed-corrections", { body: { limit: 25 } })
       .catch((e) => console.warn("embed-corrections invoke skipped (non-blocking):", e));
+    supabase.functions
+      .invoke("distill-lessons", { body: {} })
+      .catch((e) => console.warn("distill-lessons trigger skipped (non-blocking):", e));
   } catch (e) {
     console.warn("captureCorrection failed (non-blocking):", e);
   }
@@ -184,6 +188,8 @@ export function EbayBatchPanel({
   // specFixes[rowId][specKey] = current draft value for an empty item_specific
   const [specFixes, setSpecFixes] = useState<Record<string, Record<string, string>>>({});
   const [crossPostRowId, setCrossPostRowId] = useState<string | null>(null);
+  const [drawerRow, setDrawerRow] = useState<DrawerEbayRow | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Reset AI state when edit dialog closes
   useEffect(() => {
@@ -386,7 +392,7 @@ export function EbayBatchPanel({
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Refinement failed');
 
-      const refined = data.listing;
+      const refined = data.listing ?? {};
       if (targetRow) {
         onRowsChange(rows.map(r => r.id === row.id ? {
           ...r,
@@ -1485,10 +1491,12 @@ export function EbayBatchPanel({
               </div>
             </div>
             {rows.length > 0 && (
-              <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
-                {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push to eBay (${activeRows.length})` : "Push to eBay"}
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={handlePushToEbay} disabled={publishing} className="gap-2 bg-green-600 hover:bg-green-700 text-white">
+                  {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  {publishing ? "Pushing…" : selectedIds.size > 0 ? `Push to eBay (${activeRows.length})` : "Push to eBay"}
+                </Button>
+              </div>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1897,7 +1905,13 @@ export function EbayBatchPanel({
                       variant="ghost"
                       size="sm"
                       className="h-7 w-7 p-0"
-                      onClick={() => setViewingRow(row)}
+                      onClick={() => {
+                        if (import.meta.env.VITE_FEATURE_EBAY_DRAWER === "true") {
+                          setDrawerRow(row); setDrawerOpen(true);
+                        } else {
+                          setViewingRow(row);
+                        }
+                      }}
                     >
                       <Eye className="h-3 w-3" />
                     </Button>
@@ -2388,7 +2402,7 @@ export function EbayBatchPanel({
                     variant="outline"
                     size="sm"
                     className="ml-auto h-7 text-xs"
-                    onClick={verifyListing}
+                    onClick={() => verifyListing()}
                     disabled={isVerifying || isRefining}
                   >
                     {isVerifying ? (
@@ -2408,7 +2422,7 @@ export function EbayBatchPanel({
                     disabled={isRefining}
                   />
                   <Button
-                    onClick={refineListing}
+                    onClick={() => refineListing()}
                     disabled={!correctionPrompt.trim() || isRefining}
                     size="icon"
                   >
@@ -2483,6 +2497,21 @@ export function EbayBatchPanel({
           </div>
         </DialogContent>
       </Dialog>
+      <EbayListingDrawer
+        row={drawerRow}
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        onSaveSpecifics={async (rowId, specifics) => {
+          await supabase
+            .from("ebay_batch_rows")
+            .update({ item_specifics: specifics })
+            .eq("id", rowId);
+        }}
+        onPublish={async (rowId) => {
+          const row = rows.find(r => r.id === rowId);
+          if (row) await handleRetrySingleRow(row);
+        }}
+      />
     </>
   );
 }

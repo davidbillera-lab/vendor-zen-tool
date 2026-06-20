@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VZT · Option B — Staged eBay Review + Detail Drawer (mockup)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          background: 'hsl(20 14% 4%)',
+          foreground: 'hsl(40 30% 96%)',
+          card: 'hsl(20 14% 7%)',
+          primary: 'hsl(38 92% 50%)',
+          'primary-foreground': 'hsl(20 14% 4%)',
+          secondary: 'hsl(20 14% 12%)',
+          muted: 'hsl(20 10% 15%)',
+          'muted-foreground': 'hsl(40 15% 55%)',
+          border: 'hsl(20 14% 15%)',
+          success: 'hsl(142 76% 36%)',
+          destructive: 'hsl(0 72% 51%)',
+          ebay: 'hsl(220 90% 56%)',
+        },
+        fontFamily: { sans: ['Inter', 'sans-serif'], display: ['"Playfair Display"', 'serif'] },
+        borderRadius: { xl: '0.75rem' },
+      },
+    },
+  };
+</script>
+<style>
+  body { background: linear-gradient(135deg, hsl(20 14% 4%) 0%, hsl(20 14% 8%) 50%, hsl(20 14% 4%) 100%); }
+  .badge { display:inline-flex; align-items:center; gap:.3rem; font-size:.7rem; font-weight:600; padding:.15rem .5rem; border-radius:9999px; line-height:1; }
+  .ic { width:1rem; height:1rem; stroke-width:2; }
+  .drawer { transition: transform .28s cubic-bezier(.4,0,.2,1); }
+  .field { background: hsl(20 14% 4%); border:1px solid hsl(20 14% 15%); border-radius:.5rem; padding:.5rem .65rem; font-size:.8rem; }
+  .field.bad { border-color: hsl(0 72% 51% / .6); background: hsl(0 72% 51% / .06); }
+  .field.good { border-color: hsl(142 76% 36% / .5); }
+  .req::after { content:" *"; color: hsl(0 72% 51%); }
+</style>
+</head>
+<body class="font-sans text-foreground min-h-screen p-6">
+
+  <!-- annotation banner -->
+  <div class="max-w-6xl mx-auto mb-5 rounded-xl border border-primary/40 bg-primary/10 px-4 py-3 text-sm">
+    <span class="font-semibold text-primary">MOCKUP — Option B + Detail Drawer.</span>
+    <span class="text-muted-foreground">
+      Click any row (or the <strong class="text-foreground">eye icon</strong>) to open the editor. The right panel pulls eBay's
+      <strong class="text-foreground">required &amp; recommended item specifics for that exact category</strong> and flags what's missing —
+      so you fill them <em>before</em> pushing instead of getting rejected. Not real UI; a visual of what we'd build.
+    </span>
+  </div>
+
+  <div class="max-w-6xl mx-auto rounded-xl border border-border bg-card p-4 shadow-[0_4px_20px_-5px_rgba(0,0,0,0.5)]">
+
+    <!-- header -->
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-2">
+        <svg class="ic text-ebay" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/></svg>
+        <span class="font-semibold text-foreground">eBay Batch</span>
+        <span class="badge bg-ebay/15 text-ebay border border-ebay/30">Inventory API · staged</span>
+      </div>
+      <div class="flex items-center gap-2 text-xs text-muted-foreground">
+        <span>Location: <span class="text-foreground">JSG Denver</span></span><span class="opacity-40">·</span>
+        <span>Env: <span class="text-foreground">production</span></span>
+      </div>
+    </div>
+
+    <!-- stage strip -->
+    <div class="flex items-center gap-3 mb-4 rounded-xl border border-border bg-muted/30 px-4 py-3">
+      <div class="flex items-center gap-2"><span class="flex items-center justify-center w-6 h-6 rounded-full bg-success/20 text-success text-xs font-bold border border-success/40">✓</span><span class="text-sm font-medium text-foreground">1. Offers created</span></div>
+      <div class="h-px flex-1 bg-border"></div>
+      <div class="flex items-center gap-2"><span class="flex items-center justify-center w-6 h-6 rounded-full bg-primary/20 text-primary text-xs font-bold border border-primary/40">2</span><span class="text-sm font-medium text-foreground">Review &amp; Publish</span><span class="text-xs text-muted-foreground">(you are here)</span></div>
+      <div class="h-px flex-1 bg-border"></div>
+      <div class="flex items-center gap-2 opacity-50"><span class="flex items-center justify-center w-6 h-6 rounded-full bg-secondary text-muted-foreground text-xs font-bold border border-border">3</span><span class="text-sm font-medium text-muted-foreground">Live on eBay</span></div>
+    </div>
+
+    <!-- toolbar -->
+    <div class="flex flex-wrap items-center gap-2 mb-4">
+      <div class="flex flex-col"><label class="text-[10px] text-muted-foreground mb-1">Qty</label><div class="h-9 w-20 rounded-md border border-border bg-background px-3 flex items-center text-sm">1</div></div>
+      <div class="flex flex-col"><label class="text-[10px] text-muted-foreground mb-1">Location</label><div class="h-9 w-40 rounded-md border border-border bg-background px-3 flex items-center text-sm">JSG Denver</div></div>
+      <div class="flex-1"></div>
+      <button class="h-9 gap-2 inline-flex items-center rounded-md border border-border bg-transparent px-3 text-sm font-medium hover:bg-secondary"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Stage New (3)</button>
+      <button class="h-9 gap-2 inline-flex items-center rounded-md bg-success px-4 text-sm font-semibold text-white hover:opacity-90"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>Publish All (4)</button>
+    </div>
+
+    <!-- column header -->
+    <div class="grid grid-cols-[2.2rem_1fr_7rem_8rem_9rem] gap-3 px-3 pb-2 text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border">
+      <div></div><div>Listing</div><div>Price</div><div>Status</div><div class="text-right">Action</div>
+    </div>
+
+    <!-- rows are injected here -->
+    <div id="rows"></div>
+
+    <div class="flex items-center justify-between pt-3 text-xs text-muted-foreground">
+      <div>4 items · <span class="text-ebay">2 staged</span> · <span class="text-primary">1 needs fix</span> · <span class="text-success">1 live</span></div>
+      <div>QA agent (Haiku 4.5) checks category + required specifics before each publish</div>
+    </div>
+  </div>
+
+  <!-- ───────────── DETAIL DRAWER ───────────── -->
+  <div id="overlay" class="fixed inset-0 bg-black/60 opacity-0 pointer-events-none transition-opacity duration-300 z-40" onclick="closeDrawer()"></div>
+  <aside id="drawer" class="drawer fixed top-0 right-0 h-full w-full max-w-[560px] bg-card border-l border-border z-50 translate-x-full overflow-y-auto">
+    <div id="drawerBody"></div>
+  </aside>
+
+<script>
+  // ── Mock data: each item carries eBay's category aspects (required/recommended, mode, allowed values, current value)
+  const ITEMS = {
+    r1: {
+      title: "Vintage Pyrex Spring Blossom Mixing Bowl Set 4-Piece",
+      sku: "JSG-1042", offer: "90213…7741", price: "48.00", status: "staged",
+      category: "Pottery & Glass › Glass › Glassware › Pyrex (66426)",
+      condition: "Used",
+      aspects: [
+        { name:"Brand", req:true, mode:"SELECTION", value:"Pyrex", options:["Pyrex","Anchor Hocking","Corning","Unbranded"] },
+        { name:"Type", req:true, mode:"SELECTION", value:"Mixing Bowl", options:["Mixing Bowl","Casserole","Measuring Cup"] },
+        { name:"Pattern", req:true, mode:"FREE", value:"Spring Blossom" },
+        { name:"Color", req:false, mode:"SELECTION", value:"Green", options:["Green","Blue","Clear","Multicolor"] },
+        { name:"Material", req:false, mode:"SELECTION", value:"Glass", options:["Glass","Ceramic"] },
+      ],
+    },
+    r2: {
+      title: "Mid-Century Teak Wood Wall Clock — Working, Danish Style",
+      sku: "JSG-1043", offer: "90213…7742", price: "125.00", status:"staged",
+      category: "Collectibles › Clocks › Modern (1980-Now) › Wall (20578)",
+      condition: "Used",
+      aspects: [
+        { name:"Brand", req:true, mode:"FREE", value:"Unbranded" },
+        { name:"Type", req:true, mode:"SELECTION", value:"Wall Clock", options:["Wall Clock","Mantel Clock","Desk Clock"] },
+        { name:"Material", req:true, mode:"SELECTION", value:"Teak", options:["Teak","Oak","Walnut","Plastic"] },
+        { name:"Style", req:false, mode:"SELECTION", value:"Mid-Century Modern", options:["Mid-Century Modern","Art Deco","Contemporary"] },
+        { name:"Features", req:false, mode:"FREE", value:"" },
+      ],
+    },
+    r3: {
+      title: "Antique Brass Oil Lamp with Glass Chimney",
+      sku: "JSG-1044", offer: "90213…7743", price: "65.00", status:"needsfix",
+      category: "Antiques › Decorative Arts › Lamps (13921)",
+      condition: "Used",
+      aspects: [
+        { name:"Brand", req:true, mode:"FREE", value:"" },         // <-- MISSING required
+        { name:"Type", req:true, mode:"SELECTION", value:"Oil Lamp", options:["Oil Lamp","Electric Lamp","Candle Lamp"] },
+        { name:"Material", req:true, mode:"SELECTION", value:"Brass", options:["Brass","Copper","Glass","Iron"] },
+        { name:"Age", req:false, mode:"SELECTION", value:"", options:["Pre-1900","1900-1940","1940-1970"] },
+        { name:"Original/Reproduction", req:false, mode:"SELECTION", value:"Original", options:["Original","Reproduction"] },
+      ],
+    },
+    r4: {
+      title: "Sterling Silver Art Deco Cocktail Ring, Size 7",
+      sku: "JSG-1041", offer: "live · 3958…0023", price: "210.00", status:"live",
+      category: "Jewelry & Watches › Fine Jewelry › Rings (67681)",
+      condition: "Pre-owned",
+      aspects: [
+        { name:"Metal", req:true, mode:"SELECTION", value:"Sterling Silver", options:["Sterling Silver","Gold","Platinum"] },
+        { name:"Ring Size", req:true, mode:"FREE", value:"7" },
+        { name:"Style", req:true, mode:"SELECTION", value:"Cocktail", options:["Cocktail","Solitaire","Band"] },
+        { name:"Main Stone", req:false, mode:"FREE", value:"None" },
+      ],
+    },
+  };
+
+  const STATUS = {
+    staged:  { label:"● Staged",   cls:"bg-ebay/15 text-ebay border border-ebay/30" },
+    needsfix:{ label:"● Needs fix",cls:"bg-primary/15 text-primary border border-primary/30" },
+    live:    { label:"✓ Live",     cls:"bg-success/15 text-success border border-success/30" },
+  };
+
+  const eye = '<svg class="ic" style="width:.85rem;height:.85rem" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const arrow = '<svg class="ic" style="width:.85rem;height:.85rem" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>';
+
+  function missingReq(it){ return it.aspects.filter(a=>a.req && !a.value.trim()).length; }
+
+  function rowHtml(id){
+    const it = ITEMS[id]; const miss = missingReq(it); const st = STATUS[it.status];
+    let action = '';
+    if (it.status === 'live') {
+      action = `<a href="#" onclick="event.stopPropagation()" class="h-8 px-3 inline-flex items-center gap-1.5 rounded-md border border-border text-xs hover:bg-secondary">View on eBay</a>`;
+    } else if (miss > 0) {
+      action = `<button onclick="event.stopPropagation();openDrawer('${id}')" class="h-8 px-3 inline-flex items-center rounded-md border border-primary/50 text-primary text-xs font-semibold hover:bg-primary/10">Fix</button>
+                <button disabled class="h-8 px-3 inline-flex items-center rounded-md bg-muted text-muted-foreground text-xs font-semibold cursor-not-allowed">Publish</button>`;
+    } else {
+      action = `<button onclick="event.stopPropagation();openDrawer('${id}')" class="h-8 px-2 inline-flex items-center rounded-md border border-border text-xs hover:bg-secondary">${eye}</button>
+                <button onclick="event.stopPropagation()" class="h-8 px-3 inline-flex items-center gap-1.5 rounded-md bg-success text-white text-xs font-semibold hover:opacity-90">${arrow}Publish</button>`;
+    }
+    const subline = miss > 0
+      ? `<div class="text-xs text-primary/90 flex items-center gap-1"><svg class="ic" style="width:.8rem;height:.8rem" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>QA: ${miss} required item specific${miss>1?'s':''} missing — click to fix</div>`
+      : `<div class="text-xs text-muted-foreground">SKU ${it.sku} · ${it.category.split('›').pop().trim()} · offerId <span class="text-foreground/70">${it.offer}</span></div>`;
+    return `<div onclick="openDrawer('${id}')" class="grid grid-cols-[2.2rem_1fr_7rem_8rem_9rem] gap-3 items-center px-3 py-3 border-b border-border cursor-pointer ${miss>0?'bg-primary/[0.04]':''} ${it.status==='live'?'opacity-80':''} hover:bg-secondary/40">
+      <div class="w-9 h-9 rounded-md bg-muted flex items-center justify-center text-muted-foreground text-[10px]">IMG</div>
+      <div><div class="text-sm font-medium text-foreground truncate">${it.title}</div>${subline}</div>
+      <div class="text-sm text-foreground">$${it.price}</div>
+      <div><span class="badge ${st.cls}">${st.label}</span></div>
+      <div class="flex justify-end gap-2">${action}</div>
+    </div>`;
+  }
+
+  function aspectRow(a){
+    const empty = !a.value.trim();
+    const bad = a.req && empty;
+    const tag = a.mode === 'SELECTION' ? 'dropdown' : 'free text';
+    const control = a.mode === 'SELECTION'
+      ? `<div class="field ${bad?'bad':a.value?'good':''} flex items-center justify-between">
+           <span class="${empty?'text-muted-foreground':'text-foreground'}">${a.value || 'Select…'}</span>
+           <svg class="ic" style="width:.8rem;height:.8rem" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m6 9 6 6 6-6"/></svg>
+         </div>`
+      : `<div class="field ${bad?'bad':a.value?'good':''}"><span class="${empty?'text-muted-foreground':'text-foreground'}">${a.value || 'Type a value…'}</span></div>`;
+    return `<div class="mb-3">
+      <div class="flex items-center justify-between mb-1">
+        <label class="text-xs ${a.req?'req text-foreground':'text-muted-foreground'}">${a.name}</label>
+        <span class="text-[10px] uppercase tracking-wide ${bad?'text-destructive':'text-muted-foreground'}">${bad?'required by eBay':tag}</span>
+      </div>
+      ${control}
+      ${a.mode==='SELECTION'&&a.options?`<div class="mt-1 flex flex-wrap gap-1">${a.options.slice(0,4).map(o=>`<span class="text-[10px] px-1.5 py-0.5 rounded ${o===a.value?'bg-primary/20 text-primary':'bg-secondary text-muted-foreground'}">${o}</span>`).join('')}</div>`:''}
+    </div>`;
+  }
+
+  function drawerHtml(id){
+    const it = ITEMS[id]; const miss = missingReq(it);
+    const reqAspects = it.aspects.filter(a=>a.req);
+    const recAspects = it.aspects.filter(a=>!a.req);
+    const banner = it.status==='live'
+      ? `<div class="rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-xs text-success flex items-center gap-2">✓ Live on eBay — read-only</div>`
+      : miss>0
+        ? `<div class="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive flex items-center gap-2"><svg class="ic" style="width:.9rem;height:.9rem" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>${miss} required specific${miss>1?'s':''} missing — eBay would reject this push. Fill ${miss>1?'them':'it'} to enable Publish.</div>`
+        : `<div class="rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-xs text-success flex items-center gap-2">✓ All eBay-required specifics present — ready to publish</div>`;
+    const publishBtn = (it.status!=='live')
+      ? (miss>0
+          ? `<button disabled class="flex-1 h-10 rounded-md bg-muted text-muted-foreground text-sm font-semibold cursor-not-allowed">Publish to eBay</button>`
+          : `<button class="flex-1 h-10 rounded-md bg-success text-white text-sm font-semibold hover:opacity-90 inline-flex items-center justify-center gap-2">${arrow}Publish to eBay</button>`)
+      : `<button class="flex-1 h-10 rounded-md border border-border text-sm font-semibold inline-flex items-center justify-center gap-2 hover:bg-secondary">View live listing</button>`;
+
+    return `
+    <div class="sticky top-0 bg-card border-b border-border px-5 py-4 flex items-start justify-between z-10">
+      <div>
+        <div class="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Listing detail · SKU ${it.sku}</div>
+        <div class="font-display text-lg text-foreground leading-tight pr-6">${it.title}</div>
+      </div>
+      <button onclick="closeDrawer()" class="text-muted-foreground hover:text-foreground shrink-0"><svg class="ic" style="width:1.2rem;height:1.2rem" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+
+    <div class="p-5 space-y-5">
+      <!-- photos + core -->
+      <div class="flex gap-3">
+        <div class="grid grid-cols-2 gap-1.5 w-28 shrink-0">
+          ${[1,2,3,4].map(()=>`<div class="aspect-square rounded-md bg-muted flex items-center justify-center text-[9px] text-muted-foreground">IMG</div>`).join('')}
+        </div>
+        <div class="flex-1 space-y-2">
+          <div><label class="text-[10px] text-muted-foreground">Title</label><div class="field text-foreground">${it.title}</div></div>
+          <div class="flex gap-2">
+            <div class="flex-1"><label class="text-[10px] text-muted-foreground">Price</label><div class="field text-foreground">$${it.price}</div></div>
+            <div class="flex-1"><label class="text-[10px] text-muted-foreground">Condition</label><div class="field text-foreground">${it.condition}</div></div>
+          </div>
+          <div><label class="text-[10px] text-muted-foreground">eBay category</label><div class="field text-foreground text-[11px]">${it.category}</div></div>
+        </div>
+      </div>
+
+      ${banner}
+
+      <!-- ITEM SPECIFICS = the hero -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold text-foreground">Item Specifics</span>
+          <span class="text-[10px] text-muted-foreground">pulled live from eBay · category ${it.category.match(/\((\d+)\)/)?.[1]||''}</span>
+        </div>
+        <div class="text-[11px] uppercase tracking-wide text-destructive mb-2">Required by eBay</div>
+        ${reqAspects.map(aspectRow).join('')}
+        <div class="text-[11px] uppercase tracking-wide text-muted-foreground mt-4 mb-2">Recommended (boost visibility)</div>
+        ${recAspects.map(aspectRow).join('')}
+      </div>
+    </div>
+
+    <div class="sticky bottom-0 bg-card border-t border-border px-5 py-3 flex gap-2">
+      <button onclick="closeDrawer()" class="h-10 px-4 rounded-md border border-border text-sm font-medium hover:bg-secondary">Save &amp; close</button>
+      ${publishBtn}
+    </div>`;
+  }
+
+  function render(){ document.getElementById('rows').innerHTML = Object.keys(ITEMS).map(rowHtml).join(''); }
+  function openDrawer(id){
+    document.getElementById('drawerBody').innerHTML = drawerHtml(id);
+    document.getElementById('drawer').classList.remove('translate-x-full');
+    const ov = document.getElementById('overlay'); ov.classList.remove('opacity-0','pointer-events-none');
+  }
+  function closeDrawer(){
+    document.getElementById('drawer').classList.add('translate-x-full');
+    const ov = document.getElementById('overlay'); ov.classList.add('opacity-0','pointer-events-none');
+  }
+  render();
+</script>
+</body>
+</html>

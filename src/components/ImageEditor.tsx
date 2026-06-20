@@ -20,7 +20,6 @@ export interface ImageEditorProps {
 }
 
 type AiMode = 'enhance' | 'generate' | 'edit';
-type AiProvider = 'gpt-image-2' | 'gemini';
 
 interface ImageEdit {
   rotation: number;
@@ -45,7 +44,6 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
   // AI Studio panel state
   const [aiOpen, setAiOpen] = useState(false);
   const [aiMode, setAiMode] = useState<AiMode>('enhance');
-  const [aiProvider, setAiProvider] = useState<AiProvider>('gpt-image-2');
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiProcessing, setAiProcessing] = useState(false);
   const [aiResult, setAiResult] = useState<string | null>(null);
@@ -97,8 +95,10 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
     try {
       const { removeBackground } = await import('@imgly/background-removal');
       const blob = await removeBackground(currentEdit.src);
+      const oldTransparentSrc = currentEdit.transparentSrc;
       const url = URL.createObjectURL(blob);
       updateEdit(currentIndex, { bgRemoved: true, bgColor: null, src: url, transparentSrc: url });
+      if (oldTransparentSrc?.startsWith('blob:')) URL.revokeObjectURL(oldTransparentSrc);
     } catch (e) {
       console.error('BG removal failed:', e);
       toast({ title: 'Background removal failed', variant: 'destructive' });
@@ -162,7 +162,6 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
             imageUrl,
             prompt: aiPrompt.trim(),
             mode: aiMode,
-            provider: aiProvider,
           }),
         }
       );
@@ -324,26 +323,6 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
             <div className="w-72 flex-shrink-0 bg-[#1a1a1a] border-l border-border flex flex-col overflow-y-auto">
               <div className="p-3 space-y-3">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">AI Studio</p>
-
-                {/* Provider toggle */}
-                <div className="flex gap-1">
-                  <Button
-                    size="sm"
-                    variant={aiProvider === 'gpt-image-2' ? 'default' : 'ghost'}
-                    className="h-6 px-2 text-xs flex-1"
-                    onClick={() => setAiProvider('gpt-image-2')}
-                  >
-                    GPT-Image-2
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={aiProvider === 'gemini' ? 'default' : 'ghost'}
-                    className="h-6 px-2 text-xs flex-1"
-                    onClick={() => setAiProvider('gemini')}
-                  >
-                    Gemini
-                  </Button>
-                </div>
 
                 {/* Mode selector */}
                 <div className="flex gap-1">

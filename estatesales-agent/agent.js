@@ -14,6 +14,19 @@
  *   and re-upload images, and save.
  *
  * All credentials and URLs are injected via process.env by runAgent.js.
+ *
+ * EstateSales.net login supports two modes:
+ *   A) storageState (preferred for Google-SSO accounts): inject ES_STORAGE_STATE
+ *      containing an exported Playwright session JSON string. The agent reuses
+ *      the session without touching the login form.
+ *   B) Email/password fallback: ES_EMAIL + ES_PASSWORD (may not work for
+ *      Google-SSO-only accounts).
+ *
+ * One-time session capture (operator runs locally, never commit the output):
+ *   node -e "const {chromium}=require('playwright'); (async()=>{const b=await chromium.launch({headless:false}); const c=await b.newContext(); const p=await c.newPage(); await p.goto('https://www.estatesales.net/sign-in'); console.log('Log in via Google in the window, then press Enter here'); process.stdin.once('data', async()=>{ const s=await c.storageState(); require('fs').writeFileSync('es-session.json', JSON.stringify(s)); await b.close(); process.exit(0); });})();"
+ * Then paste es-session.json contents into VZT Settings
+ * (user_estatesales_credentials.estatesales_storage_state).
+ * NEVER commit es-session.json.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -37,6 +50,7 @@ const DOA_URL            = process.env.DOA_URL;
 const ES_EMAIL           = process.env.ESTATESALES_EMAIL;
 const ES_PASSWORD        = process.env.ESTATESALES_PASSWORD;
 const ES_URL             = process.env.ESTATESALES_URL;
+const ES_STORAGE_STATE   = process.env.ES_STORAGE_STATE;
 const SUPABASE_URL       = process.env.SUPABASE_URL;
 const SUPABASE_KEY       = process.env.SUPABASE_SERVICE_KEY;
 
@@ -47,6 +61,17 @@ const IMAGES_DIR         = './downloaded-images';
 const NAV_TIMEOUT        = 30_000;
 const WAIT_TIMEOUT       = 15_000;
 
+// Optional cap on how many DOA lots to scrape. Set MAX_LOTS=2 to smoke-test the
+// EstateSales (Phase 2) path without grinding all ~169 lots. 0/unset = no cap.
+const MAX_LOTS           = parseInt(process.env.MAX_LOTS, 10) || 0;
+
+// Stale reservation threshold: a 'reserved' row older than this is LIKELY a dead
+// run rather than a live concurrent one. This is used ONLY to label the skip log
+// for manual reconciliation — we never auto-reclaim a stale reservation (see
+// reserveLot: a dead run may have saved the item on ES before dying, so
+// re-uploading risks the exact duplicate the ledger prevents).
+const STALE_RESERVATION_MS = 30 * 60 * 1000; // 30 minutes
+
 // ── Supabase ──────────────────────────────────────────────────────────────────
 
 const supabase = (SUPABASE_URL && SUPABASE_KEY)
@@ -56,7 +81,10 @@ const supabase = (SUPABASE_URL && SUPABASE_KEY)
 async function updateJobStatus(status, error = null) {
   if (!supabase || !JOB_ID) return;
   const update = { status };
-  if (status === 'completed' || status === 'failed') update.completed_at = new Date().toISOString();
+  // completed_at is set for ALL terminal statuses, including partial_failed
+  if (status === 'completed' || status === 'failed' || status === 'partial_failed') {
+    update.completed_at = new Date().toISOString();
+  }
   if (error) update.error_message = String(error).slice(0, 2000);
   const { error: dbErr } = await supabase
     .from('estatesales_jobs')
@@ -76,7 +104,11 @@ async function updateJobFields(fields) {
 }
 
 /**
- * Read the set of DOA lot URLs already uploaded to this EstateSales sale.
+ * Read the set of DOA lot URLs that have been CONFIRMED uploaded to this
+ * EstateSales sale (status = 'uploaded' only). Reserved and failed rows are
+ * NOT included so they can be retried or claimed by the current run via
+ * reserveLot() rather than silently skipped here.
+ *
  * Fails closed: if the ledger can't be read we abort rather than risk
  * uploading duplicates.
  */
@@ -85,25 +117,176 @@ async function fetchUploadedLotUrls() {
   const { data, error } = await supabase
     .from('estatesales_uploaded_lots')
     .select('lot_url')
-    .eq('es_url', ES_URL);
+    .eq('es_url', ES_URL)
+    .eq('status', 'uploaded');
   if (error) throw new Error(`[agent] Could not read uploaded-lots ledger: ${error.message}`);
   return new Set((data || []).map((r) => r.lot_url));
 }
 
-async function recordUploadedLot(lot, userId) {
-  if (!supabase) return;
-  const { error } = await supabase
+/**
+ * Atomically claim a lot before uploading it (reserve → upload → confirm pattern).
+ *
+ * Returns one of:
+ *   { claimed: true }                  — we own the row; proceed to upload
+ *   { claimed: false, reason: string } — skip this lot (already done or conservatively blocked)
+ *
+ * Conflict resolution:
+ *   - 'uploaded'  row found → already done, skip
+ *   - 'reserved'  row found → conservatively skip (never auto-reclaimed, even
+ *                             once stale — a dead run may have saved on ES before
+ *                             dying; stale rows are flagged for manual reconciliation)
+ *   - 'failed'    row found → conservatively skip to avoid duplicate risk
+ *
+ * Lots without a source_url cannot be keyed in the ledger (no unique key) and
+ * should fall through to upload without reservation — dedup is impossible for
+ * them and duplicates are the caller's problem.
+ */
+async function reserveLot(lot, jobUserId) {
+  if (!supabase) return { claimed: true }; // no ledger → proceed (no dedup)
+  if (!lot.source_url) return { claimed: true }; // can't key without URL → proceed
+
+  const now = new Date().toISOString();
+
+  // Attempt atomic insert
+  const { error: insertErr } = await supabase
     .from('estatesales_uploaded_lots')
-    .upsert({
-      user_id:    userId,
-      job_id:     JOB_ID || null,
-      es_url:     ES_URL,
-      lot_url:    lot.source_url,
-      lot_number: lot.lot_number,
-      lot_title:  lot.title,
-    }, { onConflict: 'es_url,lot_url', ignoreDuplicates: true });
+    .insert({
+      user_id:     jobUserId,
+      job_id:      JOB_ID || null,
+      es_url:      ES_URL,
+      lot_url:     lot.source_url,
+      lot_number:  lot.lot_number ?? null,
+      lot_title:   lot.title ?? null,
+      status:      'reserved',
+      reserved_at: now,
+    });
+
+  if (!insertErr) {
+    // Insert succeeded — we own the reservation
+    return { claimed: true };
+  }
+
+  if (insertErr.code !== '23505') {
+    // A real DB error (not a unique violation) — surface it
+    throw new Error(`[agent] reserveLot DB error for lot ${lot.lot_number}: ${insertErr.message}`);
+  }
+
+  // Unique violation — a row already exists for (es_url, lot_url). Inspect it.
+  const { data: existing, error: fetchErr } = await supabase
+    .from('estatesales_uploaded_lots')
+    .select('status, reserved_at')
+    .eq('es_url', ES_URL)
+    .eq('lot_url', lot.source_url)
+    .single();
+
+  if (fetchErr) {
+    throw new Error(`[agent] reserveLot: could not read existing row for lot ${lot.lot_number}: ${fetchErr.message}`);
+  }
+
+  if (existing.status === 'uploaded') {
+    return { claimed: false, reason: 'already uploaded in a previous run' };
+  }
+
+  if (existing.status === 'reserved') {
+    // A 'reserved' row means a prior (or concurrent) run claimed this lot but
+    // never advanced it to 'uploaded' or 'failed'. We deliberately do NOT
+    // auto-reclaim and re-upload it, even once it is "stale". The reservation
+    // and the actual ES upload are not atomic: a run can save the item on
+    // EstateSales and then die before writing the ledger. The row would look
+    // stale, but the item DOES exist on ES — re-uploading creates the exact
+    // duplicate the ledger is meant to prevent. Per the governing priority
+    // "duplicates are worse than blocked runs", we skip and surface the row for
+    // manual operator reconciliation (verify on ES, then clear or mark the
+    // ledger row 'uploaded'/'failed' to unblock retry).
+    const reservedAt = existing.reserved_at ? new Date(existing.reserved_at).getTime() : 0;
+    const age = Date.now() - reservedAt;
+    const ageDesc = age >= STALE_RESERVATION_MS
+      ? `STALE reservation (${Math.round(age / 60000)}m old) — needs manual reconciliation`
+      : `reserved ${Math.round(age / 1000)}s ago (likely a live concurrent run)`;
+    console.warn(`[agent]   Skipping lot ${lot.lot_number}: ${ageDesc}. Not re-uploading to avoid duplicates.`);
+    return {
+      claimed: false,
+      reason: `already reserved — not re-uploading to avoid duplicates (${ageDesc})`,
+    };
+  }
+
+  // status === 'failed' (or any unknown status) — conservatively skip
+  return {
+    claimed: false,
+    reason: `previously failed — not re-uploading to avoid duplicates (status: ${existing.status})`,
+  };
+}
+
+/**
+ * Fatal ledger anomaly: the ES upload succeeded but the ledger could not be
+ * trusted afterwards (write error OR our reservation was missing/owned by
+ * another run). Carries an explicit flag so the upload loop can hard-stop on
+ * ANY such anomaly without fragile message-substring matching.
+ */
+class LedgerError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'LedgerError';
+    this.fatalLedger = true;
+  }
+}
+
+/**
+ * Mark a reserved lot as confirmed-uploaded in the ledger.
+ * THROWS on any real DB error — if the ES upload succeeded but we cannot
+ * record it, the run must stop rather than risk a future duplicate.
+ * A 23505 (unique violation) here would be a bug (we already hold the
+ * reservation row) so it is also surfaced as an error.
+ */
+async function confirmLotUploaded(lot) {
+  if (!supabase) return; // no ledger — nothing to record
+  if (!lot.source_url) return; // no key — can't update
+
+  // Confirm ONLY the reservation this run owns: require status='reserved' and,
+  // when we have a JOB_ID, bind to job_id so we can never confirm another run's
+  // row. We then check rows-affected — a zero-row update means our reservation
+  // is missing or owned by another run, which is a concurrency/state anomaly and
+  // must hard-stop (the upload happened but the ledger cannot be trusted).
+  let query = supabase
+    .from('estatesales_uploaded_lots')
+    .update({ status: 'uploaded', uploaded_at: new Date().toISOString() })
+    .eq('es_url', ES_URL)
+    .eq('lot_url', lot.source_url)
+    .eq('status', 'reserved');
+  if (JOB_ID) query = query.eq('job_id', JOB_ID);
+
+  const { data: updated, error } = await query.select();
+
   if (error) {
-    console.error(`[agent]   WARNING: could not record lot ${lot.lot_number} in ledger — a future re-run may upload it again: ${error.message}`);
+    throw new LedgerError(
+      `[agent] Lot uploaded to EstateSales but could not record in ledger — manual intervention required. ` +
+      `(lot: ${lot.lot_number}, error: ${error.message})`
+    );
+  }
+  if (!updated || updated.length === 0) {
+    throw new LedgerError(
+      `[agent] Lot uploaded to EstateSales but its ledger reservation was missing or owned by another run — ` +
+      `manual intervention required (lot: ${lot.lot_number}). This indicates a concurrency or state error; ` +
+      `stopping to avoid masking a possible duplicate.`
+    );
+  }
+}
+
+/**
+ * Mark a reserved lot as failed in the ledger (best-effort — does not throw).
+ */
+async function markLotFailed(lot) {
+  if (!supabase || !lot.source_url) return;
+  let query = supabase
+    .from('estatesales_uploaded_lots')
+    .update({ status: 'failed' })
+    .eq('es_url', ES_URL)
+    .eq('lot_url', lot.source_url)
+    .eq('status', 'reserved'); // only transition our own reservation
+  if (JOB_ID) query = query.eq('job_id', JOB_ID); // bind to this run when we have an owner
+  const { error } = await query;
+  if (error) {
+    console.error(`[agent]   WARNING: could not mark lot ${lot.lot_number} as failed in ledger: ${error.message}`);
   }
 }
 
@@ -195,197 +378,72 @@ async function readTinyMceContent(page) {
   }
 }
 
+/**
+ * Detects whether the page is currently showing a validation/error state or has
+ * been bounced to the sign-in page. Used as a NEGATIVE gate: even a "positive"
+ * signal is rejected if any of these are present, so an error alert or a login
+ * redirect can never be mistaken for a successful save (which would silently
+ * mark a never-created lot as 'uploaded').
+ */
+async function hasErrorOrAuthState(page) {
+  try {
+    // A login redirect means the session dropped — definitely not a save.
+    if (/sign-?in|log-?in|login|account\/login/i.test(new URL(page.url()).pathname)) {
+      return true;
+    }
+    return await page.evaluate(() => {
+      const sel = [
+        '.validation-summary-errors',
+        '.field-validation-error',
+        '.alert-danger',
+        '.alert-error',
+        '[class*="error"]:not([class*="success"])',
+        '[class*="invalid"]:not([class*="success"])',
+      ].join(', ');
+      return Array.from(document.querySelectorAll(sel)).some(
+        (n) => n.offsetParent !== null && (n.textContent || '').trim().length > 0
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
 // ── Phase 1: DOA Scrape ───────────────────────────────────────────────────────
 
 /**
  * scrapeLots(page)
  *
- * Navigates to the DOA auction admin page (DOA_URL), collects every
- * lot-edit link, then visits each one to read title/description/price/images.
+ * Starts at DOA_URL (the first lot's admin edit page, EditAuction?id=NNN),
+ * reads each lot's data, then clicks "Save & Edit Next" (#lnkProcess) to
+ * advance sequentially until the button is gone (last lot).
  *
  * Returns: Array of { lot_number, title, description, price, imageUrls[] }
  */
 async function scrapeLots(page) {
-  console.log('[agent] Navigating to DOA auction page...');
+  // DOA_URL is the first lot's admin edit page (EditAuction?id=NNN).
+  // We traverse sequentially by clicking "Save & Edit Next" (#lnkProcess)
+  // after reading each lot — mirroring the local DOA agent's workflow exactly.
+  console.log('[agent] Navigating to first DOA lot...');
   await page.goto(DOA_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-  await screenshot(page, 'doa-auction-page');
+  await screenshot(page, 'doa-first-lot');
 
-  // ── Collect lot edit URLs ─────────────────────────────────────────────────
-  // The auction admin page lists every lot with a link to its individual edit page.
-  // DOA URL pattern for individual lots: /sub-admin/EditLot?id=NNN
-  //                               or:   /sub-admin/EditAuction?auctionItemId=NNN
-  console.log('[agent] Collecting lot links from auction page...');
-
-  const lotLinks = await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a[href]'));
-    const seen = new Set();
-    const results = [];
-    for (const a of links) {
-      const href = a.getAttribute('href');
-      if (!href) continue;
-      // Match /sub-admin/EditLot?id= or any href containing "EditLot" or "auctionItemId"
-      if (
-        /EditLot/i.test(href) ||
-        /auctionItemId=/i.test(href) ||
-        /LotID=/i.test(href) ||
-        /lotId=/i.test(href)
-      ) {
-        const abs = href.startsWith('http') ? href : `https://denveronlineauctions.com${href.startsWith('/') ? '' : '/'}${href}`;
-        if (!seen.has(abs)) {
-          seen.add(abs);
-          results.push(abs);
-        }
-      }
-    }
-    return results;
-  });
-
-  // ── Fallback: public auction catalog page ─────────────────────────────────
-  // If DOA_URL is the public catalog (/auction/<slug>) rather than the admin
-  // page, lots are linked as /auction/<slug>/lot-N-<title-slug> (plus m-/v-
-  // media variants, each appearing twice). The catalog is client-side
-  // rendered, so wait for the links to appear before collecting.
-  let mode = 'admin';
-  if (lotLinks.length === 0) {
-    console.log('[agent] No admin lot links found — checking for public catalog lot links...');
-    await page.waitForSelector('a[href*="lot-"], a[href*="auction-details?id="]', { timeout: WAIT_TIMEOUT }).catch(() => {});
-    const publicLinks = await page.evaluate(() => {
-      const links = Array.from(document.querySelectorAll('a[href]'));
-      const byLot = new Map(); // lot/item key → href, preferring the plain (non m-/v-) variant
-      for (const a of links) {
-        const href = a.getAttribute('href');
-        if (!href) continue;
-        let num;
-        let isVariant = false;
-        let m = href.match(/\/auction\/[^/]+\/(m-|v-)?lot-(\d+)-/i);
-        if (m) {
-          num = parseInt(m[2], 10);
-          isVariant = Boolean(m[1]);
-        } else {
-          // Logged-in sessions render catalog tiles as /auction-details?id=<itemId>
-          // instead of the anonymous /auction/<slug>/lot-N-<title> format.
-          m = href.match(/\/auction-details\?id=(\d+)/i);
-          if (!m) continue;
-          num = parseInt(m[1], 10);
-        }
-        const abs = href.startsWith('http') ? href : `https://denveronlineauctions.com${href.startsWith('/') ? '' : '/'}${href}`;
-        if (!byLot.has(num) || (byLot.get(num).isVariant && !isVariant)) {
-          byLot.set(num, { url: abs, isVariant });
-        }
-      }
-      return Array.from(byLot.entries())
-        .sort((a, b) => a[0] - b[0])
-        .map(([, v]) => v.url);
-    });
-    if (publicLinks.length > 0) {
-      mode = 'public';
-      lotLinks.push(...publicLinks);
-    }
-  }
-
-  if (lotLinks.length === 0) {
-    // Diagnostic: dump what anchors the page actually has so the failure log
-    // shows the real link structure (CI may see a different page than local).
-    const diag = await page.evaluate(() => {
-      const hrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.getAttribute('href'));
-      const patterns = {};
-      for (const h of hrefs) {
-        const key = h.split(/[?#]/)[0].replace(/\d+/g, 'N').slice(0, 100);
-        patterns[key] = (patterns[key] || 0) + 1;
-      }
-      return {
-        url: location.href,
-        title: document.title,
-        anchorCount: hrefs.length,
-        patterns,
-        sample: hrefs.slice(0, 25),
-      };
-    }).catch((e) => ({ diagError: String(e) }));
-    console.log('[agent] DIAGNOSTIC anchor dump:', JSON.stringify(diag, null, 2));
-    await screenshot(page, 'doa-no-lot-links');
-    throw new Error(
-      `[agent] No lot links found on the DOA auction page.\n` +
-      `  URL visited: ${DOA_URL}\n` +
-      `  Expected admin links (/EditLot?id= or /auctionItemId=) or public\n` +
-      `  catalog links (/auction/<slug>/lot-N-...) in the page.\n` +
-      `  Check the screenshot "doa-no-lot-links" to diagnose the actual page structure.`
-    );
-  }
-
-  console.log(`[agent] Found ${lotLinks.length} lot link(s) on auction page (${mode} mode).`);
-
-  // ── Visit each lot and scrape its data ────────────────────────────────────
   const lots = [];
+  let lotIndex = 0;
 
-  for (let i = 0; i < lotLinks.length; i++) {
-    const url = lotLinks[i];
-    const lotNum = i + 1;
-    console.log(`[agent]   Scraping lot ${lotNum}/${lotLinks.length}: ${url}`);
+  while (true) {
+    lotIndex++;
+    const currentUrl = page.url();
+    console.log(`[agent]   Scraping lot ${lotIndex}: ${currentUrl}`);
 
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-
-      if (mode === 'public') {
-        // Public lot detail page (verified selectors, 2026-06-11):
-        //   title       → #MainContent_labelName  ("Lot #3 <title>")
-        //   description → #HiddenlabelDescription
-        //   images      → #images-container a.gallery-item hrefs (full-size CDN urls)
-        //   bid amount  → not exposed publicly; best-effort text match, defaults to 0
-        await page.waitForSelector('#MainContent_labelName', { timeout: WAIT_TIMEOUT }).catch(() => {});
-        const data = await page.evaluate(() => {
-          const titleRaw = document.querySelector('#MainContent_labelName')?.textContent?.trim() || '';
-          const description = (document.querySelector('#HiddenlabelDescription')?.innerText || '').trim();
-          const seen = new Set();
-          const imageUrls = [];
-          for (const a of document.querySelectorAll('#images-container a.gallery-item, a.gallery-item')) {
-            const h = a.href;
-            if (h && /\.(jpg|jpeg|png|gif|webp)/i.test(h) && !seen.has(h)) {
-              seen.add(h);
-              imageUrls.push(h);
-            }
-          }
-          if (imageUrls.length === 0) {
-            for (const img of document.querySelectorAll('#images-container img, img[src*="b-cdn"]')) {
-              const src = (img.src || '').replace('_thumbnail', '');
-              if (src && !seen.has(src)) {
-                seen.add(src);
-                imageUrls.push(src);
-              }
-            }
-          }
-          let price = 0;
-          const m = document.body.innerText.match(/(?:Current|Starting|Minimum|High)\s+Bid[^$\n]{0,30}\$\s*([\d,]+(?:\.\d+)?)/i);
-          if (m) price = parseFloat(m[1].replace(/,/g, '')) || 0;
-          return { titleRaw, description, imageUrls, price };
-        });
-
-        const urlNum = url.match(/(?:m-|v-)?lot-(\d+)-/i)?.[1];
-        // auction-details?id= URLs carry an item id, not a lot number — fall
-        // back to the "Lot #N" prefix in the page title, then to the index.
-        const titleNum = data.titleRaw.match(/Lot\s*#?\s*(\d+)/i)?.[1];
-        const derivedLotNum = urlNum || titleNum || String(lotNum);
-        const title = data.titleRaw.replace(/^(?:[MV]\s+)?Lot\s*#?\d+\s*[-–:.]?\s*/i, '').trim() || data.titleRaw;
-
-        console.log(`[agent]     lot_number=${derivedLotNum} title="${title.slice(0, 60)}" bid=$${data.price} images=${data.imageUrls.length}`);
-
-        lots.push({
-          lot_number:  derivedLotNum,
-          title:       title || `Lot ${derivedLotNum}`,
-          description: data.description,
-          price:       data.price,
-          imageUrls:   data.imageUrls,
-          source_url:  url,
-        });
-        continue;
-      }
-
-      // Wait for the title field to appear — confirms we're on a lot edit page
+      // Wait for the title field — confirms we're on a lot edit page
       await page.waitForSelector('#txtTitle, input[name*="Title" i]', {
         state: 'visible',
         timeout: WAIT_TIMEOUT,
       }).catch(() => {});
 
-      // Title — read from confirmed selector #txtTitle
+      // Title
       const titleEl = await findFirst(page, [
         '#txtTitle',
         'input[name="ctl00$MainContent$txtTitle"]',
@@ -429,7 +487,6 @@ async function scrapeLots(page) {
         return srcs;
       });
 
-      // Fall back: any img whose src contains common DOA image path patterns
       let allImageUrls = imageUrls;
       if (allImageUrls.length === 0) {
         allImageUrls = await page.evaluate(() => {
@@ -447,10 +504,10 @@ async function scrapeLots(page) {
         });
       }
 
-      // Extract lot number from URL or title
-      const urlLotMatch = url.match(/[?&](?:id|LotID|lotId|auctionItemId)=(\d+)/i);
+      // Derive lot number: try title prefix first ("Lot 3 -"), then URL id param
       const titleLotMatch = title.match(/^(?:lot\s*#?\s*)?(\d+)/i);
-      const derivedLotNum = urlLotMatch?.[1] || titleLotMatch?.[1] || String(lotNum);
+      const urlIdMatch = currentUrl.match(/[?&](?:id|LotID|lotId|auctionItemId)=(\d+)/i);
+      const derivedLotNum = titleLotMatch?.[1] || urlIdMatch?.[1] || String(lotIndex);
 
       console.log(`[agent]     lot_number=${derivedLotNum} title="${title.slice(0, 60)}" bid=$${price} images=${allImageUrls.length}`);
 
@@ -460,12 +517,49 @@ async function scrapeLots(page) {
         description,
         price,
         imageUrls:   allImageUrls,
-        source_url:  url,
+        source_url:  currentUrl,
       });
-
     } catch (err) {
-      await screenshot(page, `doa-lot-${lotNum}-error`);
-      console.error(`[agent]   ERROR scraping lot ${lotNum}: ${err.message} — skipping`);
+      await screenshot(page, `doa-lot-${lotIndex}-error`);
+      console.error(`[agent]   ERROR scraping lot ${lotIndex}: ${err.message} — skipping`);
+    }
+
+    // Smoke-test cap: stop scraping once we've collected MAX_LOTS lots.
+    if (MAX_LOTS > 0 && lots.length >= MAX_LOTS) {
+      console.log(`[agent] MAX_LOTS=${MAX_LOTS} reached — stopping scrape early (smoke-test mode).`);
+      break;
+    }
+
+    // Advance to the next lot via "Save & Edit Next" (#lnkProcess).
+    // Clicking it in read-only mode is safe — no fields were modified,
+    // so the server re-saves the same data (no-op for DOA).
+    const saveNextEl = await findFirst(page, [
+      '#lnkProcess',
+      'a[id*="Process" i]',
+      'a:has-text("Save & Edit Next")',
+      'button:has-text("Save & Edit Next")',
+      'input[value*="Save & Edit Next" i]',
+    ]);
+
+    if (!saveNextEl) {
+      console.log(`[agent] No "Save & Edit Next" button — reached end after ${lotIndex} lot(s).`);
+      break;
+    }
+
+    try {
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }),
+        saveNextEl.click(),
+      ]);
+    } catch (navErr) {
+      console.log(`[agent] Navigation after lot ${lotIndex} timed out (${navErr.message}) — assuming last lot.`);
+      break;
+    }
+
+    const newUrl = page.url();
+    if (newUrl === currentUrl) {
+      console.log(`[agent] URL unchanged after "Save & Edit Next" — reached last lot after ${lotIndex} lot(s).`);
+      break;
     }
   }
 
@@ -477,27 +571,40 @@ async function scrapeLots(page) {
 /**
  * uploadLots(page, lots)
  *
- * Logs into EstateSales.net and uploads each lot from the scraped array.
- * Downloads DOA images to disk, then re-uploads them to EstateSales.net.
+ * Logs into EstateSales.net and drives the Sale Wizard › Pictures step, which is
+ * a BULK photo uploader (not a per-item form). Three phases:
+ *
+ *   Step 1 — Bulk upload: for each pending lot, reserveLot() (atomic; conflict →
+ *            conservatively skip), download its DOA images, and bulk-upload them
+ *            via the "+ UPLOAD" input. Build a flat imageTitles[] so picture
+ *            index i maps to the title of the lot that owns that picture.
+ *   Step 2 — Caption: open each uploaded picture's editor, paste the owning lot's
+ *            title into the description, "Next" until done.
+ *   Step 3 — SAVE AND CONTINUE → confirmLotUploaded() per lot (throws fatalLedger
+ *            on a ledger anomaly, hard-stopping the run). If the save can't be
+ *            confirmed, markLotFailed() each lot for retry (best-effort).
  */
 async function uploadLots(page, lots) {
   let succeeded = 0;
+  let skippedCount = 0;
   const failedLots = [];
 
-  // ── Dedup: skip lots already uploaded to this sale ───────────────────────
-  // The ledger (estatesales_uploaded_lots) records every lot saved to a given
-  // ES sale URL, so a re-run after a mid-run failure resumes where it left
-  // off instead of creating duplicates. Lots without a source_url can't be
-  // matched against the ledger and are treated as pending.
+  // ── Dedup: skip lots CONFIRMED uploaded to this sale ─────────────────────
+  // Only 'uploaded' rows are pre-skipped here; 'reserved' and 'failed' rows
+  // are handled per-lot via reserveLot(), which conservatively skips them
+  // (no auto-reclaim — see reserveLot for the duplicate-safety reasoning).
+  // Lots without a source_url can't be matched against the ledger and are
+  // treated as pending (they pass through to upload without dedup).
   const uploadedUrls = await fetchUploadedLotUrls();
   const pending = lots.filter((l) => !l.source_url || !uploadedUrls.has(l.source_url));
-  const skipped = lots.length - pending.length;
-  if (skipped > 0) {
-    console.log(`[agent] Skipping ${skipped} already-uploaded lot(s) — ${pending.length} remaining.`);
+  const preSkipped = lots.length - pending.length;
+  if (preSkipped > 0) {
+    console.log(`[agent] Skipping ${preSkipped} already-confirmed-uploaded lot(s) — ${pending.length} remaining.`);
+    skippedCount += preSkipped;
   }
   if (pending.length === 0) {
     console.log('[agent] All lots already uploaded to this sale — nothing to do.');
-    return { succeeded: 0, failed: 0, failedLots: [], skipped };
+    return { succeeded: 0, failed: 0, failedLots: [], skipped: skippedCount };
   }
 
   // user_id for ledger rows (RLS select policy scopes the UI to the owner)
@@ -511,235 +618,245 @@ async function uploadLots(page, lots) {
     jobUserId = jobRow?.user_id ?? null;
   }
 
-  console.log('[agent] Logging into EstateSales.net...');
-  // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
-  await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-  await screenshot(page, 'es-login-page');
+  if (!ES_STORAGE_STATE) {
+    console.log('[agent] Logging into EstateSales.net...');
+    // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
+    await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    await screenshot(page, 'es-login-page');
 
-  // EstateSales.net login form
-  const emailEl = await findFirst(page, [
-    '#email',
-    'input[name="email"]',
-    'input[type="email"]',
-    'input[placeholder*="email" i]',
-  ]);
-  if (!emailEl) {
-    await screenshot(page, 'es-no-email-field');
-    throw new Error(
-      '[agent] Could not find EstateSales.net email input.\n' +
-      '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
-    );
+    // EstateSales.net login form
+    const emailEl = await findFirst(page, [
+      '#email',
+      'input[name="email"]',
+      'input[type="email"]',
+      'input[placeholder*="email" i]',
+    ]);
+    if (!emailEl) {
+      await screenshot(page, 'es-no-email-field');
+      throw new Error(
+        '[agent] Could not find EstateSales.net email input.\n' +
+        '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
+      );
+    }
+    await emailEl.fill(ES_EMAIL);
+
+    const passEl = await findFirst(page, [
+      '#password-input',
+      '#password',
+      'input[name="password"]',
+      'input[type="password"]',
+      'input[placeholder*="password" i]',
+    ]);
+    if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
+    await passEl.fill(ES_PASSWORD);
+
+    // The page has several stray type="submit" buttons (Back, clear) — match the
+    // visible Sign In button by text before falling back to generic selectors.
+    const submitEl = await findFirst(page, [
+      'button:has-text("Sign In")',
+      'button:has-text("Log In")',
+      'button:has-text("Login")',
+      'button[type="submit"]',
+      'input[type="submit"]',
+    ]);
+    if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
+    await submitEl.click();
+    // Angular SPA — redirect after login is client-side, not a full navigation
+    await page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }).catch(() => {});
+    await screenshot(page, 'es-after-login');
+
+    // Verify login succeeded — look for a sign we're authenticated
+    const currentUrl = page.url();
+    if (/\/(sign-?in|log-?in)/i.test(currentUrl)) {
+      await screenshot(page, 'es-login-failed');
+      throw new Error(
+        '[agent] EstateSales.net login appears to have failed — still on login page.\n' +
+        '  Check screenshot "es-login-failed". Verify credentials in VZT Settings.'
+      );
+    }
+    console.log('[agent] Logged into EstateSales.net successfully.');
+  } else {
+    console.log('[agent] Using imported EstateSales.net session (storageState).');
   }
-  await emailEl.fill(ES_EMAIL);
-
-  const passEl = await findFirst(page, [
-    '#password-input',
-    '#password',
-    'input[name="password"]',
-    'input[type="password"]',
-    'input[placeholder*="password" i]',
-  ]);
-  if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
-  await passEl.fill(ES_PASSWORD);
-
-  // The page has several stray type="submit" buttons (Back, clear) — match the
-  // visible Sign In button by text before falling back to generic selectors.
-  const submitEl = await findFirst(page, [
-    'button:has-text("Sign In")',
-    'button:has-text("Log In")',
-    'button:has-text("Login")',
-    'button[type="submit"]',
-    'input[type="submit"]',
-  ]);
-  if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
-  await submitEl.click();
-  // Angular SPA — redirect after login is client-side, not a full navigation
-  await page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }).catch(() => {});
-  await screenshot(page, 'es-after-login');
-
-  // Verify login succeeded — look for a sign we're authenticated
-  const currentUrl = page.url();
-  if (/\/(sign-?in|log-?in)/i.test(currentUrl)) {
-    await screenshot(page, 'es-login-failed');
-    throw new Error(
-      '[agent] EstateSales.net login appears to have failed — still on login page.\n' +
-      '  Check screenshot "es-login-failed". Verify credentials in VZT Settings.'
-    );
-  }
-  console.log('[agent] Logged into EstateSales.net successfully.');
 
   // Navigate to the sale management page
   console.log('[agent] Navigating to EstateSales.net sale page...');
   await page.goto(ES_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
   await screenshot(page, 'es-sale-page');
 
+  // When using a storageState session, verify it is still valid after navigation.
+  // If the site bounced us to a sign-in page the session has expired.
+  if (ES_STORAGE_STATE) {
+    const salePageUrl = page.url();
+    if (/\/(sign-?in|log-?in)/i.test(salePageUrl)) {
+      await screenshot(page, 'es-session-expired');
+      throw new Error(
+        '[agent] EstateSales.net session expired or invalid — re-export your session from VZT Settings.'
+      );
+    }
+  }
+
   // ── Prepare temp image dir ───────────────────────────────────────────────
   fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
-  // ── Upload each lot ──────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // EstateSales.net Sale Wizard › Pictures step is a BULK photo uploader, not a
+  // per-item form. David's actual flow:
+  //   1. Bulk-add every lot's images to the Pictures step.
+  //   2. Open each uploaded picture and paste the owning lot's title into the
+  //      description, hitting "Next" until done.
+  //   3. SAVE AND CONTINUE.
+  // We upload in lot order and build a flat imageTitles[] so picture index i
+  // maps to the title of the lot that owns that picture.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ── Step 1: Bulk-upload images, per-lot batches ──────────────────────────
+  const imageTitles = [];        // flat: imageTitles[pictureIndex] = lot title
+  const uploadedLotState = [];   // { lot } in upload order — confirmed after save
+  let thumbCount = await countEsThumbnails(page);
+
   for (let i = 0; i < pending.length; i++) {
     const lot = pending[i];
-    console.log(`\n[agent] Uploading lot ${i + 1}/${pending.length}: "${lot.title.slice(0, 60)}"`);
+    console.log(`\n[agent] Lot ${i + 1}/${pending.length}: "${lot.title.slice(0, 60)}" — reserving + uploading images`);
+
+    // Atomically reserve the lot (race-safe claim; conflict → conservatively skip)
+    let reservation;
+    try {
+      reservation = await reserveLot(lot, jobUserId);
+    } catch (reserveErr) {
+      // reserveLot only throws on real DB errors — surface and abort the lot
+      await screenshot(page, `es-reserve-error-lot-${i + 1}`);
+      console.error(`[agent]   ERROR reserving lot ${i + 1}: ${reserveErr.message}`);
+      failedLots.push({ index: i + 1, title: lot.title, error: reserveErr.message });
+      continue;
+    }
+    if (!reservation.claimed) {
+      console.log(`[agent]   Skipping lot ${i + 1} — ${reservation.reason}`);
+      skippedCount++;
+      continue;
+    }
+
+    if (!lot.imageUrls || lot.imageUrls.length === 0) {
+      const msg = `Lot ${i + 1} has no images to upload`;
+      console.warn(`[agent]   WARNING: ${msg}`);
+      await markLotFailed(lot);
+      failedLots.push({ index: i + 1, title: lot.title, error: msg });
+      continue;
+    }
 
     try {
-      // Navigate to the "add item" page.
-      // EstateSales.net sale management pages typically have an "Add Item" button
-      // or a direct URL like <sale-url>/items/new or <sale-url>/add-item.
-      // Try appending common paths, then fall back to clicking a button.
-      const addItemUrl = ES_URL.replace(/\/$/, '') + '/items/new';
-      await page.goto(addItemUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-
-      // If the direct URL didn't land on an item form, try clicking an Add Item button
-      const onItemForm = await page.locator('#Name, #name, input[name="Name"], input[name="name"]')
-        .first()
-        .isVisible()
-        .catch(() => false);
-
-      if (!onItemForm) {
-        // Fall back: navigate back to sale page and click "Add Item"
-        await page.goto(ES_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-        const addBtn = await findFirst(page, [
-          'a:has-text("Add Item")',
-          'button:has-text("Add Item")',
-          'a:has-text("Add Listing")',
-          'button:has-text("Add Listing")',
-          'a:has-text("New Item")',
-          'a[href*="add-item"]',
-          'a[href*="items/new"]',
-          'a[href*="AddItem"]',
-          '.add-item-btn',
-        ]);
-        if (!addBtn) {
-          await screenshot(page, `es-no-add-button-lot-${i + 1}`);
-          throw new Error(
-            `[agent] Could not find "Add Item" button on EstateSales.net sale page.\n` +
-            `  Check screenshot "es-no-add-button-lot-${i + 1}" and update selectors.`
-          );
-        }
-        await addBtn.click();
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
-      }
-
-      await screenshot(page, `es-add-item-form-lot-${i + 1}`);
-
-      // Fill item name / title
-      const nameEl = await findFirst(page, [
-        '#Name',
-        '#name',
-        '#ItemName',
-        'input[name="Name"]',
-        'input[name="name"]',
-        'input[name="ItemName"]',
-        'input[placeholder*="name" i]',
-        'input[placeholder*="title" i]',
-        'input[id*="name" i]',
-        'input[id*="title" i]',
-      ]);
-      if (nameEl) {
-        await nameEl.fill(lot.title);
-      } else {
-        console.warn(`[agent]   WARNING: Could not find name/title field for lot ${i + 1}`);
-      }
-
-      // Fill description
-      // EstateSales.net may use a plain textarea or a rich text editor
-      const descEl = await findFirst(page, [
-        '#Description',
-        '#description',
-        'textarea[name="Description"]',
-        'textarea[name="description"]',
-        'textarea[id*="description" i]',
-        'textarea[placeholder*="description" i]',
-      ], 3_000);
-
-      if (descEl) {
-        await descEl.fill(lot.description || lot.title);
-      } else {
-        // Try TinyMCE / rich text editor
-        const tinyFilled = await page.evaluate((desc) => {
-          if (window.tinymce && window.tinymce.editors?.length > 0) {
-            window.tinymce.editors[0].setContent(desc);
-            return true;
-          }
-          return false;
-        }, lot.description || lot.title).catch(() => false);
-
-        if (!tinyFilled) {
-          console.warn(`[agent]   WARNING: Could not find description field for lot ${i + 1}`);
-        }
-      }
-
-      // Fill price
-      const priceEl = await findFirst(page, [
-        '#Price',
-        '#price',
-        '#StartingBid',
-        'input[name="Price"]',
-        'input[name="price"]',
-        'input[name="StartingBid"]',
-        'input[placeholder*="price" i]',
-        'input[placeholder*="bid" i]',
-        'input[id*="price" i]',
-      ], 3_000);
-      if (priceEl) {
-        await priceEl.fill(String(lot.price || 1));
-      } else {
-        console.warn(`[agent]   WARNING: Could not find price field for lot ${i + 1}`);
-      }
-
-      // Upload images
-      if (lot.imageUrls && lot.imageUrls.length > 0) {
-        await uploadImagesToEstateSales(page, lot, i + 1);
-      }
-
-      // Submit the form
-      const saveEl = await findFirst(page, [
-        'button[type="submit"]',
-        'input[type="submit"]',
-        'button:has-text("Save")',
-        'button:has-text("Add Item")',
-        'button:has-text("Create")',
-        'button:has-text("Submit")',
-        'button:has-text("Post")',
-      ]);
-      if (saveEl) {
-        await saveEl.click();
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
-        await screenshot(page, `es-after-save-lot-${i + 1}`);
-        console.log(`[agent]   Lot ${i + 1} saved: "${lot.title.slice(0, 60)}"`);
-        succeeded++;
-        await recordUploadedLot(lot, jobUserId);
-        if (succeeded % 5 === 0) await updateJobFields({ lots_uploaded: succeeded });
-      } else {
-        await screenshot(page, `es-no-save-button-lot-${i + 1}`);
-        const msg = `Could not find save/submit button for lot ${i + 1}`;
+      const uploaded = await uploadLotImages(page, lot, i + 1, thumbCount);
+      if (uploaded === 0) {
+        const msg = `No images uploaded for lot ${i + 1}`;
         console.warn(`[agent]   WARNING: ${msg}`);
+        await markLotFailed(lot);
         failedLots.push({ index: i + 1, title: lot.title, error: msg });
+        continue;
       }
-
+      thumbCount += uploaded;
+      for (let k = 0; k < uploaded; k++) imageTitles.push(lot.title);
+      uploadedLotState.push({ lot });
+      console.log(`[agent]   Uploaded ${uploaded} image(s) for lot ${i + 1}`);
     } catch (err) {
-      await screenshot(page, `es-error-lot-${i + 1}`);
-      console.error(`[agent]   ERROR uploading lot ${i + 1}: ${err.message}`);
+      await screenshot(page, `es-upload-error-lot-${i + 1}`);
+      console.error(`[agent]   ERROR uploading images for lot ${i + 1}: ${err.message}`);
+      await markLotFailed(lot);
       failedLots.push({ index: i + 1, title: lot.title, error: err.message });
     }
   }
 
-  return { succeeded, failed: failedLots.length, failedLots, skipped };
+  if (imageTitles.length === 0) {
+    console.warn('[agent] No images uploaded for any lot — nothing to caption.');
+    return { succeeded, failed: failedLots.length, failedLots, skipped: skippedCount };
+  }
+
+  // ── Step 2: Per-image description pass ───────────────────────────────────
+  // Open each uploaded picture's editor and paste its owning lot's title into
+  // the description, advancing with "Next" until all images are captioned.
+  let captioned = 0;
+  try {
+    captioned = await captionEsImages(page, imageTitles);
+    console.log(`[agent]   Captioned ${captioned}/${imageTitles.length} image(s).`);
+  } catch (err) {
+    await screenshot(page, 'es-caption-error');
+    console.error(`[agent]   ERROR during description pass: ${err.message}`);
+  }
+
+  // ── Step 3: Commit the Pictures step ─────────────────────────────────────
+  const saved = await saveEsPictures(page);
+  await screenshot(page, 'es-after-save-pictures');
+
+  // ── Ledger: confirm fully-uploaded lots ──────────────────────────────────
+  // Images bulk-uploaded AND the Pictures step saved → confirm each lot. A
+  // ledger anomaly in confirmLotUploaded throws (fatalLedger) and hard-stops
+  // the run — uploaded to ES but un-recordable means manual intervention.
+  if (saved) {
+    for (const { lot } of uploadedLotState) {
+      await confirmLotUploaded(lot);
+      succeeded++;
+    }
+    console.log(`[agent]   ${succeeded} lot(s) confirmed uploaded to EstateSales.`);
+  } else {
+    console.warn('[agent]   WARNING: Pictures step save not confirmed — marking uploaded lots failed for retry.');
+    for (const { lot } of uploadedLotState) {
+      await markLotFailed(lot);
+      failedLots.push({ index: null, title: lot.title, error: 'Pictures step save not confirmed' });
+    }
+  }
+
+  await updateJobFields({ lots_uploaded: succeeded, lots_skipped: skippedCount });
+
+  return { succeeded, failed: failedLots.length, failedLots, skipped: skippedCount };
 }
 
 /**
- * uploadImagesToEstateSales(page, lot, lotIndex)
+ * countEsThumbnails(page)
  *
- * Downloads each image from DOA to a temp file, then uploads via the
- * EstateSales.net file input.
+ * Counts the uploaded picture thumbnails currently shown in the Pictures step's
+ * "Images" grid. Used to confirm a batch upload registered (count rises by the
+ * number of files sent). Selectors are a resilient cascade — refine against the
+ * es-pictures-* / es-image-editor-* screenshots if the count reads 0.
  */
-async function uploadImagesToEstateSales(page, lot, lotIndex) {
-  // Download images to local temp files
+async function countEsThumbnails(page) {
+  try {
+    return await page.evaluate(() => {
+      const selectors = [
+        '.image-grid img',
+        '[class*="image-list"] img',
+        '[class*="picture-list"] img',
+        '[class*="thumbnail"] img',
+        '[class*="thumbnail"]',
+        '[class*="image-card"]',
+        'img[src*="estatesales"]',
+      ];
+      for (const sel of selectors) {
+        const n = document.querySelectorAll(sel).length;
+        if (n > 0) return n;
+      }
+      return 0;
+    });
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * uploadLotImages(page, lot, lotIndex, priorThumbCount)
+ *
+ * Downloads a lot's images from DOA to temp files, then bulk-uploads them via
+ * the Pictures step's "+ UPLOAD" hidden <input type="file" multiple>. Waits for
+ * the thumbnail count to rise by the number of files sent (best-effort), then
+ * cleans up. Returns the number of files sent (used to map picture index →
+ * owning lot title). Throws if no file input can be found.
+ */
+async function uploadLotImages(page, lot, lotIndex, priorThumbCount) {
+  // Download images to local temp files (zero-padded for stable upload order)
   const localPaths = [];
   for (let j = 0; j < lot.imageUrls.length; j++) {
     const url = lot.imageUrls[j];
     const ext = url.match(/\.(jpg|jpeg|png|gif|webp)/i)?.[1] || 'jpg';
-    const dest = path.join(IMAGES_DIR, `lot-${lot.lot_number}-img-${j + 1}.${ext}`);
+    const seq = String(j + 1).padStart(3, '0');
+    const dest = path.join(IMAGES_DIR, `lot-${lot.lot_number}-img-${seq}.${ext}`);
     try {
       await downloadImage(url, dest);
       localPaths.push(dest);
@@ -747,36 +864,214 @@ async function uploadImagesToEstateSales(page, lot, lotIndex) {
       console.warn(`[agent]   Could not download image ${j + 1} for lot ${lotIndex}: ${err.message}`);
     }
   }
+  if (localPaths.length === 0) return 0;
 
-  if (localPaths.length === 0) return;
-
-  // Find the file input on the EstateSales.net form
-  const fileInput = await findFirst(page, [
+  // Locate the bulk "+ UPLOAD" file input. The visible blue "+ UPLOAD" button
+  // proxies to a hidden <input type="file" multiple>; target it directly.
+  let fileInput = await findFirst(page, [
+    'input[type="file"][multiple]',
     'input[type="file"][accept*="image"]',
     'input[type="file"]',
-    '#images',
-    '#photos',
-    'input[name="images"]',
-    'input[name="photos"]',
-    'input[name="Images"]',
-    'input[name="Photos"]',
-    'input[id*="image" i][type="file"]',
-    'input[id*="photo" i][type="file"]',
-  ], 3_000);
+  ], 5_000);
 
-  if (fileInput) {
-    await fileInput.setInputFiles(localPaths);
-    // Wait briefly for any upload progress
+  // Some Angular uploaders only inject the input after the button is clicked.
+  if (!fileInput) {
+    const uploadBtn = await findFirst(page, [
+      'button:has-text("UPLOAD")',
+      'button:has-text("Upload")',
+      'a:has-text("UPLOAD")',
+      '[class*="upload"] button',
+    ], 3_000);
+    if (uploadBtn) {
+      await uploadBtn.click().catch(() => {});
+      fileInput = await findFirst(page, [
+        'input[type="file"][multiple]',
+        'input[type="file"]',
+      ], 3_000);
+    }
+  }
+
+  if (!fileInput) {
+    await screenshot(page, `es-no-file-input-lot-${lotIndex}`);
+    throw new Error(
+      `[agent] Could not find the "+ UPLOAD" file input on the Pictures step ` +
+      `(lot ${lotIndex}). Check screenshot "es-no-file-input-lot-${lotIndex}" and update selectors.`
+    );
+  }
+
+  await fileInput.setInputFiles(localPaths);
+
+  // Wait for the uploads to register: network settle + thumbnail count rise.
+  await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+  const target = priorThumbCount + localPaths.length;
+  const deadline = Date.now() + 60_000;
+  let registered = false;
+  while (Date.now() < deadline) {
+    if ((await countEsThumbnails(page)) >= target) { registered = true; break; }
+    await page.waitForTimeout(1_000);
+  }
+  if (!registered) {
+    // Thumbnails couldn't be counted (selector miss) or upload is slow — give
+    // it a final settle. setInputFiles itself succeeded, so proceed best-effort.
     await page.waitForTimeout(2_000).catch(() => {});
-    console.log(`[agent]   Uploaded ${localPaths.length} image(s) for lot ${lotIndex}`);
-  } else {
-    console.warn(`[agent]   WARNING: No file input found for images on lot ${lotIndex} — images not uploaded`);
   }
 
   // Clean up temp image files
   for (const p of localPaths) {
     try { fs.unlinkSync(p); } catch { /* non-fatal */ }
   }
+
+  return localPaths.length;
+}
+
+/**
+ * captionEsImages(page, imageTitles)
+ *
+ * Opens the first uploaded picture's editor, then for each picture pastes the
+ * owning lot's title (imageTitles[i]) into the description field and advances
+ * with "Next" until all pictures are captioned or Next is unavailable. Returns
+ * the number of pictures captioned. Screenshots the editor on first open so the
+ * description/Next selectors can be refined against real DOM.
+ */
+async function captionEsImages(page, imageTitles) {
+  const total = imageTitles.length;
+
+  // Open the first image's editor — try the edit pencil, then the thumbnail.
+  const openEditor = await findFirst(page, [
+    '[class*="image"] [class*="edit"]',
+    'button[title*="edit" i]',
+    '[aria-label*="edit" i]',
+    '.fa-pencil',
+    '.fa-edit',
+    'i[class*="pencil"]',
+    '[class*="image-card"]',
+    '[class*="thumbnail"]',
+    '.image-grid img',
+  ], 5_000);
+  if (!openEditor) {
+    await screenshot(page, 'es-no-image-editor');
+    throw new Error('[agent] Could not open the image editor on the Pictures step. Check screenshot "es-no-image-editor".');
+  }
+  await openEditor.click().catch(() => {});
+  await page.waitForTimeout(1_500);
+  await screenshot(page, 'es-image-editor-first'); // refine selectors from this
+
+  let captioned = 0;
+  for (let i = 0; i < total; i++) {
+    const ok = await fillEsImageDescription(page, imageTitles[i]);
+    if (ok) captioned++;
+    else console.warn(`[agent]   WARNING: could not set description for image ${i + 1}/${total}`);
+
+    if (i < total - 1) {
+      const advanced = await clickEsNext(page);
+      if (!advanced) {
+        console.warn(`[agent]   No "Next" available after image ${i + 1}/${total} — ending caption pass early.`);
+        break;
+      }
+      await page.waitForTimeout(800);
+    }
+  }
+  return captioned;
+}
+
+/**
+ * fillEsImageDescription(page, text)
+ *
+ * Sets the image editor's description field via a resilient cascade:
+ * plain textarea/input → contenteditable → TinyMCE → raw textarea value.
+ * Returns true if any path succeeded.
+ */
+async function fillEsImageDescription(page, text) {
+  const descEl = await findFirst(page, [
+    'textarea[name*="description" i]',
+    'textarea[id*="description" i]',
+    'textarea[placeholder*="description" i]',
+    'textarea[placeholder*="caption" i]',
+    'input[name*="description" i]',
+    'textarea',
+  ], 3_000);
+  if (descEl) {
+    try {
+      await descEl.fill('');
+      await descEl.fill(text);
+      return true;
+    } catch { /* fall through to DOM cascade */ }
+  }
+
+  return await page.evaluate((t) => {
+    const ce = document.querySelector('[contenteditable="true"]');
+    if (ce) {
+      ce.focus();
+      ce.innerHTML = t;
+      ce.dispatchEvent(new Event('input', { bubbles: true }));
+      ce.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    if (window.tinymce && window.tinymce.editors && window.tinymce.editors.length > 0) {
+      window.tinymce.editors[0].setContent(t);
+      return true;
+    }
+    const ta = document.querySelector(
+      'textarea[name*="description" i], textarea[id*="description" i], textarea'
+    );
+    if (ta) {
+      ta.value = t;
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }, text).catch(() => false);
+}
+
+/**
+ * clickEsNext(page)
+ *
+ * Advances the image editor to the next picture. Returns false if no enabled
+ * "Next" control exists (end of the set).
+ */
+async function clickEsNext(page) {
+  const nextEl = await findFirst(page, [
+    'button:has-text("Next"):not([disabled])',
+    'button[aria-label*="next" i]:not([disabled])',
+    '[class*="next"]:not([disabled])',
+    'button:has-text(">"):not([disabled])',
+  ], 3_000);
+  if (!nextEl) return false;
+  if (await nextEl.isDisabled().catch(() => false)) return false;
+  await nextEl.click().catch(() => {});
+  return true;
+}
+
+/**
+ * saveEsPictures(page)
+ *
+ * Commits the Pictures step via "SAVE AND CONTINUE". Returns true if the click
+ * landed without surfacing an error/auth state (the wizard is an SPA and may
+ * not navigate). Returns false if the button is missing or an error appears.
+ */
+async function saveEsPictures(page) {
+  const saveEl = await findFirst(page, [
+    'button:has-text("SAVE AND CONTINUE")',
+    'button:has-text("Save and Continue")',
+    'button:has-text("Save & Continue")',
+    'button:has-text("Save")',
+  ], 5_000);
+  if (!saveEl) {
+    await screenshot(page, 'es-no-save-pictures');
+    console.warn('[agent]   WARNING: Could not find "SAVE AND CONTINUE" button.');
+    return false;
+  }
+  await Promise.all([
+    page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {}),
+    saveEl.click(),
+  ]);
+  await page.waitForTimeout(1_500);
+  if (await hasErrorOrAuthState(page)) {
+    await screenshot(page, 'es-save-pictures-error');
+    return false;
+  }
+  return true;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -785,16 +1080,35 @@ async function run() {
   if (!DOA_EMAIL || !DOA_PASSWORD || !DOA_URL) {
     throw new Error('DOA_EMAIL, DOA_PASSWORD, and DOA_URL are required');
   }
-  if (!ES_EMAIL || !ES_PASSWORD || !ES_URL) {
-    throw new Error('ESTATESALES_EMAIL, ESTATESALES_PASSWORD, and ESTATESALES_URL are required');
+  if (!ES_URL) {
+    throw new Error('ESTATESALES_URL is required');
+  }
+  if (!ES_STORAGE_STATE && (!ES_EMAIL || !ES_PASSWORD)) {
+    throw new Error(
+      'EstateSales.net auth is missing. Provide either:\n' +
+      '  ES_STORAGE_STATE (exported Playwright session JSON — preferred for Google-SSO accounts), OR\n' +
+      '  ESTATESALES_EMAIL + ESTATESALES_PASSWORD (email/password login).\n' +
+      'Set credentials in VZT Settings.'
+    );
   }
 
   await updateJobStatus('running');
+
+  // Parse storageState JSON if provided (Google-SSO session import)
+  let parsedStorageState;
+  if (ES_STORAGE_STATE) {
+    try {
+      parsedStorageState = JSON.parse(ES_STORAGE_STATE);
+    } catch (e) {
+      throw new Error('[agent] ES_STORAGE_STATE is not valid session JSON — re-export it from VZT Settings.');
+    }
+  }
 
   const browser = await chromium.launch({ headless: IS_CI });
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    storageState: parsedStorageState,
   });
   const page = await context.newPage();
 
@@ -848,11 +1162,21 @@ async function run() {
     // ── Phase 2: EstateSales upload ──────────────────────────────────────────
     console.log('\n[agent] ── Phase 2: EstateSales Upload ─────────────────────');
     const uploadResult = await uploadLots(page, lots);
-    console.log(`\n[agent] Phase 2 complete — ${uploadResult.succeeded} succeeded, ${uploadResult.failed} failed.`);
-    await updateJobFields({ lots_uploaded: uploadResult.succeeded });
+    // On rerun where all lots were already uploaded, report skipped+succeeded
+    // so the operator sees "199 of 199" rather than "0 of 199".
+    const totalAccountedFor = uploadResult.succeeded + uploadResult.skipped;
+    console.log(
+      `\n[agent] Phase 2 complete — ${uploadResult.succeeded} newly uploaded, ` +
+      `${uploadResult.skipped} already uploaded (skipped), ${uploadResult.failed} failed. ` +
+      `(${totalAccountedFor}/${lots.length} total accounted for)`
+    );
+    await updateJobFields({
+      lots_uploaded: uploadResult.succeeded,
+      lots_skipped:  uploadResult.skipped,
+    });
     if (uploadResult.failed > 0) {
       const summary = uploadResult.failedLots.map(l => `Lot ${l.index}: ${l.error}`).join('; ');
-      if (uploadResult.succeeded === 0) {
+      if (uploadResult.succeeded === 0 && uploadResult.skipped === 0) {
         throw new Error(`All ${uploadResult.failed} lot(s) failed to upload. ${summary}`);
       }
       // Partial success — throw a typed error so the entry point can distinguish
@@ -881,6 +1205,7 @@ run()
   .catch(async (err) => {
     if (err.partial) {
       console.warn('\n[agent] Partial failure:', err.message);
+      // partial_failed is a terminal status and gets completed_at set in updateJobStatus
       await updateJobStatus('partial_failed', err.message);
       process.exit(0);
     }

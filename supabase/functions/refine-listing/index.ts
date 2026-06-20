@@ -50,7 +50,13 @@ serve(async (req) => {
 
     console.log(`Authenticated user: ${user.id}`);
 
-    const { currentListing, correctionPrompt, imageUrls, platform = 'liveauctioneers', mode = 'refine', masterPrompt } = await req.json() as RefineRequest;
+    const authedClient = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    const { currentListing, correctionPrompt, imageUrls = [], platform = 'liveauctioneers', mode = 'refine', masterPrompt } = await req.json() as RefineRequest;
 
     console.log(`Mode: ${mode}, Platform: ${platform}`);
 
@@ -61,18 +67,40 @@ serve(async (req) => {
 
     // Build Anthropic content with images for reference
     const imageContent: any[] = [];
-    for (const url of imageUrls) {
+    for (const url of imageUrls.filter(Boolean)) {
       imageContent.push({ type: "image", source: { type: "url", url } });
     }
 
     if (mode === 'verify') {
       console.log('Running listing verification with Claude...');
 
+      let lessons: { id: string; lesson_text: string }[] = [];
+      try {
+        const { data, error: lessonsErr } = await authedClient
+          .from('listing_correction_lessons')
+          .select('id, lesson_text')
+          .eq('retired', false)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        if (lessonsErr) {
+          console.warn('lesson fetch skipped:', lessonsErr.message);
+        } else {
+          lessons = data ?? [];
+          if (lessons.length > 0) console.log(`Injected ${lessons.length} distilled lesson(s)`);
+        }
+      } catch (e) {
+        console.warn('lesson fetch failed (non-blocking):', e);
+      }
+
+      const lessonsSection = lessons.length > 0
+        ? `=== LEARNED LESSONS (from this seller's correction history) ===\n${lessons.map(l => `- ${l.lesson_text}`).join('\n')}\n=== END LEARNED LESSONS ===\n\n`
+        : '';
+
       const masterPromptSection = masterPrompt
         ? `\nBUSINESS CONTEXT (apply to all evaluations):\n${masterPrompt}\n`
         : '';
 
-      const verifySystemPrompt = `You are an expert eBay listing quality auditor with deep knowledge of current market prices.${masterPromptSection}
+      const verifySystemPrompt = `${lessonsSection}You are an expert eBay listing quality auditor with deep knowledge of current market prices.${masterPromptSection}
 
 Analyze the listing title, description, price, condition, and item specifics for quality and accuracy.
 
@@ -123,9 +151,9 @@ No markdown fences. Return only the JSON object.`;
       if (!verifyResponse.ok) {
         const errorText = await verifyResponse.text();
         console.error('Anthropic API error:', verifyResponse.status, errorText);
-        if (verifyResponse.status === 429) {
+        if (verifyResponse.status === 429 || verifyResponse.status === 529 || verifyResponse.status === 503) {
           return new Response(
-            JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+            JSON.stringify({ error: 'AI service is temporarily busy. Please try again in a moment.' }),
             { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
         }
@@ -200,7 +228,7 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1500,
+        max_tokens: 2500,
         system: systemPrompt,
         messages: [{ role: 'user', content }],
       }),
@@ -210,9 +238,9 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
       const errorText = await response.text();
       console.error('Anthropic API error:', response.status, errorText);
 
-      if (response.status === 429) {
+      if (response.status === 429 || response.status === 529 || response.status === 503) {
         return new Response(
-          JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+          JSON.stringify({ error: 'AI service is temporarily busy. Please try again in a moment.' }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
@@ -227,13 +255,19 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
     // Parse the JSON from the response
     let refinedListing;
     try {
-      // Extract JSON from potential markdown code blocks
-      const jsonMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, aiResponse];
-      const jsonStr = jsonMatch[1].trim();
-      refinedListing = JSON.parse(jsonStr);
+      const codeBlockMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        refinedListing = JSON.parse(codeBlockMatch[1].trim());
+      } else {
+        const objMatch = aiResponse.match(/\{[\s\S]*\}/);
+        refinedListing = JSON.parse(objMatch ? objMatch[0] : aiResponse.trim());
+      }
     } catch (parseError) {
-      console.error('Failed to parse AI response:', aiResponse);
-      throw new Error('Failed to parse AI response as JSON');
+      console.error('Failed to parse AI response as JSON:', aiResponse.substring(0, 500));
+      return new Response(
+        JSON.stringify({ error: 'AI returned an unparseable response. Please try again.' }),
+        { status: 422, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     return new Response(

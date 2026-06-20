@@ -87,6 +87,29 @@ MC_SUPABASE_ANON_KEY=<personal-os anon key>
 
 ---
 
+## Self-Improving AI Loop (Hermes Loop)
+
+VZT has a fully closed 3-stage corrective knowledge loop. Any agent touching the listing pipeline must understand this to avoid breaking it.
+
+**Stage 1 — Capture:** When an operator accepts a changed AI output (title or item_specifics changed), `captureCorrection()` in `EbayBatchPanel.tsx` writes the before/after to `listing_corrections` and fires `distill-lessons` + `embed-corrections` fire-and-forget.
+
+**Stage 2 — Distill:** `distill-lessons` edge function (Sonnet 4.6) triggers after every capture. When 5+ undistilled corrections have accumulated, it synthesises them into general rules in `listing_correction_lessons`. Do not downgrade this function to Haiku — it needs reasoning quality to find patterns across corrections.
+
+**Stage 3 — Re-inject:** Every evaluative AI call reads up to 5 active lessons via `authedClient` (RLS-scoped — do NOT use anon client) and prepends a `=== LEARNED LESSONS ===` block to the system prompt.
+
+**Which functions are closed:**
+- `generate-listing` — reads lessons at lines ~935-940
+- `refine-listing` (verify mode only) — reads lessons before building system prompt; refine mode is intentionally excluded (directive mode — user gives specific instruction, lessons cause drift)
+
+**Do not inject lessons into refine mode.** It is directive. If the user says "change the title to X", the AI should only change the title. Learned lessons in that context risk unwanted modifications to other fields.
+
+**Key tables:** `listing_corrections`, `listing_correction_lessons`, `correction_injections`
+**authedClient pattern:** `createClient(url, anonKey, { global: { headers: { Authorization: authHeader } } })`
+
+See `~/.claude/skills/hermes-loop/SKILL.md` for the portable framework (adapts to any domain).
+
+---
+
 ## Standing Rules
 
 - Never push directly to main without review
@@ -98,4 +121,4 @@ MC_SUPABASE_ANON_KEY=<personal-os anon key>
 
 ## Last Updated
 
-2026-05-17
+2026-06-11

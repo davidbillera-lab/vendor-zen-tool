@@ -10,7 +10,7 @@ interface EnhanceRequest {
   imageUrl: string;
   prompt: string;
   mode: 'enhance' | 'generate' | 'edit';
-  provider: 'gpt-image-2' | 'gemini';
+  provider?: string;
 }
 
 serve(async (req) => {
@@ -76,11 +76,7 @@ serve(async (req) => {
 
     let base64Image: string;
 
-    if (provider === 'gemini') {
-      base64Image = await callGemini(imageUrl, prompt, mode);
-    } else {
-      base64Image = await callGptImage2(imageUrl, prompt, mode);
-    }
+    base64Image = await callGptImage2(imageUrl, prompt, mode);
 
     // Increment usage atomically now that the image was generated successfully
     await serviceClient.rpc('increment_enhancement_count', {
@@ -164,17 +160,21 @@ async function callGptImage2(imageUrl: string, prompt: string, mode: string): Pr
         prompt: effectivePrompt,
         n: 1,
         size: '1024x1024',
+        quality: 'medium',
       }),
     });
   } else {
     // Edit or enhance: edits endpoint (multipart)
     const imgBytes = await fetchImageBytes(imageUrl);
+    const mimeType = detectMimeType(imageUrl);
+    const ext = mimeType === 'image/png' ? 'png' : 'jpeg';
     const form = new FormData();
     form.append('model', 'gpt-image-2');
     form.append('prompt', effectivePrompt);
     form.append('n', '1');
     form.append('size', '1024x1024');
-    form.append('image', new Blob([imgBytes], { type: 'image/png' }), 'image.png');
+    form.append('quality', 'medium');
+    form.append('image', new Blob([imgBytes], { type: mimeType }), `image.${ext}`);
 
     response = await fetch('https://api.openai.com/v1/images/edits', {
       method: 'POST',
@@ -201,52 +201,25 @@ async function extractOpenAIBase64(response: Response): Promise<string> {
   return b64;
 }
 
-// ── Provider: Google Gemini image generation ─────────────────────────────────
+// ── Shared helpers ───────────────────────────────────────────────────────────
 
-async function callGemini(imageUrl: string, prompt: string, mode: string): Promise<string> {
-  const GOOGLE_AI_API_KEY = Deno.env.get('GOOGLE_AI_API_KEY');
-  if (!GOOGLE_AI_API_KEY) throw new Error('GOOGLE_AI_API_KEY is not configured');
-
-  const effectivePrompt = mode === 'enhance'
-    ? `Enhance this product image for e-commerce listing. Make it look professional with good lighting, clean background, clear details, and appealing presentation. ${prompt || 'Improve overall quality and appeal.'}`
-    : prompt;
-
-  const parts: unknown[] = [{ text: effectivePrompt }];
-
-  if (mode !== 'generate' && imageUrl) {
-    const imgBytes = await fetchImageBytes(imageUrl);
-    const b64 = btoa(String.fromCharCode(...imgBytes));
-    parts.push({ inlineData: { mimeType: 'image/png', data: b64 } });
+function detectMimeType(imageUrl: string): string {
+  if (imageUrl.startsWith('data:')) {
+    const match = imageUrl.match(/^data:([^;]+);/);
+    return match ? match[1] : 'image/jpeg';
   }
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${GOOGLE_AI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Gemini API error:', response.status, errorText);
-    if (response.status === 429) throw new Error('Rate limit exceeded. Please try again later.');
-    throw new Error(`Gemini API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const imagePart = data?.candidates?.[0]?.content?.parts?.find(
-    (p: { inlineData?: { data: string } }) => p.inlineData?.data
-  );
-  if (!imagePart?.inlineData?.data) throw new Error('No image returned from Gemini');
-  return imagePart.inlineData.data;
+  return 'image/jpeg';
 }
 
-// ── Shared helpers ───────────────────────────────────────────────────────────
+// Chunk-based btoa to avoid call stack overflow on large images
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const CHUNK = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + CHUNK, bytes.length)));
+  }
+  return btoa(binary);
+}
 
 async function fetchImageBytes(imageUrl: string): Promise<Uint8Array> {
   if (imageUrl.startsWith('data:')) {

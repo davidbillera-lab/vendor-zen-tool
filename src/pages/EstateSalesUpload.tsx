@@ -19,10 +19,11 @@ interface Job {
   id: string;
   doa_url: string;
   estatesales_url: string;
-  status: "pending" | "running" | "completed" | "failed";
-  error: string | null;
+  status: "pending" | "running" | "completed" | "failed" | "partial_failed";
+  error_message: string | null;
   created_at: string;
-  updated_at: string;
+  lots_scraped: number | null;
+  lots_uploaded: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ export default function EstateSalesUpload() {
     try {
       const { data, error } = await supabase
         .from("estatesales_jobs" as any)
-        .select("id, doa_url, estatesales_url, status, error, created_at, updated_at")
+        .select("id, doa_url, estatesales_url, status, error_message, created_at, lots_scraped, lots_uploaded")
         .order("created_at", { ascending: false })
         .limit(20);
       if (error) throw error;
@@ -206,6 +207,7 @@ const STATUS_CONFIG = {
   running:   { label: "Running",   Icon: Loader2,      cls: "text-blue-600 bg-blue-500/10",     spin: true  },
   completed: { label: "Completed", Icon: CheckCircle2, cls: "text-emerald-600 bg-emerald-500/10", spin: false },
   failed:    { label: "Failed",    Icon: XCircle,      cls: "text-red-600 bg-red-500/10",       spin: false },
+  partial_failed: { label: "Partial", Icon: AlertCircle, cls: "text-orange-600 bg-orange-500/10", spin: false },
 } as const;
 
 function JobCard({ job }: { job: Job }) {
@@ -237,12 +239,17 @@ function JobCard({ job }: { job: Job }) {
 
       <p className="text-xs text-muted-foreground">
         {format(new Date(job.created_at), "MMM d, yyyy h:mm a")}
+        {job.lots_scraped != null && (
+          <span className="ml-2 text-foreground">
+            · {job.lots_uploaded ?? 0} of {job.lots_scraped} lots uploaded
+          </span>
+        )}
       </p>
 
-      {job.error && (
+      {job.error_message && (
         <div className="flex items-start gap-2 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 p-2.5 text-xs text-red-700 dark:text-red-400">
           <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-          {job.error}
+          {job.error_message}
         </div>
       )}
     </div>
