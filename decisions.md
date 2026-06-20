@@ -4,6 +4,16 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 
 ---
 
+## 2026-06-20 — EstateSales agent auth: capture Playwright storageState in Settings, encrypt at rest
+
+**Decision:** Added a "EstateSales.net Session" paste field (Textarea) to `EstateSalesCredentialsCard.tsx` that writes the captured Playwright session JSON to `user_estatesales_credentials.estatesales_storage_state`. The field client-side-validates the paste is JSON containing a `cookies` array before saving, and the card only ever reads the column's *presence* (never pulls the secret back into the browser). Added `estatesales_storage_state` to `PASSWORD_FIELDS` in `save-credentials` so the session is AES-GCM encrypted at rest; `runAgent.js` `decryptCredential()` already decrypts it transparently on read.
+
+**Why:** EstateSales.net is Google-SSO-only, which blocks in-Playwright email/password login. The agent (`agent.js`) already supports a two-path auth: Path A loads `ES_STORAGE_STATE` and skips sign-in entirely; Path B falls back to email/password (which hits the Google wall and fails). The local agent works because it has `es-session.json` on disk; CI failed ("still on login page, 0 of 201 lots") because the DB column feeding `ES_STORAGE_STATE` was NULL — there was no UI to populate it. The entire backend path (DB column → runAgent decrypt → agent skip-login → newContext storageState) was already wired; the only missing link was a Settings field. This adds that field rather than rebuilding any backend.
+
+**Consequence:** The session expires periodically (live Google cookies). When CI uploads start failing on the login step, the operator re-captures and re-pastes a fresh session — no code change needed. The session JSON is a live credential: never commit `es-session.json`/`es-cookies.json`, never log the column value. The card's inline "How to capture" guide documents the Cookie-Editor → `convert-cookies.js` → paste flow for the operator.
+
+---
+
 ## 2026-06-13 — eBay required item specifics guardrail: extract + pre-flight check before Trading API
 
 **Decision:** Extracted `buildEffectiveSpecifics(categoryId, row)` from `buildAddFixedPriceItemXml`. The new helper computes the exact specifics dict that will be submitted (user values + brand/mpn/upc + category-specific defaults). In `publishRow()`, immediately after the QA merge and before the XML build, the guardrail calls `buildEffectiveSpecifics` and cross-references against `requiredAspects` (from Taxonomy API). Any required aspect still missing → hard fail with a human-readable error listing the missing keys. Nothing hits the Trading API.
