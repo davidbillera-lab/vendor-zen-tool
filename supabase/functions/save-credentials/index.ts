@@ -30,6 +30,9 @@ const PASSWORD_FIELDS = new Set([
   'estatesales_password',
   'mercari_password',
   'poshmark_password',
+  // storageState session JSON holds live login cookies — encrypt at rest.
+  // runAgent.js decryptCredential() decrypts it transparently on read.
+  'estatesales_storage_state',
 ]);
 
 async function encryptValue(plaintext: string, keyBase64: string): Promise<string> {
