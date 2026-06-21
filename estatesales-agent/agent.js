@@ -1351,7 +1351,12 @@ run()
       console.warn('\n[agent] Partial failure:', err.message);
       // partial_failed is a terminal status and gets completed_at set in updateJobStatus
       await updateJobStatus('partial_failed', err.message);
-      process.exit(0);
+      // Exit non-zero: a partial failure means some lots did NOT upload. The
+      // GitHub Actions run must go red so the "Upload screenshots on failure"
+      // step fires (selector debugging) and ops telemetry doesn't read a green
+      // run as a clean upload. The estatesales_jobs row carries the precise
+      // 'partial_failed' status for the app; the exit code is the CI signal.
+      process.exit(1);
     }
     console.error('\n[agent] FATAL:', err.message);
     await updateJobStatus('failed', err.message);
