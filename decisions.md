@@ -4,6 +4,16 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 
 ---
 
+## 2026-06-20 — EstateSales agent NEVER saves the Sale wizard; ledger confirms on caption, not save
+
+**Decision:** The EstateSales upload agent (`agent.js`) does the Pictures step only — bulk-upload all images, then for each picture open the editor (pencil on the first image, auto-advance after), paste the DOA-scraped title into the Description field, hit NEXT, repeat — and then **stops**. It deliberately does NOT click "Save and Continue". The dedup ledger (`estatesales_uploaded_lots`) now marks a lot `uploaded` when its images are uploaded AND every picture in its range was captioned successfully — decoupled from any save signal. A lot with any uncaptioned picture is marked `failed` (fail-safe, left for retry). The old `saveEsPictures()` call + the now-orphaned `hasErrorOrAuthState()` helper were removed.
+
+**Why:** This is the operator's mandated workflow — David finishes the add manually with "Save and Continue" so he can review and complete the rest of the wizard setup by hand. EstateSales.net drafts auto-persist: uploaded images and pasted descriptions survive even if the browser closes before Save and Continue, so the agent stopping short loses nothing. CodexQC flagged "agent never saves → uploads could be lost" as 🔴 Blocking; that concern is theoretical given draft auto-persistence and is overridden by the explicit operator requirement. Gating the ledger on caption success (not save) makes a false `uploaded` impossible — a lot only confirms if its descriptions actually pasted.
+
+**Consequence:** "Uploaded" in the ledger means images + descriptions are on ES, not that the sale is published. Final wizard persistence is David's manual step and is intentionally outside the agent's contract. Do not re-add a save click or re-couple the ledger to a save signal. `clickEsNext` matches only "Next" (case-insensitive) — do not add "Continue"/"Go" synonyms, which would collide with "SAVE AND CONTINUE".
+
+---
+
 ## 2026-06-20 — EstateSales agent auth: capture Playwright storageState in Settings, encrypt at rest
 
 **Decision:** Added a "EstateSales.net Session" paste field (Textarea) to `EstateSalesCredentialsCard.tsx` that writes the captured Playwright session JSON to `user_estatesales_credentials.estatesales_storage_state`. The field client-side-validates the paste is JSON containing a `cookies` array before saving, and the card only ever reads the column's *presence* (never pulls the secret back into the browser). Added `estatesales_storage_state` to `PASSWORD_FIELDS` in `save-credentials` so the session is AES-GCM encrypted at rest; `runAgent.js` `decryptCredential()` already decrypts it transparently on read.
