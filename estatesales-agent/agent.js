@@ -78,6 +78,13 @@ const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } })
   : null;
 
+// When true, ledger reads/writes are disabled so local smoke tests can never
+// touch the production estatesales_uploaded_lots ledger. test-local.js injects a
+// fake JOB_ID, which would otherwise write user_id:null rows on real
+// (es_url, lot_url) keys and poison the dedup ledger. test-local.js sets
+// AGENT_TEST_MODE=true to force this off.
+const LEDGER_ENABLED = !!supabase && process.env.AGENT_TEST_MODE !== 'true';
+
 async function updateJobStatus(status, error = null) {
   if (!supabase || !JOB_ID) return;
   const update = { status };
@@ -113,7 +120,7 @@ async function updateJobFields(fields) {
  * uploading duplicates.
  */
 async function fetchUploadedLotUrls() {
-  if (!supabase) return new Set();
+  if (!LEDGER_ENABLED) return new Set();
   const { data, error } = await supabase
     .from('estatesales_uploaded_lots')
     .select('lot_url')
@@ -142,7 +149,7 @@ async function fetchUploadedLotUrls() {
  * them and duplicates are the caller's problem.
  */
 async function reserveLot(lot, jobUserId) {
-  if (!supabase) return { claimed: true }; // no ledger → proceed (no dedup)
+  if (!LEDGER_ENABLED) return { claimed: true }; // no ledger → proceed (no dedup)
   if (!lot.source_url) return { claimed: true }; // can't key without URL → proceed
 
   const now = new Date().toISOString();
@@ -239,7 +246,7 @@ class LedgerError extends Error {
  * reservation row) so it is also surfaced as an error.
  */
 async function confirmLotUploaded(lot) {
-  if (!supabase) return; // no ledger — nothing to record
+  if (!LEDGER_ENABLED) return; // no ledger — nothing to record
   if (!lot.source_url) return; // no key — can't update
 
   // Confirm ONLY the reservation this run owns: require status='reserved' and,
@@ -276,7 +283,7 @@ async function confirmLotUploaded(lot) {
  * Mark a reserved lot as failed in the ledger (best-effort — does not throw).
  */
 async function markLotFailed(lot) {
-  if (!supabase || !lot.source_url) return;
+  if (!LEDGER_ENABLED || !lot.source_url) return;
   let query = supabase
     .from('estatesales_uploaded_lots')
     .update({ status: 'failed' })
@@ -702,17 +709,18 @@ async function uploadLots(page, lots) {
   // ─────────────────────────────────────────────────────────────────────────
   // EstateSales.net Sale Wizard › Pictures step is a BULK photo uploader, not a
   // per-item form. David's actual flow:
-  //   1. Bulk-add every lot's images to the Pictures step.
+  //   1. Bulk-add every lot's images to the Pictures step (one Upload action).
   //   2. Open each uploaded picture and paste the owning lot's title into the
   //      description, hitting "Next" until done.
-  //   3. SAVE AND CONTINUE.
+  // The agent STOPS there. David hits "Save and Continue" and finishes the rest
+  // of the wizard setup manually — the agent must never save the wizard.
   // We upload in lot order and build a flat imageTitles[] so picture index i
   // maps to the title of the lot that owns that picture.
   // ─────────────────────────────────────────────────────────────────────────
 
   // ── Step 1: Bulk-upload images, per-lot batches ──────────────────────────
   const imageTitles = [];        // flat: imageTitles[pictureIndex] = lot title
-  const uploadedLotState = [];   // { lot } in upload order — confirmed after save
+  const uploadedLotState = [];   // { lot, startIdx, count } — confirmed after captioning
   let thumbCount = await countEsThumbnails(page);
 
   for (let i = 0; i < pending.length; i++) {
@@ -754,8 +762,9 @@ async function uploadLots(page, lots) {
         continue;
       }
       thumbCount += uploaded;
+      const startIdx = imageTitles.length;
       for (let k = 0; k < uploaded; k++) imageTitles.push(lot.title);
-      uploadedLotState.push({ lot });
+      uploadedLotState.push({ lot, startIdx, count: uploaded });
       console.log(`[agent]   Uploaded ${uploaded} image(s) for lot ${i + 1}`);
     } catch (err) {
       await screenshot(page, `es-upload-error-lot-${i + 1}`);
@@ -773,36 +782,38 @@ async function uploadLots(page, lots) {
   // ── Step 2: Per-image description pass ───────────────────────────────────
   // Open each uploaded picture's editor and paste its owning lot's title into
   // the description, advancing with "Next" until all images are captioned.
-  let captioned = 0;
+  // captionResults[i] = whether picture i's description was set. On a thrown
+  // error captionResults stays [] → every lot reads as not-captioned → marked
+  // failed (fail-safe: never confirm a lot whose descriptions did not paste).
+  let captionResults = [];
   try {
-    captioned = await captionEsImages(page, imageTitles);
+    captionResults = await captionEsImages(page, imageTitles);
+    const captioned = captionResults.filter(Boolean).length;
     console.log(`[agent]   Captioned ${captioned}/${imageTitles.length} image(s).`);
   } catch (err) {
     await screenshot(page, 'es-caption-error');
     console.error(`[agent]   ERROR during description pass: ${err.message}`);
   }
 
-  // ── Step 3: Commit the Pictures step ─────────────────────────────────────
-  const saved = await saveEsPictures(page);
-  await screenshot(page, 'es-after-save-pictures');
-
-  // ── Ledger: confirm fully-uploaded lots ──────────────────────────────────
-  // Images bulk-uploaded AND the Pictures step saved → confirm each lot. A
-  // ledger anomaly in confirmLotUploaded throws (fatalLedger) and hard-stops
-  // the run — uploaded to ES but un-recordable means manual intervention.
-  if (saved) {
-    for (const { lot } of uploadedLotState) {
+  // ── Ledger: confirm lots whose images uploaded AND descriptions pasted ────
+  // "uploaded" in the ledger = images on ES + descriptions captioned. Final
+  // wizard persistence ("Save and Continue") is David's manual step, decoupled
+  // from the ledger — the agent never saves. A ledger anomaly in
+  // confirmLotUploaded throws (fatalLedger) and hard-stops the run.
+  for (const { lot, startIdx, count } of uploadedLotState) {
+    const allCaptioned = count > 0 &&
+      Array.from({ length: count }, (_, k) => captionResults[startIdx + k]).every(Boolean);
+    if (allCaptioned) {
       await confirmLotUploaded(lot);
       succeeded++;
-    }
-    console.log(`[agent]   ${succeeded} lot(s) confirmed uploaded to EstateSales.`);
-  } else {
-    console.warn('[agent]   WARNING: Pictures step save not confirmed — marking uploaded lots failed for retry.');
-    for (const { lot } of uploadedLotState) {
+    } else {
       await markLotFailed(lot);
-      failedLots.push({ index: null, title: lot.title, error: 'Pictures step save not confirmed' });
+      failedLots.push({ index: null, title: lot.title,
+        error: 'Image description not captioned (agent does not save; left for retry)' });
     }
   }
+  console.log(`[agent]   ${succeeded} lot(s) confirmed (images + descriptions). ` +
+    `David completes "Save and Continue" manually.`);
 
   await updateJobFields({ lots_uploaded: succeeded, lots_skipped: skippedCount });
 
@@ -927,23 +938,28 @@ async function uploadLotImages(page, lot, lotIndex, priorThumbCount) {
 /**
  * captionEsImages(page, imageTitles)
  *
- * Opens the first uploaded picture's editor, then for each picture pastes the
- * owning lot's title (imageTitles[i]) into the description field and advances
- * with "Next" until all pictures are captioned or Next is unavailable. Returns
- * the number of pictures captioned. Screenshots the editor on first open so the
+ * Opens the first uploaded picture's editor (David's two-step: click the image,
+ * then click the orange pencil), then for each picture pastes the owning lot's
+ * title (imageTitles[i]) into the description field and advances with "Next"
+ * until all pictures are captioned or Next is unavailable. Returns a boolean
+ * array results[] (length = imageTitles.length); results[i] = whether picture i's
+ * description was set. If Next fails to advance mid-pass, the loop breaks and the
+ * remaining entries stay false. Screenshots the editor on first open so the
  * description/Next selectors can be refined against real DOM.
  */
 async function captionEsImages(page, imageTitles) {
   const total = imageTitles.length;
+  const results = new Array(total).fill(false);
 
-  // Open the first image's editor — try the edit pencil, then the thumbnail.
+  // Open the first image's editor. David's flow is click the image, then click
+  // the orange pencil icon — lead with pencil-specific selectors, then fall back.
   const openEditor = await findFirst(page, [
-    '[class*="image"] [class*="edit"]',
-    'button[title*="edit" i]',
-    '[aria-label*="edit" i]',
     '.fa-pencil',
-    '.fa-edit',
     'i[class*="pencil"]',
+    '[aria-label*="edit" i]',
+    'button[title*="edit" i]',
+    '[class*="image"] [class*="edit"]',
+    '.fa-edit',
     '[class*="image-card"]',
     '[class*="thumbnail"]',
     '.image-grid img',
@@ -956,11 +972,10 @@ async function captionEsImages(page, imageTitles) {
   await page.waitForTimeout(1_500);
   await screenshot(page, 'es-image-editor-first'); // refine selectors from this
 
-  let captioned = 0;
   for (let i = 0; i < total; i++) {
     const ok = await fillEsImageDescription(page, imageTitles[i]);
-    if (ok) captioned++;
-    else console.warn(`[agent]   WARNING: could not set description for image ${i + 1}/${total}`);
+    results[i] = ok;
+    if (!ok) console.warn(`[agent]   WARNING: could not set description for image ${i + 1}/${total}`);
 
     if (i < total - 1) {
       const advanced = await clickEsNext(page);
@@ -971,7 +986,7 @@ async function captionEsImages(page, imageTitles) {
       await page.waitForTimeout(800);
     }
   }
-  return captioned;
+  return results;
 }
 
 /**
@@ -1040,37 +1055,6 @@ async function clickEsNext(page) {
   if (!nextEl) return false;
   if (await nextEl.isDisabled().catch(() => false)) return false;
   await nextEl.click().catch(() => {});
-  return true;
-}
-
-/**
- * saveEsPictures(page)
- *
- * Commits the Pictures step via "SAVE AND CONTINUE". Returns true if the click
- * landed without surfacing an error/auth state (the wizard is an SPA and may
- * not navigate). Returns false if the button is missing or an error appears.
- */
-async function saveEsPictures(page) {
-  const saveEl = await findFirst(page, [
-    'button:has-text("SAVE AND CONTINUE")',
-    'button:has-text("Save and Continue")',
-    'button:has-text("Save & Continue")',
-    'button:has-text("Save")',
-  ], 5_000);
-  if (!saveEl) {
-    await screenshot(page, 'es-no-save-pictures');
-    console.warn('[agent]   WARNING: Could not find "SAVE AND CONTINUE" button.');
-    return false;
-  }
-  await Promise.all([
-    page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {}),
-    saveEl.click(),
-  ]);
-  await page.waitForTimeout(1_500);
-  if (await hasErrorOrAuthState(page)) {
-    await screenshot(page, 'es-save-pictures-error');
-    return false;
-  }
   return true;
 }
 

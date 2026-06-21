@@ -61,21 +61,28 @@ if (existsSync(sessionPath)) {
   console.log('[test-local] If that fails, run capture-session.js first.');
 }
 
+// ── Test mode: disable the dedup ledger ───────────────────────────────────────
+// AGENT_TEST_MODE=true makes agent.js short-circuit all estatesales_uploaded_lots
+// reads/writes (LEDGER_ENABLED=false). A local run injects a fake JOB_ID below;
+// without this guard the agent would write user_id:null rows on real
+// (es_url, lot_url) keys and poison the production dedup ledger.
+process.env.AGENT_TEST_MODE = 'true';
+
 // ── Inject a stable test JOB_ID ───────────────────────────────────────────────
-// Using a fixed UUID means ledger rows from test runs are easy to find/clear.
-// The agent will try to update estatesales_jobs for this ID — it will match 0 rows,
-// which is fine (no error, just a no-op update).
+// The agent will try to update estatesales_jobs for this ID — it will match 0
+// rows, which is fine (no error, just a no-op update). With AGENT_TEST_MODE on,
+// NO ledger rows are written, so there is nothing to clean up afterward.
 
 if (!process.env.JOB_ID) {
   process.env.JOB_ID = '00000000-0000-0000-0000-000000000001';
   console.log(`[test-local] Using test JOB_ID: ${process.env.JOB_ID}`);
-  console.log('[test-local] To clear ledger rows after testing:');
-  console.log(`[test-local]   DELETE FROM estatesales_uploaded_lots WHERE job_id = '${process.env.JOB_ID}';`);
 }
 
 // ── Validate required vars ────────────────────────────────────────────────────
 
-const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'DOA_EMAIL', 'DOA_PASSWORD', 'DOA_URL', 'ESTATESALES_URL'];
+// SUPABASE_* are NOT required in test mode — the ledger is disabled, so the
+// agent never reads/writes Supabase (supabase client is null without them).
+const required = ['DOA_EMAIL', 'DOA_PASSWORD', 'DOA_URL', 'ESTATESALES_URL'];
 const missing  = required.filter((k) => !process.env[k]);
 if (missing.length) {
   console.error(`[test-local] ERROR: Missing required env vars: ${missing.join(', ')}`);
@@ -86,6 +93,7 @@ if (missing.length) {
 console.log('[test-local] Starting agent...');
 console.log(`[test-local]   DOA URL:         ${process.env.DOA_URL}`);
 console.log(`[test-local]   EstateSales URL: ${process.env.ESTATESALES_URL}`);
+console.log('[test-local]   Ledger:          DISABLED (AGENT_TEST_MODE=true — no estatesales_uploaded_lots writes).');
 console.log('[test-local]   Browser will be HEADED (visible window).\n');
 
 await import('./agent.js');
