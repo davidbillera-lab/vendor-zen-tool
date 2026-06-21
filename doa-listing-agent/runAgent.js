@@ -28,10 +28,16 @@ const CREDENTIALS_ENCRYPTION_KEY  = process.env.CREDENTIALS_ENCRYPTION_KEY;
  * Returns the value unchanged for legacy plaintext rows.
  */
 async function decryptCredential(value, keyBase64) {
-  if (!keyBase64 || !value) return value;
+  if (!value) return value;
   let parsed;
   try { parsed = JSON.parse(value); } catch { return value; }
-  if (!parsed?.iv || !parsed?.ciphertext) return value;
+  if (!parsed?.iv || !parsed?.ciphertext) return value; // legacy plaintext row
+  // Value IS an encrypted envelope. Decrypting requires the key — if it's
+  // missing we must NOT silently pass the ciphertext through as the password
+  // (that turns into a confusing login failure). Fail loudly instead.
+  if (!keyBase64) {
+    throw new Error('CREDENTIALS_ENCRYPTION_KEY is required to decrypt this credential but is not set.');
+  }
   const keyBytes = Buffer.from(keyBase64, 'base64');
   const key = await webcrypto.subtle.importKey(
     'raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt'],
@@ -76,6 +82,28 @@ if (error || !creds) {
   console.error('  The user must add their DOA credentials in VZT Settings before');
   console.error('  triggering the agent.');
   if (error) console.error(`  Supabase error: ${error.message}`);
+  process.exit(1);
+}
+
+// ── Authorize: the batch must belong to this user ─────────────────────────────
+// The service-role key below bypasses RLS, so we MUST verify ownership in code.
+// Without this, any USER_ID with valid DOA credentials could run ANY user's
+// batch by passing its BATCH_ID. Fail closed: not found or owner mismatch aborts.
+
+const { data: batch, error: batchErr } = await supabase
+  .from('la_batches')
+  .select('id, created_by')
+  .eq('id', BATCH_ID)
+  .single();
+
+if (batchErr || !batch) {
+  console.error(`[runAgent] ERROR: Batch ${BATCH_ID} not found.`);
+  if (batchErr) console.error(`  Supabase error: ${batchErr.message}`);
+  process.exit(1);
+}
+
+if (batch.created_by !== USER_ID) {
+  console.error(`[runAgent] ERROR: Batch ${BATCH_ID} does not belong to user ${USER_ID}. Refusing to run.`);
   process.exit(1);
 }
 
