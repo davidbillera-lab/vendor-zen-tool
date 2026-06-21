@@ -85,24 +85,40 @@ if (error || !creds) {
   process.exit(1);
 }
 
-// ── Authorize: the batch must belong to this user ─────────────────────────────
-// The service-role key below bypasses RLS, so we MUST verify ownership in code.
-// Without this, any USER_ID with valid DOA credentials could run ANY user's
-// batch by passing its BATCH_ID. Fail closed: not found or owner mismatch aborts.
+// ── Authorize against the DOA batch (denver_batch_rows) ───────────────────────
+// The service-role key below bypasses RLS, so we verify in code. A DOA batch is
+// a set of rows in denver_batch_rows keyed by batch_id — the SAME table agent.js
+// reads in --batch mode. We do NOT authorize against la_batches: that is the
+// LiveAuctioneers platform, a separate system that shares no ownership with DOA
+// (denver_batch_rows.batch_id does not map 1:1 to la_batches.id), so gating a DOA
+// run on it would reject valid batches.
+//
+// Two guards: (1) the batch must actually exist in denver_batch_rows — a bad/typo'd
+// BATCH_ID otherwise silently runs 0 lots; (2) if the row carries an owner column,
+// enforce it. The single-tenant schema has no owner column today, so per-tenant
+// ownership authz is deferred to the multi-tenant checklist (see decisions.md).
+const { data: batchRows, error: batchErr } = await supabase
+  .from('denver_batch_rows')
+  .select('*')
+  .eq('batch_id', BATCH_ID)
+  .limit(1);
 
-const { data: batch, error: batchErr } = await supabase
-  .from('la_batches')
-  .select('id, created_by')
-  .eq('id', BATCH_ID)
-  .single();
-
-if (batchErr || !batch) {
-  console.error(`[runAgent] ERROR: Batch ${BATCH_ID} not found.`);
-  if (batchErr) console.error(`  Supabase error: ${batchErr.message}`);
+if (batchErr) {
+  console.error(`[runAgent] ERROR: Could not read batch ${BATCH_ID} from denver_batch_rows.`);
+  console.error(`  Supabase error: ${batchErr.message}`);
   process.exit(1);
 }
 
-if (batch.created_by !== USER_ID) {
+if (!batchRows || batchRows.length === 0) {
+  console.error(`[runAgent] ERROR: Batch ${BATCH_ID} has no rows in denver_batch_rows. Nothing to run.`);
+  process.exit(1);
+}
+
+// Multi-tenant-forward: enforce ownership only if the schema actually has an owner
+// column. No-op on the single-tenant schema (no such column) — never references a
+// column that may not exist.
+const ownerField = ['created_by', 'user_id', 'owner_id'].find((f) => f in batchRows[0]);
+if (ownerField && batchRows[0][ownerField] && batchRows[0][ownerField] !== USER_ID) {
   console.error(`[runAgent] ERROR: Batch ${BATCH_ID} does not belong to user ${USER_ID}. Refusing to run.`);
   process.exit(1);
 }
