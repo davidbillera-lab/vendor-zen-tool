@@ -85,23 +85,24 @@ if (error || !creds) {
   process.exit(1);
 }
 
-// ── Authorize against the DOA batch (denver_batch_rows) ───────────────────────
-// The service-role key below bypasses RLS, so we verify in code. A DOA batch is
-// a set of rows in denver_batch_rows keyed by batch_id — the SAME table agent.js
-// reads in --batch mode. We do NOT authorize against la_batches: that is the
-// LiveAuctioneers platform, a separate system that shares no ownership with DOA
-// (denver_batch_rows.batch_id does not map 1:1 to la_batches.id), so gating a DOA
-// run on it would reject valid batches.
+// ── Validate the DOA batch exists (denver_batch_rows) ─────────────────────────
+// A DOA batch is a set of rows in denver_batch_rows keyed by batch_id — the SAME
+// table agent.js reads in --batch mode. We do NOT authorize against la_batches:
+// that is the LiveAuctioneers platform, a separate system that shares no ownership
+// with DOA (denver_batch_rows.batch_id does not map 1:1 to la_batches.id), so
+// gating a DOA run on it would reject valid batches.
 //
-// Two guards: (1) the batch must actually exist in denver_batch_rows — a bad/typo'd
-// BATCH_ID otherwise silently runs 0 lots; (2) if the row carries an owner column,
-// enforce it. The single-tenant schema has no owner column today, so per-tenant
-// ownership authz is deferred to the multi-tenant checklist (see decisions.md).
-const { data: batchRows, error: batchErr } = await supabase
+// Guard: the batch must actually exist — a bad/typo'd BATCH_ID otherwise silently
+// runs 0 lots. We use a HEAD count (no row bodies pulled). Per-tenant ownership
+// authz is intentionally NOT done here: the single-tenant schema has no owner
+// column on denver_batch_rows, so there is nothing to check against. Enforcing it
+// is deferred to the multi-tenant migration (add an owner column + RLS), tracked
+// in decisions.md. Inspecting one arbitrary row's columns gave a false sense of a
+// check while enforcing nothing, so it has been removed rather than left half-done.
+const { count: batchCount, error: batchErr } = await supabase
   .from('denver_batch_rows')
-  .select('*')
-  .eq('batch_id', BATCH_ID)
-  .limit(1);
+  .select('id', { count: 'exact', head: true })
+  .eq('batch_id', BATCH_ID);
 
 if (batchErr) {
   console.error(`[runAgent] ERROR: Could not read batch ${BATCH_ID} from denver_batch_rows.`);
@@ -109,17 +110,8 @@ if (batchErr) {
   process.exit(1);
 }
 
-if (!batchRows || batchRows.length === 0) {
+if (!batchCount || batchCount === 0) {
   console.error(`[runAgent] ERROR: Batch ${BATCH_ID} has no rows in denver_batch_rows. Nothing to run.`);
-  process.exit(1);
-}
-
-// Multi-tenant-forward: enforce ownership only if the schema actually has an owner
-// column. No-op on the single-tenant schema (no such column) — never references a
-// column that may not exist.
-const ownerField = ['created_by', 'user_id', 'owner_id'].find((f) => f in batchRows[0]);
-if (ownerField && batchRows[0][ownerField] && batchRows[0][ownerField] !== USER_ID) {
-  console.error(`[runAgent] ERROR: Batch ${BATCH_ID} does not belong to user ${USER_ID}. Refusing to run.`);
   process.exit(1);
 }
 
