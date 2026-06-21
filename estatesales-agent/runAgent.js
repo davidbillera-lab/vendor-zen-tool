@@ -22,13 +22,20 @@ const CREDENTIALS_ENCRYPTION_KEY  = process.env.CREDENTIALS_ENCRYPTION_KEY;
 
 /**
  * Decrypts a value that was encrypted by the save-credentials edge function.
- * Falls back to returning the value as-is for legacy plaintext rows.
+ * Returns the value unchanged for legacy plaintext rows.
  */
 async function decryptCredential(value, keyBase64) {
-  if (!keyBase64 || !value) return value;
+  if (!value) return value;
   let parsed;
   try { parsed = JSON.parse(value); } catch { return value; }
-  if (!parsed?.iv || !parsed?.ciphertext) return value;
+  if (!parsed?.iv || !parsed?.ciphertext) return value; // legacy plaintext row
+  // Value IS an encrypted envelope. Decrypting requires the key — if it's
+  // missing we must NOT silently pass the ciphertext through (an encrypted
+  // password submitted as plaintext, or a storage-state envelope parsed as
+  // session JSON, becomes a confusing downstream failure). Fail loudly.
+  if (!keyBase64) {
+    throw new Error('CREDENTIALS_ENCRYPTION_KEY is required to decrypt this credential but is not set.');
+  }
   const keyBytes = Buffer.from(keyBase64, 'base64');
   const key = await webcrypto.subtle.importKey(
     'raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt'],
