@@ -329,21 +329,39 @@ async function findFirst(page, selectors, timeout = 5_000) {
 
 /**
  * Download a remote image to a local temp file. Returns the local path.
+ * Follows HTTP redirects (CDN/image hosts commonly 301/302 to a signed URL)
+ * and accepts any 2xx status, not just 200.
  */
-async function downloadImage(url, destPath) {
+async function downloadImage(url, destPath, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http;
-    const file = fs.createWriteStream(destPath);
-    client.get(url, (res) => {
-      if (res.statusCode !== 200) {
-        file.close();
-        fs.unlink(destPath, () => {});
-        return reject(new Error(`HTTP ${res.statusCode} downloading ${url}`));
+    const req = client.get(url, (res) => {
+      const { statusCode } = res;
+
+      // Follow redirects (301/302/303/307/308) to the Location target.
+      if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
+        res.resume(); // drain so the socket can be reused
+        if (redirectsLeft <= 0) {
+          return reject(new Error(`Too many redirects downloading ${url}`));
+        }
+        const next = new URL(res.headers.location, url).toString();
+        return resolve(downloadImage(next, destPath, redirectsLeft - 1));
       }
+
+      if (statusCode < 200 || statusCode >= 300) {
+        res.resume();
+        return reject(new Error(`HTTP ${statusCode} downloading ${url}`));
+      }
+
+      const file = fs.createWriteStream(destPath);
+      file.on('error', (err) => {
+        fs.unlink(destPath, () => {});
+        reject(err);
+      });
       res.pipe(file);
       file.on('finish', () => { file.close(); resolve(destPath); });
-    }).on('error', (err) => {
-      file.close();
+    });
+    req.on('error', (err) => {
       fs.unlink(destPath, () => {});
       reject(err);
     });
@@ -382,37 +400,6 @@ async function readTinyMceContent(page) {
     return (content || '').trim();
   } catch {
     return '';
-  }
-}
-
-/**
- * Detects whether the page is currently showing a validation/error state or has
- * been bounced to the sign-in page. Used as a NEGATIVE gate: even a "positive"
- * signal is rejected if any of these are present, so an error alert or a login
- * redirect can never be mistaken for a successful save (which would silently
- * mark a never-created lot as 'uploaded').
- */
-async function hasErrorOrAuthState(page) {
-  try {
-    // A login redirect means the session dropped — definitely not a save.
-    if (/sign-?in|log-?in|login|account\/login/i.test(new URL(page.url()).pathname)) {
-      return true;
-    }
-    return await page.evaluate(() => {
-      const sel = [
-        '.validation-summary-errors',
-        '.field-validation-error',
-        '.alert-danger',
-        '.alert-error',
-        '[class*="error"]:not([class*="success"])',
-        '[class*="invalid"]:not([class*="success"])',
-      ].join(', ');
-      return Array.from(document.querySelectorAll(sel)).some(
-        (n) => n.offsetParent !== null && (n.textContent || '').trim().length > 0
-      );
-    });
-  } catch {
-    return false;
   }
 }
 
@@ -1154,8 +1141,13 @@ async function run() {
       `${uploadResult.skipped} already uploaded (skipped), ${uploadResult.failed} failed. ` +
       `(${totalAccountedFor}/${lots.length} total accounted for)`
     );
+    // lots_uploaded reflects how many lots are uploaded to ES *in total* —
+    // newly uploaded this run PLUS already-uploaded (skipped on rerun). Skipped
+    // lots are skipped precisely because they're already on ES, so they count.
+    // lots_skipped breaks out the prior-run portion, so newly = uploaded - skipped.
+    // Without this, an all-already-done rerun would report "0 uploaded".
     await updateJobFields({
-      lots_uploaded: uploadResult.succeeded,
+      lots_uploaded: totalAccountedFor,
       lots_skipped:  uploadResult.skipped,
     });
     if (uploadResult.failed > 0) {
@@ -1175,6 +1167,10 @@ async function run() {
     throw err;
   } finally {
     await browser.close();
+    // Remove the temp dir of downloaded customer photos even on crash —
+    // per-file cleanup in uploadLotImages only covers the happy path, so an
+    // error mid-run would otherwise leave private images on disk.
+    try { fs.rmSync(IMAGES_DIR, { recursive: true, force: true }); } catch { /* non-fatal */ }
   }
 }
 
