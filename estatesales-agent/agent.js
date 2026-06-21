@@ -1004,15 +1004,25 @@ async function uploadLotImages(page, lot, lotIndex, priorThumbCount) {
 
   if (!registered) {
     if (observed === 0) {
-      // Thumbnail selectors never matched anything — we can't confirm either
-      // way (unverified Angular DOM). Proceed best-effort but warn loudly so a
-      // selector miss is visible in logs + a screenshot for refinement.
+      // Thumbnail selectors never matched anything — we cannot prove the images
+      // landed on ES. Fail closed on real runs: confirming a lot we can't verify
+      // risks marking it uploaded when it isn't (missing live items are worse than
+      // blocked runs). Only AGENT_TEST_MODE (local smoke test, ledger disabled) is
+      // allowed to proceed best-effort so selector work can continue offline.
       await screenshot(page, `es-thumb-unconfirmed-lot-${lotIndex}`);
-      console.warn(
-        `[agent]   Could not count thumbnails for lot ${lotIndex} (selectors matched 0) ` +
-        `— proceeding best-effort. Verify on ES; refine countEsThumbnails selectors.`
+      if (AGENT_TEST_MODE) {
+        console.warn(
+          `[agent]   Could not count thumbnails for lot ${lotIndex} (selectors matched 0) ` +
+          `— TEST MODE: proceeding best-effort. Refine countEsThumbnails selectors.`
+        );
+        return localPaths.length;
+      }
+      throw new Error(
+        `[agent] Could not verify image upload for lot ${lotIndex} on ES ` +
+        `(thumbnail selectors matched 0 — cannot confirm images landed). Not confirming ` +
+        `this lot. Check screenshot "es-thumb-unconfirmed-lot-${lotIndex}" and update ` +
+        `countEsThumbnails selectors.`
       );
-      return localPaths.length;
     }
     // Thumbnails ARE countable (observed > 0) but did not rise to the expected
     // total — the upload did not fully register. Fail the lot so it is never
