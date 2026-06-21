@@ -38,6 +38,18 @@ for (const line of readFileSync(testEnvPath, 'utf8').split('\n')) {
   if (key && val && !process.env[key]) process.env[key] = val;
 }
 
+// ── Smoke-test cap (safety) ───────────────────────────────────────────────────
+// A local headed run must NEVER grind all ~169 production DOA lots by accident.
+// Default to a 2-lot smoke test unless MAX_LOTS is explicitly set (env or
+// .estatesales-test.env). To run the full scrape locally on purpose, set
+// MAX_LOTS=0 explicitly.
+if (process.env.MAX_LOTS === undefined || process.env.MAX_LOTS === '') {
+  process.env.MAX_LOTS = '2';
+  console.log('[test-local] MAX_LOTS not set — defaulting to 2 (smoke test). Set MAX_LOTS=0 for a full run.');
+} else {
+  console.log(`[test-local] MAX_LOTS=${process.env.MAX_LOTS} (from env).`);
+}
+
 // ── Load storageState session (Google-SSO) ────────────────────────────────────
 
 const sessionPath = resolve(__dir, 'es-session.json');
@@ -55,7 +67,7 @@ if (existsSync(sessionPath)) {
 // which is fine (no error, just a no-op update).
 
 if (!process.env.JOB_ID) {
-  process.env.JOB_ID = '00000000-test-0000-0000-estatesales01';
+  process.env.JOB_ID = '00000000-0000-0000-0000-000000000001';
   console.log(`[test-local] Using test JOB_ID: ${process.env.JOB_ID}`);
   console.log('[test-local] To clear ledger rows after testing:');
   console.log(`[test-local]   DELETE FROM estatesales_uploaded_lots WHERE job_id = '${process.env.JOB_ID}';`);
