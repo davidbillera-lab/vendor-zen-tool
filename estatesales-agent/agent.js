@@ -609,15 +609,29 @@ async function uploadLots(page, lots) {
     return { succeeded: 0, failed: 0, failedLots: [], skipped: alreadyUploadedCount, blocked: 0 };
   }
 
-  // user_id for ledger rows (RLS select policy scopes the UI to the owner)
+  // user_id for ledger rows (RLS select policy scopes the UI to the owner).
+  // When the ledger is enabled we MUST resolve a real owner: a row with
+  // user_id:null is a "ghost reservation" — invisible to the owner-scoped UI
+  // but still occupying the unique (es_url, lot_url) key, silently blocking
+  // future runs forever. Fail closed if we can't resolve it. In test mode
+  // (LEDGER_ENABLED=false) this whole block is skipped — no ledger writes.
   let jobUserId = null;
-  if (supabase && JOB_ID) {
-    const { data: jobRow } = await supabase
+  if (LEDGER_ENABLED) {
+    if (!JOB_ID) {
+      throw new LedgerError('Ledger enabled but JOB_ID is missing — cannot resolve row owner. Aborting to avoid ghost reservations.');
+    }
+    const { data: jobRow, error: jobErr } = await supabase
       .from('estatesales_jobs')
       .select('user_id')
       .eq('id', JOB_ID)
       .single();
+    if (jobErr) {
+      throw new LedgerError(`Ledger enabled but job lookup failed (${jobErr.message}) — cannot resolve row owner. Aborting to avoid ghost reservations.`);
+    }
     jobUserId = jobRow?.user_id ?? null;
+    if (!jobUserId) {
+      throw new LedgerError(`Ledger enabled but job ${JOB_ID} has no user_id — cannot resolve row owner. Aborting to avoid ghost reservations.`);
+    }
   }
 
   if (!ES_STORAGE_STATE) {
@@ -911,24 +925,44 @@ async function uploadLotImages(page, lot, lotIndex, priorThumbCount) {
 
   await fileInput.setInputFiles(localPaths);
 
-  // Wait for the uploads to register: network settle + thumbnail count rise.
+  // Confirm the uploads actually registered on ES: network settle + thumbnail
+  // count rise. We must NOT confirm/caption a lot whose images never landed.
   await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
   const target = priorThumbCount + localPaths.length;
   const deadline = Date.now() + 60_000;
-  let registered = false;
-  while (Date.now() < deadline) {
-    if ((await countEsThumbnails(page)) >= target) { registered = true; break; }
+  let observed = await countEsThumbnails(page);
+  let registered = observed >= target;
+  while (!registered && Date.now() < deadline) {
     await page.waitForTimeout(1_000);
-  }
-  if (!registered) {
-    // Thumbnails couldn't be counted (selector miss) or upload is slow — give
-    // it a final settle. setInputFiles itself succeeded, so proceed best-effort.
-    await page.waitForTimeout(2_000).catch(() => {});
+    observed = await countEsThumbnails(page);
+    registered = observed >= target;
   }
 
-  // Clean up temp image files
+  // Clean up temp image files regardless of outcome.
   for (const p of localPaths) {
     try { fs.unlinkSync(p); } catch { /* non-fatal */ }
+  }
+
+  if (!registered) {
+    if (observed === 0) {
+      // Thumbnail selectors never matched anything — we can't confirm either
+      // way (unverified Angular DOM). Proceed best-effort but warn loudly so a
+      // selector miss is visible in logs + a screenshot for refinement.
+      await screenshot(page, `es-thumb-unconfirmed-lot-${lotIndex}`);
+      console.warn(
+        `[agent]   Could not count thumbnails for lot ${lotIndex} (selectors matched 0) ` +
+        `— proceeding best-effort. Verify on ES; refine countEsThumbnails selectors.`
+      );
+      return localPaths.length;
+    }
+    // Thumbnails ARE countable (observed > 0) but did not rise to the expected
+    // total — the upload did not fully register. Fail the lot so it is never
+    // captioned/confirmed as if its images were on ES.
+    await screenshot(page, `es-upload-incomplete-lot-${lotIndex}`);
+    throw new Error(
+      `[agent] Image upload for lot ${lotIndex} did not register on ES ` +
+      `(saw ${observed} thumbnail(s), expected >= ${target}). Not confirming this lot.`
+    );
   }
 
   return localPaths.length;
@@ -1039,22 +1073,67 @@ async function fillEsImageDescription(page, text) {
 }
 
 /**
+ * readEsImageDescription(page)
+ *
+ * Reads the image editor's current description value (mirror of
+ * fillEsImageDescription's selector cascade). Returns a string, or null if no
+ * field is present. Used to confirm the editor actually advanced after "Next".
+ */
+async function readEsImageDescription(page) {
+  return await page.evaluate(() => {
+    const el = document.querySelector(
+      'textarea[name*="description" i], textarea[id*="description" i], ' +
+      'textarea[placeholder*="description" i], textarea[placeholder*="caption" i], ' +
+      'input[name*="description" i], [contenteditable="true"], textarea'
+    );
+    if (!el) return null;
+    if (el.getAttribute && el.getAttribute('contenteditable') === 'true') return el.innerHTML;
+    return el.value;
+  }).catch(() => null);
+}
+
+/**
  * clickEsNext(page)
  *
  * Advances the image editor to the next picture. Returns false if no enabled
- * "Next" control exists (end of the set).
+ * "Next" control exists (end of the set), if the click throws, OR if the editor
+ * does not actually advance (description field unchanged) — so the caller never
+ * treats a swallowed no-op as a successful advance.
+ *
+ * Matches only "Next" (Playwright :has-text is case-insensitive → matches
+ * "NEXT"); we deliberately do NOT add Continue/Go synonyms because "Continue"
+ * collides with the wizard's "SAVE AND CONTINUE" (which the agent must NEVER
+ * click — David saves manually).
  */
 async function clickEsNext(page) {
   const nextEl = await findFirst(page, [
     'button:has-text("Next"):not([disabled])',
     'button[aria-label*="next" i]:not([disabled])',
-    '[class*="next"]:not([disabled])',
-    'button:has-text(">"):not([disabled])',
+    'a[aria-label*="next" i]:not([disabled])',
+    'button[class*="next"]:not([disabled])',
+    'a[class*="next"]:not([disabled])',
   ], 3_000);
   if (!nextEl) return false;
   if (await nextEl.isDisabled().catch(() => false)) return false;
-  await nextEl.click().catch(() => {});
-  return true;
+
+  // Snapshot the current description so we can confirm the click advanced to a
+  // different picture (the just-pasted title vs. the next picture's caption,
+  // typically empty on a fresh upload).
+  const before = await readEsImageDescription(page);
+
+  try {
+    await nextEl.click();
+  } catch {
+    return false; // do NOT swallow — a failed click means we did not advance
+  }
+
+  // Verify advancement: poll briefly for the description field to change.
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline) {
+    if ((await readEsImageDescription(page)) !== before) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
