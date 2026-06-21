@@ -78,12 +78,34 @@ const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } })
   : null;
 
-// When true, ledger reads/writes are disabled so local smoke tests can never
-// touch the production estatesales_uploaded_lots ledger. test-local.js injects a
-// fake JOB_ID, which would otherwise write user_id:null rows on real
-// (es_url, lot_url) keys and poison the dedup ledger. test-local.js sets
-// AGENT_TEST_MODE=true to force this off.
-const LEDGER_ENABLED = !!supabase && process.env.AGENT_TEST_MODE !== 'true';
+// AGENT_TEST_MODE disables the ledger so local smoke tests can never touch the
+// production estatesales_uploaded_lots ledger. test-local.js injects a fake
+// JOB_ID, which would otherwise write user_id:null rows on real (es_url, lot_url)
+// keys and poison the dedup ledger. test-local.js sets AGENT_TEST_MODE=true.
+const AGENT_TEST_MODE = process.env.AGENT_TEST_MODE === 'true';
+
+// FAIL CLOSED. The dedup ledger is the only thing standing between a real run and
+// duplicate uploads (David's rule: duplicates are worse than blocked runs). A
+// non-test run with no Supabase client or no JOB_ID would silently run WITHOUT
+// dedup — exactly the failure we must never allow. So a real run REQUIRES both;
+// abort at startup if either is missing. Only AGENT_TEST_MODE may run ledger-less.
+if (!AGENT_TEST_MODE) {
+  if (!supabase) {
+    console.error('[agent] FATAL: SUPABASE_URL + SUPABASE_SERVICE_KEY are required for a real run.');
+    console.error('  Without them the dedup ledger is disabled and the agent could upload duplicates.');
+    console.error('  For a local no-ledger smoke test, run via test-local.js (sets AGENT_TEST_MODE=true).');
+    process.exit(1);
+  }
+  if (!JOB_ID) {
+    console.error('[agent] FATAL: JOB_ID is required for a real run (scopes the dedup ledger by tenant).');
+    console.error('  It is injected by runAgent.js / the job runner. For a local smoke test use test-local.js.');
+    process.exit(1);
+  }
+}
+
+// True only when a real, ledger-backed run is in effect. AGENT_TEST_MODE forces
+// it off; the fail-closed guard above guarantees supabase + JOB_ID exist here.
+const LEDGER_ENABLED = !!supabase && !AGENT_TEST_MODE;
 
 async function updateJobStatus(status, error = null) {
   if (!supabase || !JOB_ID) return;
