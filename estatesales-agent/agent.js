@@ -119,11 +119,14 @@ async function updateJobFields(fields) {
  * Fails closed: if the ledger can't be read we abort rather than risk
  * uploading duplicates.
  */
-async function fetchUploadedLotUrls() {
+async function fetchUploadedLotUrls(jobUserId) {
   if (!LEDGER_ENABLED) return new Set();
+  // Service-role key bypasses RLS — scope by user_id in code so one tenant's
+  // ledger never hides another tenant's lots.
   const { data, error } = await supabase
     .from('estatesales_uploaded_lots')
     .select('lot_url')
+    .eq('user_id', jobUserId)
     .eq('es_url', ES_URL)
     .eq('status', 'uploaded');
   if (error) throw new Error(`[agent] Could not read uploaded-lots ledger: ${error.message}`);
@@ -183,6 +186,7 @@ async function reserveLot(lot, jobUserId) {
   const { data: existing, error: fetchErr } = await supabase
     .from('estatesales_uploaded_lots')
     .select('status, reserved_at')
+    .eq('user_id', jobUserId)
     .eq('es_url', ES_URL)
     .eq('lot_url', lot.source_url)
     .single();
@@ -249,7 +253,7 @@ class LedgerError extends Error {
  * A 23505 (unique violation) here would be a bug (we already hold the
  * reservation row) so it is also surfaced as an error.
  */
-async function confirmLotUploaded(lot) {
+async function confirmLotUploaded(lot, jobUserId) {
   if (!LEDGER_ENABLED) return; // no ledger — nothing to record
   if (!lot.source_url) return; // no key — can't update
 
@@ -261,6 +265,7 @@ async function confirmLotUploaded(lot) {
   let query = supabase
     .from('estatesales_uploaded_lots')
     .update({ status: 'uploaded', uploaded_at: new Date().toISOString() })
+    .eq('user_id', jobUserId)
     .eq('es_url', ES_URL)
     .eq('lot_url', lot.source_url)
     .eq('status', 'reserved');
@@ -286,11 +291,12 @@ async function confirmLotUploaded(lot) {
 /**
  * Mark a reserved lot as failed in the ledger (best-effort — does not throw).
  */
-async function markLotFailed(lot) {
+async function markLotFailed(lot, jobUserId) {
   if (!LEDGER_ENABLED || !lot.source_url) return;
   let query = supabase
     .from('estatesales_uploaded_lots')
     .update({ status: 'failed' })
+    .eq('user_id', jobUserId)
     .eq('es_url', ES_URL)
     .eq('lot_url', lot.source_url)
     .eq('status', 'reserved'); // only transition our own reservation
@@ -331,14 +337,27 @@ async function findFirst(page, selectors, timeout = 5_000) {
   return null;
 }
 
+// Per-image download guards. A hung CDN socket or a runaway response would
+// otherwise stall the whole run (no timeout) or fill the disk (no size cap).
+const DOWNLOAD_TIMEOUT_MS = 30_000;          // abort a single image after 30s
+const DOWNLOAD_MAX_BYTES  = 25 * 1024 * 1024; // 25 MB ceiling per image
+
 /**
  * Download a remote image to a local temp file. Returns the local path.
  * Follows HTTP redirects (CDN/image hosts commonly 301/302 to a signed URL)
- * and accepts any 2xx status, not just 200.
+ * and accepts any 2xx status, not just 200. Enforces a request timeout and a
+ * max-byte ceiling; any failure unlinks the partial file before rejecting.
  */
 async function downloadImage(url, destPath, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http;
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      fs.unlink(destPath, () => {});
+      reject(err);
+    };
     const req = client.get(url, (res) => {
       const { statusCode } = res;
 
@@ -346,29 +365,42 @@ async function downloadImage(url, destPath, redirectsLeft = 5) {
       if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
         res.resume(); // drain so the socket can be reused
         if (redirectsLeft <= 0) {
-          return reject(new Error(`Too many redirects downloading ${url}`));
+          return fail(new Error(`Too many redirects downloading ${url}`));
         }
         const next = new URL(res.headers.location, url).toString();
+        settled = true; // hand off to the recursive call; don't unlink here
         return resolve(downloadImage(next, destPath, redirectsLeft - 1));
       }
 
       if (statusCode < 200 || statusCode >= 300) {
         res.resume();
-        return reject(new Error(`HTTP ${statusCode} downloading ${url}`));
+        return fail(new Error(`HTTP ${statusCode} downloading ${url}`));
       }
 
-      const file = fs.createWriteStream(destPath);
-      file.on('error', (err) => {
-        fs.unlink(destPath, () => {});
-        reject(err);
+      let bytes = 0;
+      res.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > DOWNLOAD_MAX_BYTES) {
+          req.destroy();
+          fail(new Error(`Image exceeds ${DOWNLOAD_MAX_BYTES} bytes: ${url}`));
+        }
       });
+
+      const file = fs.createWriteStream(destPath);
+      file.on('error', fail);
       res.pipe(file);
-      file.on('finish', () => { file.close(); resolve(destPath); });
+      file.on('finish', () => {
+        if (settled) return;
+        settled = true;
+        file.close();
+        resolve(destPath);
+      });
     });
-    req.on('error', (err) => {
-      fs.unlink(destPath, () => {});
-      reject(err);
+    req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+      req.destroy();
+      fail(new Error(`Timed out after ${DOWNLOAD_TIMEOUT_MS}ms downloading ${url}`));
     });
+    req.on('error', fail);
   });
 }
 
@@ -591,30 +623,16 @@ async function uploadLots(page, lots) {
   let blockedCount = 0;         // lots reserved by another run / previously failed — NOT on ES
   const failedLots = [];
 
-  // ── Dedup: skip lots CONFIRMED uploaded to this sale ─────────────────────
-  // Only 'uploaded' rows are pre-skipped here; 'reserved' and 'failed' rows
-  // are handled per-lot via reserveLot(), which conservatively skips them
-  // (no auto-reclaim — see reserveLot for the duplicate-safety reasoning).
-  // Lots without a source_url can't be matched against the ledger and are
-  // treated as pending (they pass through to upload without dedup).
-  const uploadedUrls = await fetchUploadedLotUrls();
-  const pending = lots.filter((l) => !l.source_url || !uploadedUrls.has(l.source_url));
-  const preSkipped = lots.length - pending.length;
-  if (preSkipped > 0) {
-    console.log(`[agent] Skipping ${preSkipped} already-confirmed-uploaded lot(s) — ${pending.length} remaining.`);
-    alreadyUploadedCount += preSkipped;
-  }
-  if (pending.length === 0) {
-    console.log('[agent] All lots already uploaded to this sale — nothing to do.');
-    return { succeeded: 0, failed: 0, failedLots: [], skipped: alreadyUploadedCount, blocked: 0 };
-  }
-
-  // user_id for ledger rows (RLS select policy scopes the UI to the owner).
-  // When the ledger is enabled we MUST resolve a real owner: a row with
-  // user_id:null is a "ghost reservation" — invisible to the owner-scoped UI
-  // but still occupying the unique (es_url, lot_url) key, silently blocking
-  // future runs forever. Fail closed if we can't resolve it. In test mode
-  // (LEDGER_ENABLED=false) this whole block is skipped — no ledger writes.
+  // ── Resolve the row owner (tenant) FIRST ─────────────────────────────────
+  // The agent runs with the Supabase service-role key, which BYPASSES RLS, so
+  // every ledger read/write MUST be scoped by user_id here in code — RLS does
+  // NOT isolate tenants on this path. Resolve the owner before any ledger read
+  // so the dedup fetch below can be owner-scoped too. When the ledger is
+  // enabled we MUST resolve a real owner: a row with user_id:null is a "ghost
+  // reservation" — invisible to the owner-scoped UI but still occupying the
+  // unique (es_url, lot_url) key, silently blocking future runs forever. Fail
+  // closed if we can't resolve it. In test mode (LEDGER_ENABLED=false) this
+  // whole block is skipped — no ledger writes.
   let jobUserId = null;
   if (LEDGER_ENABLED) {
     if (!JOB_ID) {
@@ -632,6 +650,25 @@ async function uploadLots(page, lots) {
     if (!jobUserId) {
       throw new LedgerError(`Ledger enabled but job ${JOB_ID} has no user_id — cannot resolve row owner. Aborting to avoid ghost reservations.`);
     }
+  }
+
+  // ── Dedup: skip lots CONFIRMED uploaded to this sale (by THIS owner) ──────
+  // Only 'uploaded' rows are pre-skipped here; 'reserved' and 'failed' rows
+  // are handled per-lot via reserveLot(), which conservatively skips them
+  // (no auto-reclaim — see reserveLot for the duplicate-safety reasoning).
+  // Lots without a source_url can't be matched against the ledger and are
+  // treated as pending (they pass through to upload without dedup). Scoped by
+  // jobUserId so one tenant's ledger never hides or blocks another's lots.
+  const uploadedUrls = await fetchUploadedLotUrls(jobUserId);
+  const pending = lots.filter((l) => !l.source_url || !uploadedUrls.has(l.source_url));
+  const preSkipped = lots.length - pending.length;
+  if (preSkipped > 0) {
+    console.log(`[agent] Skipping ${preSkipped} already-confirmed-uploaded lot(s) — ${pending.length} remaining.`);
+    alreadyUploadedCount += preSkipped;
+  }
+  if (pending.length === 0) {
+    console.log('[agent] All lots already uploaded to this sale — nothing to do.');
+    return { succeeded: 0, failed: 0, failedLots: [], skipped: alreadyUploadedCount, blocked: 0 };
   }
 
   if (!ES_STORAGE_STATE) {
@@ -760,7 +797,7 @@ async function uploadLots(page, lots) {
     if (!lot.imageUrls || lot.imageUrls.length === 0) {
       const msg = `Lot ${i + 1} has no images to upload`;
       console.warn(`[agent]   WARNING: ${msg}`);
-      await markLotFailed(lot);
+      await markLotFailed(lot, jobUserId);
       failedLots.push({ index: i + 1, title: lot.title, error: msg });
       continue;
     }
@@ -770,7 +807,7 @@ async function uploadLots(page, lots) {
       if (uploaded === 0) {
         const msg = `No images uploaded for lot ${i + 1}`;
         console.warn(`[agent]   WARNING: ${msg}`);
-        await markLotFailed(lot);
+        await markLotFailed(lot, jobUserId);
         failedLots.push({ index: i + 1, title: lot.title, error: msg });
         continue;
       }
@@ -782,7 +819,7 @@ async function uploadLots(page, lots) {
     } catch (err) {
       await screenshot(page, `es-upload-error-lot-${i + 1}`);
       console.error(`[agent]   ERROR uploading images for lot ${i + 1}: ${err.message}`);
-      await markLotFailed(lot);
+      await markLotFailed(lot, jobUserId);
       failedLots.push({ index: i + 1, title: lot.title, error: err.message });
     }
   }
@@ -817,10 +854,10 @@ async function uploadLots(page, lots) {
     const allCaptioned = count > 0 &&
       Array.from({ length: count }, (_, k) => captionResults[startIdx + k]).every(Boolean);
     if (allCaptioned) {
-      await confirmLotUploaded(lot);
+      await confirmLotUploaded(lot, jobUserId);
       succeeded++;
     } else {
-      await markLotFailed(lot);
+      await markLotFailed(lot, jobUserId);
       failedLots.push({ index: null, title: lot.title,
         error: 'Image description not captioned (agent does not save; left for retry)' });
     }

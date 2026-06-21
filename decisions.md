@@ -4,6 +4,16 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 
 ---
 
+## 2026-06-20 — EstateSales dedup ledger is owner-scoped in code (service-role bypasses RLS)
+
+**Decision:** Every read/write against `estatesales_uploaded_lots` in `agent.js` now filters by `.eq('user_id', jobUserId)`, and `jobUserId` is resolved from `estatesales_jobs` (by `JOB_ID`) *before* the first ledger read. `reserveLot` also writes `user_id: jobUserId` on insert. The owner is resolved once; if the job row is missing, the agent throws a `LedgerError` (hard stop) rather than running unscoped.
+
+**Why:** The agent authenticates to Supabase with the **service-role key**, which **bypasses RLS entirely**. RLS therefore provides zero protection on this path — the agent must scope ledger queries itself or one tenant's run could read/confirm/fail another tenant's lots. CodexQC flagged the unscoped queries as the remaining FIX-FIRST blocker after the prior round.
+
+**Consequence:** The DB unique constraint is still `(es_url, lot_url)`, not `(user_id, es_url, lot_url)`. Tightening it to include `user_id` is **deferred to the pre-paying-tenant checklist** — a cross-tenant key collision is only theoretical today (each tenant has distinct `es_url`/`lot_url`), and the query-level scoping already prevents cross-tenant reads/writes. When onboarding the first external tenant, add the migration to drop the old unique index and create `(user_id, es_url, lot_url)`. Do not remove the `.eq('user_id', …)` filters — they are the actual isolation guarantee, not RLS.
+
+---
+
 ## 2026-06-20 — EstateSales agent NEVER saves the Sale wizard; ledger confirms on caption, not save
 
 **Decision:** The EstateSales upload agent (`agent.js`) does the Pictures step only — bulk-upload all images, then for each picture open the editor (pencil on the first image, auto-advance after), paste the DOA-scraped title into the Description field, hit NEXT, repeat — and then **stops**. It deliberately does NOT click "Save and Continue". The dedup ledger (`estatesales_uploaded_lots`) now marks a lot `uploaded` when its images are uploaded AND every picture in its range was captioned successfully — decoupled from any save signal. A lot with any uncaptioned picture is marked `failed` (fail-safe, left for retry). The old `saveEsPictures()` call + the now-orphaned `hasErrorOrAuthState()` helper were removed.
