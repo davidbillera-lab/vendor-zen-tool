@@ -174,8 +174,9 @@ async function reserveLot(lot, jobUserId) {
   }
 
   if (insertErr.code !== '23505') {
-    // A real DB error (not a unique violation) — surface it
-    throw new Error(`[agent] reserveLot DB error for lot ${lot.lot_number}: ${insertErr.message}`);
+    // A real DB error (not a unique violation). The dedup ledger can no longer be
+    // trusted, so fail closed: throw a fatalLedger error to hard-stop the run.
+    throw new LedgerError(`[agent] reserveLot DB error for lot ${lot.lot_number}: ${insertErr.message}`);
   }
 
   // Unique violation — a row already exists for (es_url, lot_url). Inspect it.
@@ -187,11 +188,14 @@ async function reserveLot(lot, jobUserId) {
     .single();
 
   if (fetchErr) {
-    throw new Error(`[agent] reserveLot: could not read existing row for lot ${lot.lot_number}: ${fetchErr.message}`);
+    // Can't read the conflicting row → can't make a safe dedup decision. Fail
+    // closed: throw a fatalLedger error to hard-stop the run.
+    throw new LedgerError(`[agent] reserveLot: could not read existing row for lot ${lot.lot_number}: ${fetchErr.message}`);
   }
 
   if (existing.status === 'uploaded') {
-    return { claimed: false, reason: 'already uploaded in a previous run' };
+    // Truly on ES from a prior run — counts toward lots_uploaded.
+    return { claimed: false, alreadyUploaded: true, reason: 'already uploaded in a previous run' };
   }
 
   if (existing.status === 'reserved') {
@@ -573,14 +577,18 @@ async function scrapeLots(page) {
  *            via the "+ UPLOAD" input. Build a flat imageTitles[] so picture
  *            index i maps to the title of the lot that owns that picture.
  *   Step 2 — Caption: open each uploaded picture's editor, paste the owning lot's
- *            title into the description, "Next" until done.
- *   Step 3 — SAVE AND CONTINUE → confirmLotUploaded() per lot (throws fatalLedger
- *            on a ledger anomaly, hard-stopping the run). If the save can't be
- *            confirmed, markLotFailed() each lot for retry (best-effort).
+ *            title into the description, "Next" until done. A lot is confirmed in
+ *            the ledger (confirmLotUploaded) once its images uploaded AND all its
+ *            descriptions pasted; otherwise markLotFailed() for retry.
+ *
+ * The agent NEVER saves the wizard — David clicks "Save and Continue" manually and
+ * finishes the rest of the sale setup himself. Ledger confirmation is decoupled
+ * from that manual save (see the Pictures-step block below).
  */
 async function uploadLots(page, lots) {
   let succeeded = 0;
-  let skippedCount = 0;
+  let alreadyUploadedCount = 0; // lots confirmed uploaded in a prior run (on ES)
+  let blockedCount = 0;         // lots reserved by another run / previously failed — NOT on ES
   const failedLots = [];
 
   // ── Dedup: skip lots CONFIRMED uploaded to this sale ─────────────────────
@@ -594,11 +602,11 @@ async function uploadLots(page, lots) {
   const preSkipped = lots.length - pending.length;
   if (preSkipped > 0) {
     console.log(`[agent] Skipping ${preSkipped} already-confirmed-uploaded lot(s) — ${pending.length} remaining.`);
-    skippedCount += preSkipped;
+    alreadyUploadedCount += preSkipped;
   }
   if (pending.length === 0) {
     console.log('[agent] All lots already uploaded to this sale — nothing to do.');
-    return { succeeded: 0, failed: 0, failedLots: [], skipped: skippedCount };
+    return { succeeded: 0, failed: 0, failedLots: [], skipped: alreadyUploadedCount, blocked: 0 };
   }
 
   // user_id for ledger rows (RLS select policy scopes the UI to the owner)
@@ -707,7 +715,7 @@ async function uploadLots(page, lots) {
 
   // ── Step 1: Bulk-upload images, per-lot batches ──────────────────────────
   const imageTitles = [];        // flat: imageTitles[pictureIndex] = lot title
-  const uploadedLotState = [];   // { lot, startIdx, count } — confirmed after captioning
+  const uploadedLotState = [];   // { lot, startIdx, count } — confirmed once captioned (not on save)
   let thumbCount = await countEsThumbnails(page);
 
   for (let i = 0; i < pending.length; i++) {
@@ -719,15 +727,19 @@ async function uploadLots(page, lots) {
     try {
       reservation = await reserveLot(lot, jobUserId);
     } catch (reserveErr) {
-      // reserveLot only throws on real DB errors — surface and abort the lot
+      // reserveLot throws only on a real ledger DB error (LedgerError, fatalLedger).
+      // That breaks the dedup guarantee for every remaining lot, so fail closed and
+      // hard-stop the whole run — continuing would risk duplicate uploads.
       await screenshot(page, `es-reserve-error-lot-${i + 1}`);
-      console.error(`[agent]   ERROR reserving lot ${i + 1}: ${reserveErr.message}`);
-      failedLots.push({ index: i + 1, title: lot.title, error: reserveErr.message });
-      continue;
+      console.error(`[agent]   FATAL ledger error reserving lot ${i + 1}: ${reserveErr.message}`);
+      throw reserveErr;
     }
     if (!reservation.claimed) {
       console.log(`[agent]   Skipping lot ${i + 1} — ${reservation.reason}`);
-      skippedCount++;
+      // Only a row already at status 'uploaded' is truly on ES; 'reserved'/'failed'
+      // are blocked and must NOT be counted as uploaded (they need reconciliation).
+      if (reservation.alreadyUploaded) alreadyUploadedCount++;
+      else blockedCount++;
       continue;
     }
 
@@ -763,7 +775,7 @@ async function uploadLots(page, lots) {
 
   if (imageTitles.length === 0) {
     console.warn('[agent] No images uploaded for any lot — nothing to caption.');
-    return { succeeded, failed: failedLots.length, failedLots, skipped: skippedCount };
+    return { succeeded, failed: failedLots.length, failedLots, skipped: alreadyUploadedCount, blocked: blockedCount };
   }
 
   // ── Step 2: Per-image description pass ───────────────────────────────────
@@ -802,9 +814,9 @@ async function uploadLots(page, lots) {
   console.log(`[agent]   ${succeeded} lot(s) confirmed (images + descriptions). ` +
     `David completes "Save and Continue" manually.`);
 
-  await updateJobFields({ lots_uploaded: succeeded, lots_skipped: skippedCount });
-
-  return { succeeded, failed: failedLots.length, failedLots, skipped: skippedCount };
+  // Job-field accounting is owned by run() (single source of truth) — it folds in
+  // alreadyUploaded/blocked counts before writing lots_uploaded/lots_skipped.
+  return { succeeded, failed: failedLots.length, failedLots, skipped: alreadyUploadedCount, blocked: blockedCount };
 }
 
 /**
@@ -1133,32 +1145,36 @@ async function run() {
     // ── Phase 2: EstateSales upload ──────────────────────────────────────────
     console.log('\n[agent] ── Phase 2: EstateSales Upload ─────────────────────');
     const uploadResult = await uploadLots(page, lots);
-    // On rerun where all lots were already uploaded, report skipped+succeeded
-    // so the operator sees "199 of 199" rather than "0 of 199".
-    const totalAccountedFor = uploadResult.succeeded + uploadResult.skipped;
+    const { succeeded, failed, failedLots } = uploadResult;
+    const skipped = uploadResult.skipped;          // confirmed uploaded in a prior run
+    const blocked = uploadResult.blocked ?? 0;     // reserved by another run / previously failed
+    // CONFIRMED on ES = newly uploaded this run + already-uploaded in a prior run.
+    // Blocked lots are NOT on ES (or unconfirmed) and must never be counted as
+    // uploaded — counting them would let a job report success with missing items.
+    const confirmedUploaded = succeeded + skipped;
     console.log(
-      `\n[agent] Phase 2 complete — ${uploadResult.succeeded} newly uploaded, ` +
-      `${uploadResult.skipped} already uploaded (skipped), ${uploadResult.failed} failed. ` +
-      `(${totalAccountedFor}/${lots.length} total accounted for)`
+      `\n[agent] Phase 2 complete — ${succeeded} newly uploaded, ` +
+      `${skipped} already uploaded (skipped), ${blocked} blocked (needs reconciliation), ` +
+      `${failed} failed. (${confirmedUploaded}/${lots.length} confirmed on ES)`
     );
-    // lots_uploaded reflects how many lots are uploaded to ES *in total* —
-    // newly uploaded this run PLUS already-uploaded (skipped on rerun). Skipped
-    // lots are skipped precisely because they're already on ES, so they count.
-    // lots_skipped breaks out the prior-run portion, so newly = uploaded - skipped.
-    // Without this, an all-already-done rerun would report "0 uploaded".
     await updateJobFields({
-      lots_uploaded: totalAccountedFor,
-      lots_skipped:  uploadResult.skipped,
+      lots_uploaded: confirmedUploaded,
+      lots_skipped:  skipped,
     });
-    if (uploadResult.failed > 0) {
-      const summary = uploadResult.failedLots.map(l => `Lot ${l.index}: ${l.error}`).join('; ');
-      if (uploadResult.succeeded === 0 && uploadResult.skipped === 0) {
-        throw new Error(`All ${uploadResult.failed} lot(s) failed to upload. ${summary}`);
+    const problems = failed + blocked;
+    if (problems > 0) {
+      const failSummary = failedLots.map(l => `Lot ${l.index ?? '?'}: ${l.error}`).join('; ');
+      const blockedNote = blocked > 0
+        ? `${blocked} lot(s) blocked (reserved by another run or previously failed — verify on ES, then clear/mark the ledger row to retry)`
+        : '';
+      const parts = [failSummary, blockedNote].filter(Boolean).join('; ');
+      if (confirmedUploaded === 0) {
+        throw new Error(`No lots confirmed on ES — ${problems} lot(s) failed/blocked. ${parts}`);
       }
       // Partial success — throw a typed error so the entry point can distinguish
-      const partialErr = new Error(`${uploadResult.failed} of ${lots.length - uploadResult.skipped} lot(s) failed: ${summary}`);
+      const partialErr = new Error(`${problems} of ${lots.length} lot(s) not confirmed: ${parts}`);
       partialErr.partial = true;
-      partialErr.succeeded = uploadResult.succeeded;
+      partialErr.succeeded = succeeded;
       throw partialErr;
     }
 
