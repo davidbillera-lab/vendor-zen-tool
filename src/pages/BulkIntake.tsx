@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { MainLayout } from "@/components/layout/MainLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { generateListing, uploadImage, type GeneratedListing } from "@/lib/api/listings";
@@ -103,6 +104,7 @@ export default function BulkIntake() {
   const [projects, setProjects] = useState<{ id: string; name: string; consignor_name: string | null }[]>([]);
   const [isPublishing, setIsPublishing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [searchParams] = useSearchParams();
 
   // Fetch projects (la_batches) on mount — same pattern as BatchManager.tsx
   useEffect(() => {
@@ -115,10 +117,15 @@ export default function BulkIntake() {
         console.error('Failed to load projects:', error);
         return;
       }
-      setProjects((data || []).map(p => ({ id: p.id, name: p.name, consignor_name: p.consignor_name ?? null })));
+      const loaded = (data || []).map(p => ({ id: p.id, name: p.name, consignor_name: p.consignor_name ?? null }));
+      setProjects(loaded);
+      const paramId = searchParams.get('project');
+      if (paramId && loaded.some(p => p.id === paramId)) {
+        setSelectedBatchId(paramId);
+      }
     };
     fetchProjects();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // File drop / select handler
   const handleFiles = useCallback(async (newFiles: File[]) => {
