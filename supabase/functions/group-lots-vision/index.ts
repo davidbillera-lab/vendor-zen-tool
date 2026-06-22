@@ -35,7 +35,7 @@ serve(async (req) => {
       });
     }
 
-    const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? '';
+    const GEMINI_API_KEY = Deno.env.get('GOOGLE_AI_API_KEY') ?? Deno.env.get('GEMINI_API_KEY') ?? '';
 
     const inlineDataParts = images.map((b64) => ({
       inlineData: { mimeType: 'image/jpeg', data: b64 },
