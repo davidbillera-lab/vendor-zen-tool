@@ -100,7 +100,7 @@ export default function BulkIntake() {
   const [targetEbay, setTargetEbay] = useState(true);
   const [targetDoa, setTargetDoa] = useState(false);
   const [selectedBatchId, setSelectedBatchId] = useState<string>('');
-  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [projects, setProjects] = useState<{ id: string; name: string; consignor_name: string | null }[]>([]);
   const [isPublishing, setIsPublishing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -109,13 +109,13 @@ export default function BulkIntake() {
     const fetchProjects = async () => {
       const { data, error } = await supabase
         .from('la_batches')
-        .select('id, name')
+        .select('id, name, consignor_name')
         .order('updated_at', { ascending: false });
       if (error) {
         console.error('Failed to load projects:', error);
         return;
       }
-      setProjects((data || []).map(p => ({ id: p.id, name: p.name })));
+      setProjects((data || []).map(p => ({ id: p.id, name: p.name, consignor_name: p.consignor_name ?? null })));
     };
     fetchProjects();
   }, []);
@@ -139,11 +139,19 @@ export default function BulkIntake() {
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    if (!selectedBatchId) {
+      toast({ title: 'Pick a consignor / project first', variant: 'destructive' });
+      return;
+    }
     const dropped = Array.from(e.dataTransfer.files);
     handleFiles(dropped);
   };
 
   const handleDropZoneClick = () => {
+    if (!selectedBatchId) {
+      toast({ title: 'Pick a consignor / project first', variant: 'destructive' });
+      return;
+    }
     fileInputRef.current?.click();
   };
 
@@ -315,20 +323,68 @@ export default function BulkIntake() {
           <h1 className="text-2xl font-bold">Bulk Intake</h1>
         </div>
 
+        {/* Consignor / Project picker — must select before dropping photos */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Session Consignor</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-4">
+              <Select value={selectedBatchId} onValueChange={setSelectedBatchId}>
+                <SelectTrigger className="w-72">
+                  <SelectValue placeholder="Select consignor / project..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.consignor_name ? `${p.consignor_name} — ${p.name}` : p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedBatchId && (() => {
+                const active = projects.find(p => p.id === selectedBatchId);
+                return active ? (
+                  <span className="text-sm text-muted-foreground">
+                    {active.consignor_name
+                      ? <><span className="font-medium text-foreground">{active.consignor_name}</span> · {active.name}</>
+                      : <span className="font-medium text-foreground">{active.name}</span>}
+                  </span>
+                ) : null;
+              })()}
+            </div>
+            {!selectedBatchId && (
+              <p className="text-xs text-muted-foreground mt-2">
+                All lots from this session will be grouped under the selected project. Create projects in <strong>Projects</strong>.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Drop zone */}
         <Card>
           <CardContent className="p-0">
             <div
-              className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-12 text-center cursor-pointer hover:border-primary/50 transition-colors"
+              className={`border-2 border-dashed rounded-lg p-12 text-center transition-colors ${
+                selectedBatchId
+                  ? 'border-muted-foreground/25 cursor-pointer hover:border-primary/50'
+                  : 'border-muted-foreground/15 opacity-50 cursor-not-allowed'
+              }`}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
               onClick={handleDropZoneClick}
             >
               <Upload className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
-              <p className="text-lg font-medium">Drop estate sale photos here</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Drag &amp; drop or click to select. Divider images auto-removed.
-              </p>
+              {selectedBatchId ? (
+                <>
+                  <p className="text-lg font-medium">Drop estate sale photos here</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Drag &amp; drop or click to select. Divider images auto-removed.
+                  </p>
+                </>
+              ) : (
+                <p className="text-lg font-medium text-muted-foreground">Select a consignor above to unlock</p>
+              )}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -503,24 +559,6 @@ export default function BulkIntake() {
                   <Label htmlFor="doa">Denver Online Auctions</Label>
                 </div>
               </div>
-
-              {targetEbay && (
-                <div>
-                  <Label className="text-xs mb-1 block">eBay Batch / Project</Label>
-                  <Select value={selectedBatchId} onValueChange={setSelectedBatchId}>
-                    <SelectTrigger className="w-64">
-                      <SelectValue placeholder="Select batch..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projects.map(p => (
-                        <SelectItem key={p.id} value={p.id}>
-                          {p.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
 
               <Button
                 onClick={handlePublish}
