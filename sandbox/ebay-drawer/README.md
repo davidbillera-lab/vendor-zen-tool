@@ -26,6 +26,8 @@
    ```bash
    psql "$STAGING_DB_URL" -f sandbox/ebay-drawer/migrations/ebay_category_aspects_cache.sql
    ```
+   Note: `$STAGING_DB_URL` is the direct Postgres connection string (found in Supabase dashboard → Settings → Database → Connection string → URI format), NOT the Supabase project URL.
+   
    Verify the `ebay_category_aspects_cache` table exists with `category_id` PK, `aspects jsonb`, `fetched_at`.
 
 2. **Deploy edge function to staging:**
@@ -60,8 +62,12 @@
 6. **Apply migration to production** after staging verification passes:
    ```bash
    psql "$PROD_DB_URL" -f sandbox/ebay-drawer/migrations/ebay_category_aspects_cache.sql
+   ```
+   Then deploy the edge function:
+   ```bash
    supabase functions deploy ebay-category-aspects --project-ref <PROD_REF>
    ```
+   Note: `$PROD_DB_URL` is the direct Postgres connection string for production.
 
 ### Phase 2 — Drawer component
 
