@@ -173,7 +173,7 @@ export default function BulkIntake() {
     if (files.length === 0) return;
     setIsGrouping(true);
     try {
-      const base64Images = await Promise.all(files.map(fileToBase64));
+      const base64Images = thumbnails.map(t => t.split(',')[1]);
       const { data, error } = await supabase.functions.invoke('group-lots-vision', {
         body: { images: base64Images },
       });
