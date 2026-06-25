@@ -266,10 +266,25 @@ VERIFIED CURRENT LEAF CATEGORIES (use these when they match):
 - Magazines: 280
 
 -- COINS & PAPER MONEY (root: 11116) --
-- US Coins: 253
-- World / Foreign Coins: 256
-- US Paper Money: 3412
-- Coin Collections & Lots: 18880
+  -- US COINS (pick most specific match) --
+- US Small Cents (pennies): 11633
+- US Nickels: 11974
+- US Quarters: 11962
+- US Half Dollars: 11968
+- US Dollars (generic): 11975
+- Morgan Dollars: 39464
+- Peace Dollars: 11980
+- Eisenhower Dollars: 11981
+- US Commemorative Coins: 15903
+- US Coin Collections & Lots: 525
+  -- WORLD COINS --
+- World Coin Collections & Lots: 544
+  -- US PAPER MONEY --
+- US Small Size Paper Money Notes: 40028
+- US Large Size Paper Money Notes: 149942
+  -- BULLION --
+- Silver Bullion Coins: 177653
+- Gold Bullion Coins: 177652
 
 -- DOLLS & BEARS (root: 237) --
 - Barbie Dolls: 238
@@ -341,7 +356,10 @@ These are ALL root/parent categories — eBay error 87 if used directly. Always 
 - 888   = Sporting Goods (PARENT) — use 15273, 1513, 1492, etc.
 - 1     = Collectibles (PARENT) — use 162032, 36018, 33164, etc.
 - 1249  = Video Games & Consoles (PARENT) — use 139971
-- 11116 = Coins & Paper Money (PARENT) — use 253, 256, 3412
+- 11116 = Coins & Paper Money (PARENT) — use leaf IDs from coin section above
+- 253   = US Coins (PARENT) — use 11633, 11962, 11968, 11975, 39464, 11980, 11981, 525
+- 256   = World Coins (PARENT) — use 544
+- 3412  = US Paper Money (PARENT) — use 40028 (small size) or 149942 (large size)
 - 11232 = Movies & TV (PARENT) — use 617, 309
 - 11233 = Music (PARENT) — use 306, 176984
 - 11700 = Home & Garden (PARENT) — use 177005, 112581, 20706, etc.
@@ -1068,6 +1086,10 @@ serve(async (req) => {
         51028: 31787,    // Models & Kits parent → Military Vehicle Model Kits (fallback)
         20601: 20668,    // Bedding parent → Blankets & Throws (fallback)
         19130: 262318,   // Old HO Trains category → HO Scale (eBay's own remap)
+        // Coin parent categories (eBay error 87)
+        253: 525,        // US Coins parent → US Coin Collections & Lots (fallback)
+        256: 544,        // World Coins parent → World Coin Collections & Lots (fallback)
+        3412: 40028,     // US Paper Money parent → US Small Size Paper Money Notes (fallback)
         // Knife parent categories (eBay error 87)
         11700: 177005,   // Home & Garden parent → Kitchen & Steak Knives (if knife context)
         20625: 177005,   // Kitchen, Dining & Bar parent → Kitchen & Steak Knives
