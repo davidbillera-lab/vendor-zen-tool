@@ -385,23 +385,20 @@ BAD EXAMPLES:
 - "RARE AMAZING BEAUTIFUL Vintage Item WOW" (keyword stuffing, no specifics)
 - Any title over 80 characters (WILL BE REJECTED)
 
-=== STEP 3B: DESCRIPTION (CASSINI OPTIMIZED — DETAILED & KEYWORD-RICH) ===
-eBay's Cassini algorithm indexes description text for search ranking. A well-written description directly improves visibility and conversion.
+=== STEP 3B: DESCRIPTION (SHORT, FACTUAL, ACCURATE — 3 TO 5 SENTENCES) ===
+Write a concise, accurate description. Accuracy over length — a wrong detail destroys buyer confidence more than a short description does.
 
-CASSINI DESCRIPTION REQUIREMENTS:
-1. **Minimum 150 words** — longer, detailed descriptions rank higher
-2. **Repeat key title keywords naturally** in the first 1-2 sentences
-3. **Include long-tail search phrases** buyers might use that didn't fit in the 80-char title
-4. **Structure with clear sections** using line breaks:
-   - Opening hook: What the item IS + brand + key selling point
-   - Detailed specifications: Measurements, materials, model numbers, dates
-   - Condition report: Honest, thorough assessment of wear/flaws/completeness
-   - What's included: List all items/accessories in the sale
-   - Shipping note: "Ships fast and securely packaged"
-5. **Use natural keyword variations**: If title says "jacket", also use "coat", "outerwear"
-6. **Include brand story/context** when relevant
-7. **Add scarcity signals** when honest: "discontinued", "no longer in production", "hard to find"
-8. **Avoid**: ALL CAPS blocks, excessive exclamation marks, "L@@K", emoji, HTML tags
+DESCRIPTION RULES — NO EXCEPTIONS:
+1. **Start from photos, extend with research.** Describe what you see. If you can read a model number or maker's mark, look it up — confirmed specs and maker details are fair to include. Visible beauty is fair to note plainly ("fine glaze," "exceptional carving").
+2. **DO NOT add**: company history, founder biographies, unrelated historical background, or marketing language ("great addition to your collection").
+3. **DO NOT invent**: brand names, dates, origins, materials, or details you cannot identify from photos or confirmed research.
+4. **Structure (3-5 sentences)**:
+   - Sentence 1: What the item is + brand/maker if identified + primary material
+   - Sentence 2: Key features — visible characteristics and any research-confirmed specs
+   - Sentence 3: Honest condition — what you can actually see (wear, marks, damage, completeness)
+   - Sentence 4 (if needed): What's included (accessories, original box, COA, papers, etc.)
+   - Sentence 5 (if needed): One accurate, buyer-relevant detail
+5. **Avoid**: speculation, HTML tags, shipping promises, and marketing language
 
 === STEP 4: PRICING (BASED ON SOLD COMPS - CRITICAL) ===
 Price MUST be based on what similar items have ACTUALLY SOLD for on eBay, not guesses.
@@ -452,7 +449,7 @@ CATEGORY-SPECIFIC:
 === REQUIRED JSON OUTPUT FORMAT ===
 {
   "title": "string (MUST be 80 chars or less - Cassini optimized, keyword-dense)",
-  "description": "string (150+ words, Cassini optimized, structured with specs/condition/includes)",
+  "description": "string (3-5 sentences, factual — photos + research-confirmed details; no company history or marketing fluff)",
   "price": number (based on sold comps, not random),
   "compQuery": "string (3-6 word search phrase a shopper would type to find THIS exact item — brand + item type + key descriptor, e.g. 'Coach Willis leather satchel'. NOT the full keyword-stuffed title. Used to pull live market comps.)",
   "category": "string (human readable like 'Men's Coats, Jackets & Vests')",
@@ -536,34 +533,21 @@ GOOD EXAMPLES:
 - "Antique French Bronze Ormolu Mantel Clock Japy Freres Movement c1880" (68 chars)
 - "Native American Zuni Petit Point Turquoise Sterling Cuff Bracelet Signed" (72 chars)
 
-=== DESCRIPTION (IN-DEPTH CATALOG ENTRY — MINIMUM 6-10 SENTENCES) ===
-Write like a professional auction house cataloger. This is a COMPREHENSIVE catalog entry.
+=== DESCRIPTION (ACCURATE CATALOG ENTRY — 4 TO 6 SENTENCES) ===
+Write a concise, factual catalog entry. Accuracy is mandatory.
 
-REQUIRED CONTENT (weave together naturally):
-1. **PRECISE IDENTIFICATION**: Exactly what this item is — maker, brand, model, pattern, period, origin
-2. **PHYSICAL DETAILS**: Materials, construction, colors, decorative elements, dimensions (estimate if needed), weight class
-3. **HISTORICAL CONTEXT & PROVENANCE**:
-   - Manufacturing era and production history
-   - Maker/artist biography and significance
-   - Design movement or stylistic context (Art Nouveau, Arts & Crafts, Bauhaus, etc.)
-   - Cultural or historical significance
-   - Is this from a known series, collection, or limited production?
-4. **EXPERT OBSERVATIONS**:
-   - Maker's marks, hallmarks, stamps, signatures, labels, patent numbers visible
-   - Construction techniques indicating quality or era (hand-dovetailed, hand-blown, hand-forged)
-   - Rarity indicators: discontinued, limited edition, regional specialty, scarce variant
-   - Comparable auction results or market context if known
-   - Features that distinguish this from reproductions or lesser examples
-5. **DETAILED CONDITION REPORT** (MANDATORY):
-   - Overall grade: Excellent, Very Good, Good, Fair, Poor
-   - Surface condition: scratches, chips, cracks, dents, stains, foxing, tarnish, patina
-   - Structural: loose joints, wobbles, missing parts, repairs, restoration evidence
-   - Finish: original, refinished, retouched, faded, sun-bleached
-   - Functionality: working/non-working, missing components
-   - Completeness: all original parts, original case/box, documentation
-   - Example: "Very good condition with light wear consistent with age. Minor tarnish to silverplate, small 1/4-inch nick to rim edge, original felt pads intact on base. No dents, monograms, or repairs."
+RULES — NO EXCEPTIONS:
+1. **Start from photos, extend with research.** Describe what you see. If you can read a maker's mark, model number, or signature, confirm the maker and relevant details — that research belongs in the description. If the piece is visually striking, say so plainly ("exceptional glaze," "finely hand-painted").
+2. **DO NOT add**: manufacturer biographies, founder histories, unrelated historical background, or marketing language.
+3. **DO NOT invent**: attributions, dates, origins, or materials you cannot identify from photos or confirmed research.
+4. **Structure (4-6 sentences)**:
+   - Sentence 1: Precise identification — what it is, material, maker/maker's mark if identified
+   - Sentence 2: Physical description — estimated size, colors, decorative elements, notable visual qualities
+   - Sentences 3-4: Honest condition report — overall grade + specific observable wear, chips, cracks, completeness
+   - Sentences 5-6 (optional): What's included; any research-confirmed provenance or notable details
+5. **Condition report is MANDATORY** and must be based on what you can actually see in the photos.
 
-DESCRIPTION TONE: Authoritative, factual, collector-oriented. Make bidders confident and excited.
+DESCRIPTION TONE: Factual and professional. Make bidders confident about exactly what they're getting.
 
 DEFAULTS:
 - Consigner: "JSG"
@@ -573,7 +557,7 @@ DEFAULTS:
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (max 100 chars including spaces - SEO/GEO KEYWORD RICH)",
-  "description": "string (6-10+ sentences, comprehensive catalog entry with condition report, history, provenance)",
+  "description": "string (4-6 sentences, factual catalog entry — photos + research-confirmed details; mandatory condition report)",
   "lowEst": number (realistic based on market knowledge),
   "highEst": number (typically 2-4x lowEst),
   "startPrice": 5,
@@ -618,22 +602,22 @@ GOOD EXAMPLES:
 - "Native American Navajo Sterling Silver Turquoise Squash Blossom Necklace c1970" (78 chars)
 - "Antique Cast Iron Griswold #8 Skillet 704 Erie PA Small Logo Heat Ring" (70 chars)
 
-=== DESCRIPTION (IN-DEPTH, COMPREHENSIVE — MINIMUM 5-8 SENTENCES) ===
-Write like a professional auction house cataloger with expert-level detail.
+=== DESCRIPTION (ACCURATE — 3 TO 5 SENTENCES) ===
+Write a concise, factual lot description. Accuracy is mandatory.
 
-REQUIRED CONTENT (weave naturally, don't use headers):
-1. **IDENTIFICATION**: Precise ID — maker, brand, model, pattern, era, origin
-2. **PHYSICAL DESCRIPTION**: Materials, construction, colors, textures, dimensions (estimate from photos), decorative elements, hardware
-3. **HISTORICAL CONTEXT & PROVENANCE**: Manufacturing era, maker history/significance, design movement connections, cultural relevance, production history, series/collection info
-4. **EXPERT OBSERVATIONS**: Maker's marks/stamps/signatures, construction techniques indicating quality/era, rarity indicators, distinguishing features vs reproductions
-5. **CONDITION REPORT** (MANDATORY — thorough and honest):
-   - Overall grade (Excellent, Very Good, Good, Fair, Poor)
-   - Specific wear: scratches, chips, cracks, dents, stains, fading, tarnish, patina
-   - Structural integrity: loose joints, wobble, missing parts, repairs, restoration
-   - Functionality and completeness
-   - Example: "Shows honest wear consistent with 60+ years of use including light surface scratches to the top, a small chip to the rear left foot (3/8 inch), and expected patina to the brass pulls."
+RULES — NO EXCEPTIONS:
+1. **Start from photos, extend with research.** Describe what you see. If you can read a maker's mark, model number, or label, confirm it — those details belong in the description. If the item is visually appealing, say so plainly ("rich patina," "crisp original graphics").
+2. **DO NOT add**: company history, manufacturer biographies, unrelated historical context, or marketing language.
+3. **DO NOT invent**: maker attributions, dates, origins, or materials you cannot identify from photos or confirmed research.
+4. **Structure (3-5 sentences)**:
+   - Sentence 1: What the item is + maker/brand if identified + material
+   - Sentence 2: Key physical characteristics (size estimate, colors, decorative elements, notable visual qualities)
+   - Sentence 3: Honest condition assessment — what you can actually see (wear, chips, marks)
+   - Sentence 4 (optional): Completeness and what's included
+   - Sentence 5 (optional): One noteworthy research-confirmed or visible detail
+5. **Condition is MANDATORY**: Always include an honest condition assessment based on what you can observe.
 
-DESCRIPTION TONE: Knowledgeable, factual, collector-oriented. Make buyers confident about what they're bidding on.
+DESCRIPTION TONE: Factual and direct. Make bidders confident about exactly what they're getting.
 
 === STARTING BID ===
 - Suggest a conservative starting bid in dollars (integer, no decimals)
@@ -642,7 +626,7 @@ DESCRIPTION TONE: Knowledgeable, factual, collector-oriented. Make buyers confid
 ALWAYS return this exact JSON format (no markdown, no explanation, just JSON):
 {
   "title": "string (MUST be ≤100 chars including spaces, SEO/GEO keyword-rich)",
-  "description": "string (5-8+ sentences, comprehensive with condition report, history, expert observations)",
+  "description": "string (3-5 sentences, factual — photos + research-confirmed details; mandatory condition report)",
   "startingBid": number
 }`
 };
