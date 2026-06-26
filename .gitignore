@@ -47,3 +47,7 @@ estatesales-agent/es-cookies.json
 # Run artifacts — screenshots can show a logged-in account; logs are noise
 estatesales-agent/screenshots/
 estatesales-agent/*.out
+
+# Local image/scratch artifacts — large binaries + captures, not source
+screenshots/
+doa-listing-agent/*.zip

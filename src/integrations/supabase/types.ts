@@ -191,6 +191,7 @@ export type Database = {
           brand: string | null
           category: string | null
           condition: string | null
+          condition_descriptors: Json | null
           created_at: string
           created_by: string | null
           custom_sku: string | null
@@ -230,6 +231,7 @@ export type Database = {
           brand?: string | null
           category?: string | null
           condition?: string | null
+          condition_descriptors?: Json | null
           created_at?: string
           created_by?: string | null
           custom_sku?: string | null
@@ -269,6 +271,7 @@ export type Database = {
           brand?: string | null
           category?: string | null
           condition?: string | null
+          condition_descriptors?: Json | null
           created_at?: string
           created_by?: string | null
           custom_sku?: string | null
@@ -341,6 +344,27 @@ export type Database = {
         }
         Relationships: []
       }
+      ebay_category_aspects_cache: {
+        Row: {
+          aspects: Json
+          category_id: string
+          fetched_at: string
+          marketplace_id: string
+        }
+        Insert: {
+          aspects?: Json
+          category_id: string
+          fetched_at?: string
+          marketplace_id?: string
+        }
+        Update: {
+          aspects?: Json
+          category_id?: string
+          fetched_at?: string
+          marketplace_id?: string
+        }
+        Relationships: []
+      }
       ebay_category_learnings: {
         Row: {
           category_id: number
@@ -381,6 +405,7 @@ export type Database = {
           id: string
           lots_described: number
           lots_scraped: number
+          lots_skipped: number | null
           lots_uploaded: number
           status: string
           user_id: string
@@ -394,6 +419,7 @@ export type Database = {
           id?: string
           lots_described?: number
           lots_scraped?: number
+          lots_skipped?: number | null
           lots_uploaded?: number
           status?: string
           user_id: string
@@ -407,9 +433,52 @@ export type Database = {
           id?: string
           lots_described?: number
           lots_scraped?: number
+          lots_skipped?: number | null
           lots_uploaded?: number
           status?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      estatesales_uploaded_lots: {
+        Row: {
+          created_at: string
+          es_url: string
+          id: string
+          job_id: string | null
+          lot_number: string | null
+          lot_title: string | null
+          lot_url: string
+          reserved_at: string
+          status: string
+          uploaded_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          es_url: string
+          id?: string
+          job_id?: string | null
+          lot_number?: string | null
+          lot_title?: string | null
+          lot_url: string
+          reserved_at?: string
+          status?: string
+          uploaded_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          es_url?: string
+          id?: string
+          job_id?: string | null
+          lot_number?: string | null
+          lot_title?: string | null
+          lot_url?: string
+          reserved_at?: string
+          status?: string
+          uploaded_at?: string | null
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -502,6 +571,7 @@ export type Database = {
           doa_first_lot_url: string | null
           doa_pending: number | null
           id: string
+          master_prompt: string | null
           name: string | null
           platforms: string[] | null
           updated_at: string
@@ -517,6 +587,7 @@ export type Database = {
           doa_first_lot_url?: string | null
           doa_pending?: number | null
           id?: string
+          master_prompt?: string | null
           name?: string | null
           platforms?: string[] | null
           updated_at?: string
@@ -532,9 +603,43 @@ export type Database = {
           doa_first_lot_url?: string | null
           doa_pending?: number | null
           id?: string
+          master_prompt?: string | null
           name?: string | null
           platforms?: string[] | null
           updated_at?: string
+        }
+        Relationships: []
+      }
+      listing_correction_lessons: {
+        Row: {
+          category: string | null
+          created_at: string
+          id: string
+          lesson_text: string
+          retired: boolean
+          source_correction_ids: string[] | null
+          times_injected: number
+          user_id: string
+        }
+        Insert: {
+          category?: string | null
+          created_at?: string
+          id?: string
+          lesson_text: string
+          retired?: boolean
+          source_correction_ids?: string[] | null
+          times_injected?: number
+          user_id: string
+        }
+        Update: {
+          category?: string | null
+          created_at?: string
+          id?: string
+          lesson_text?: string
+          retired?: boolean
+          source_correction_ids?: string[] | null
+          times_injected?: number
+          user_id?: string
         }
         Relationships: []
       }
@@ -545,6 +650,7 @@ export type Database = {
           corrected_title: string | null
           correction_note: string | null
           created_at: string
+          distilled_at: string | null
           embedding: string | null
           id: string
           image_urls: string[] | null
@@ -563,6 +669,7 @@ export type Database = {
           corrected_title?: string | null
           correction_note?: string | null
           created_at?: string
+          distilled_at?: string | null
           embedding?: string | null
           id?: string
           image_urls?: string[] | null
@@ -581,6 +688,7 @@ export type Database = {
           corrected_title?: string | null
           correction_note?: string | null
           created_at?: string
+          distilled_at?: string | null
           embedding?: string | null
           id?: string
           image_urls?: string[] | null
@@ -806,21 +914,27 @@ export type Database = {
           created_at: string
           estatesales_email: string
           estatesales_password: string
+          estatesales_storage_state: string | null
           id: string
+          updated_at: string
           user_id: string
         }
         Insert: {
           created_at?: string
           estatesales_email: string
           estatesales_password: string
+          estatesales_storage_state?: string | null
           id?: string
+          updated_at?: string
           user_id: string
         }
         Update: {
           created_at?: string
           estatesales_email?: string
           estatesales_password?: string
+          estatesales_storage_state?: string | null
           id?: string
+          updated_at?: string
           user_id?: string
         }
         Relationships: []
@@ -1001,6 +1115,10 @@ export type Database = {
       }
       record_correction_injections: {
         Args: { p_ids: string[]; p_platform: string; p_row_id: string }
+        Returns: undefined
+      }
+      record_lesson_injections: {
+        Args: { p_ids: string[] }
         Returns: undefined
       }
       suggest_ebay_category: {
