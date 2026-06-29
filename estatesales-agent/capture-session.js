@@ -1,21 +1,18 @@
 /**
- * capture-session.js
+ * capture-session.js — DEPRECATED (no longer used).
  *
- * One-time tool: opens a headed browser, lets you log in to EstateSales.net
- * via Google SSO manually, then saves the Playwright storageState to
- * es-session.json so test-local.js (and eventually the VZT Settings UI) can
- * use it for automated runs.
- *
- * Usage:
- *   node capture-session.js
- *
- * Output: es-session.json (gitignored — treat as a credential)
+ * The EstateSales.net agent now logs in with native email + password on every
+ * run (set in VZT Settings). The Playwright cookie/storageState session machine
+ * this script supported has been retired. Kept for git history only.
  */
 
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+
+console.error('[DEPRECATED] This script is retired. The EstateSales agent now logs in with email + password set in VZT Settings. No session capture/conversion is needed.');
+process.exit(1);
 
 // Wait for the operator to press Enter in the terminal. We do NOT auto-detect
 // login — the Google OAuth redirect sets cookies mid-flow that falsely look

@@ -2,9 +2,8 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Home, CheckCircle, Loader2, ChevronDown } from "lucide-react";
+import { Home, CheckCircle, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -13,25 +12,20 @@ export function EstateSalesCredentialsCard() {
   const { user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [sessionJson, setSessionJson] = useState("");
-  const [hasSession, setHasSession] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
     if (!user) return;
     supabase
       .from("user_estatesales_credentials" as any)
-      // presence only — never pull the session secret into the browser
-      .select("estatesales_email, estatesales_storage_state")
+      .select("estatesales_email")
       .eq("user_id", user.id)
       .single()
       .then(({ data }) => {
         if (data) {
           setEmail((data as any).estatesales_email);
           setIsConnected(true);
-          setHasSession(!!(data as any).estatesales_storage_state);
         }
       });
   }, [user]);
@@ -44,41 +38,28 @@ export function EstateSalesCredentialsCard() {
     }
 
     const fields: Record<string, string> = { estatesales_email: email.trim() };
-    if (password.trim()) fields.estatesales_password = password.trim();
-
-    // Validate the pasted session before saving — guards against the agent's
-    // runtime "ES_STORAGE_STATE is not valid session JSON" failure in CI.
-    const session = sessionJson.trim();
-    if (session) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(session);
-      } catch {
-        toast.error("Session is not valid JSON — re-copy the full es-session.json contents.");
-        return;
-      }
-      if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { cookies?: unknown }).cookies)) {
-        toast.error("That JSON doesn't look like a Playwright session (missing a 'cookies' array).");
-        return;
-      }
-      fields.estatesales_storage_state = session;
-    }
+    // Send the password exactly as typed — some accounts allow leading/trailing
+    // spaces, and this is now the agent's sole login credential. Trim only for
+    // the presence check.
+    if (password.trim()) fields.estatesales_password = password;
 
     setIsSaving(true);
-    const { error } = await supabase.functions.invoke("save-credentials", {
-      body: { platform: "estatesales", fields },
-    });
-    setIsSaving(false);
-    if (error) {
-      toast.error("Failed to save: " + error.message);
-    } else {
-      setIsConnected(true);
-      setPassword("");
-      if (session) {
-        setHasSession(true);
-        setSessionJson("");
+    try {
+      const { error } = await supabase.functions.invoke("save-credentials", {
+        body: { platform: "estatesales", fields },
+      });
+      if (error) {
+        toast.error("Failed to save: " + error.message);
+      } else {
+        setIsConnected(true);
+        setPassword("");
+        toast.success("EstateSales.net credentials saved");
       }
-      toast.success("EstateSales.net credentials saved");
+    } catch (err) {
+      // invoke() can throw (network/function error) rather than return { error }.
+      toast.error("Failed to save: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -93,8 +74,6 @@ export function EstateSalesCredentialsCard() {
     } else {
       setEmail("");
       setPassword("");
-      setSessionJson("");
-      setHasSession(false);
       setIsConnected(false);
       toast.success("EstateSales.net account disconnected");
     }
@@ -137,77 +116,10 @@ export function EstateSalesCredentialsCard() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder={isConnected ? "leave blank to keep current" : "Your EstateSales.net password"}
           />
+          <p className="text-xs text-muted-foreground">
+            The agent signs in with this email and password each run.
+          </p>
         </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <Label htmlFor="estatesales_session">
-            EstateSales.net Session{" "}
-            <span className="text-xs font-normal text-muted-foreground">(required)</span>
-          </Label>
-          {hasSession && (
-            <span className="inline-flex items-center text-xs text-green-600">
-              <CheckCircle className="h-3 w-3 mr-1" /> Session imported
-            </span>
-          )}
-        </div>
-        <Textarea
-          id="estatesales_session"
-          value={sessionJson}
-          onChange={(e) => setSessionJson(e.target.value)}
-          rows={4}
-          className="font-mono text-xs"
-          placeholder={
-            hasSession
-              ? "Session saved — paste new JSON to replace it (e.g. when it expires)."
-              : '{ "cookies": [ ... ], "origins": [ ... ] }'
-          }
-        />
-        <p className="text-xs text-muted-foreground">
-          EstateSales.net uses Google sign-in, which blocks automated login. The agent
-          reuses your captured browser session instead — paste the contents of{" "}
-          <code className="text-foreground">es-session.json</code> here.
-        </p>
-
-        <button
-          type="button"
-          onClick={() => setShowGuide((v) => !v)}
-          className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ChevronDown
-            className={`h-3 w-3 mr-1 transition-transform ${showGuide ? "rotate-180" : ""}`}
-          />
-          How do I capture my session?
-        </button>
-
-        {showGuide && (
-          <div className="rounded-md border border-border bg-background/50 p-3 text-xs text-muted-foreground space-y-2">
-            <ol className="list-decimal list-inside space-y-1">
-              <li>
-                Sign in to{" "}
-                <code className="text-foreground">estatesales.net</code> in Chrome (the
-                normal Google sign-in).
-              </li>
-              <li>
-                Install the <strong>Cookie-Editor</strong> extension, open it on the
-                EstateSales tab, and click <strong>Export → JSON</strong>.
-              </li>
-              <li>
-                Run the agent's{" "}
-                <code className="text-foreground">convert-cookies.js</code> helper to turn
-                that export into Playwright format (produces{" "}
-                <code className="text-foreground">es-session.json</code>).
-              </li>
-              <li>Open that file, copy everything, and paste it above.</li>
-            </ol>
-            <p>
-              The session contains live login cookies — it's encrypted before storage and
-              never leaves your account. Re-paste a fresh one whenever uploads start
-              failing on the login step.
-            </p>
-          </div>
-        )}
       </div>
 
       <div className="flex justify-end gap-2">

@@ -51,3 +51,4 @@ estatesales-agent/*.out
 # Local image/scratch artifacts — large binaries + captures, not source
 screenshots/
 doa-listing-agent/*.zip
+.codex-qc/

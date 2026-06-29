@@ -6,9 +6,8 @@
  * rows are scoped to this test run and can be inspected/cleared manually.
  *
  * Prerequisites:
- *   1. Copy .estatesales-test.env.example → .estatesales-test.env and fill it in
- *   2. Run capture-session.js once to produce es-session.json (Google-SSO login)
- *   3. node test-local.js
+ *   1. Copy .estatesales-test.env.example → .estatesales-test.env and fill it in (must include ESTATESALES_EMAIL + ESTATESALES_PASSWORD)
+ *   2. node test-local.js
  *
  * The browser will be headed (visible) because IS_CI is false locally.
  */
@@ -48,17 +47,6 @@ if (process.env.MAX_LOTS === undefined || process.env.MAX_LOTS === '') {
   console.log('[test-local] MAX_LOTS not set — defaulting to 2 (smoke test). Set MAX_LOTS=0 for a full run.');
 } else {
   console.log(`[test-local] MAX_LOTS=${process.env.MAX_LOTS} (from env).`);
-}
-
-// ── Load storageState session (Google-SSO) ────────────────────────────────────
-
-const sessionPath = resolve(__dir, 'es-session.json');
-if (existsSync(sessionPath)) {
-  process.env.ES_STORAGE_STATE = readFileSync(sessionPath, 'utf8');
-  console.log('[test-local] Loaded storageState from es-session.json');
-} else {
-  console.log('[test-local] No es-session.json — falling back to email/password login.');
-  console.log('[test-local] If that fails, run capture-session.js first.');
 }
 
 // ── Test mode: disable the dedup ledger ───────────────────────────────────────

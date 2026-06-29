@@ -15,18 +15,9 @@
  *
  * All credentials and URLs are injected via process.env by runAgent.js.
  *
- * EstateSales.net login supports two modes:
- *   A) storageState (preferred for Google-SSO accounts): inject ES_STORAGE_STATE
- *      containing an exported Playwright session JSON string. The agent reuses
- *      the session without touching the login form.
- *   B) Email/password fallback: ES_EMAIL + ES_PASSWORD (may not work for
- *      Google-SSO-only accounts).
- *
- * One-time session capture (operator runs locally, never commit the output):
- *   node -e "const {chromium}=require('playwright'); (async()=>{const b=await chromium.launch({headless:false}); const c=await b.newContext(); const p=await c.newPage(); await p.goto('https://www.estatesales.net/sign-in'); console.log('Log in via Google in the window, then press Enter here'); process.stdin.once('data', async()=>{ const s=await c.storageState(); require('fs').writeFileSync('es-session.json', JSON.stringify(s)); await b.close(); process.exit(0); });})();"
- * Then paste es-session.json contents into VZT Settings
- * (user_estatesales_credentials.estatesales_storage_state).
- * NEVER commit es-session.json.
+ * EstateSales.net login: native email + password on every run.
+ *   Requires ESTATESALES_EMAIL + ESTATESALES_PASSWORD, injected by runAgent.js
+ *   from the encrypted credentials stored in VZT Settings.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -50,7 +41,6 @@ const DOA_URL            = process.env.DOA_URL;
 const ES_EMAIL           = process.env.ESTATESALES_EMAIL;
 const ES_PASSWORD        = process.env.ESTATESALES_PASSWORD;
 const ES_URL             = process.env.ESTATESALES_URL;
-const ES_STORAGE_STATE   = process.env.ES_STORAGE_STATE;
 const SUPABASE_URL       = process.env.SUPABASE_URL;
 const SUPABASE_KEY       = process.env.SUPABASE_SERVICE_KEY;
 
@@ -357,6 +347,15 @@ async function findFirst(page, selectors, timeout = 5_000) {
     }
   }
   return null;
+}
+
+// EstateSales.net is an Angular SPA: it renders the sign-in wall WITHOUT
+// changing the URL, so URL-based auth checks silently pass when unauthenticated.
+// Detect auth state by the DOM instead — a visible password field on a page that
+// should be authenticated means we are still walled.
+async function onSignInWall(page) {
+  const pwd = page.locator('input[type="password"]').first();
+  return await pwd.isVisible().catch(() => false);
 }
 
 // Per-image download guards. A hung CDN socket or a runaway response would
@@ -693,82 +692,77 @@ async function uploadLots(page, lots) {
     return { succeeded: 0, failed: 0, failedLots: [], skipped: alreadyUploadedCount, blocked: 0 };
   }
 
-  if (!ES_STORAGE_STATE) {
-    console.log('[agent] Logging into EstateSales.net...');
-    // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
-    await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-    await screenshot(page, 'es-login-page');
+  console.log('[agent] Logging into EstateSales.net...');
+  // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
+  await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  await screenshot(page, 'es-login-page');
 
-    // EstateSales.net login form
-    const emailEl = await findFirst(page, [
-      '#email',
-      'input[name="email"]',
-      'input[type="email"]',
-      'input[placeholder*="email" i]',
-    ]);
-    if (!emailEl) {
-      await screenshot(page, 'es-no-email-field');
-      throw new Error(
-        '[agent] Could not find EstateSales.net email input.\n' +
-        '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
-      );
-    }
-    await emailEl.fill(ES_EMAIL);
-
-    const passEl = await findFirst(page, [
-      '#password-input',
-      '#password',
-      'input[name="password"]',
-      'input[type="password"]',
-      'input[placeholder*="password" i]',
-    ]);
-    if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
-    await passEl.fill(ES_PASSWORD);
-
-    // The page has several stray type="submit" buttons (Back, clear) — match the
-    // visible Sign In button by text before falling back to generic selectors.
-    const submitEl = await findFirst(page, [
-      'button:has-text("Sign In")',
-      'button:has-text("Log In")',
-      'button:has-text("Login")',
-      'button[type="submit"]',
-      'input[type="submit"]',
-    ]);
-    if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
-    await submitEl.click();
-    // Angular SPA — redirect after login is client-side, not a full navigation
-    await page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }).catch(() => {});
-    await screenshot(page, 'es-after-login');
-
-    // Verify login succeeded — look for a sign we're authenticated
-    const currentUrl = page.url();
-    if (/\/(sign-?in|log-?in)/i.test(currentUrl)) {
-      await screenshot(page, 'es-login-failed');
-      throw new Error(
-        '[agent] EstateSales.net login appears to have failed — still on login page.\n' +
-        '  Check screenshot "es-login-failed". Verify credentials in VZT Settings.'
-      );
-    }
-    console.log('[agent] Logged into EstateSales.net successfully.');
-  } else {
-    console.log('[agent] Using imported EstateSales.net session (storageState).');
+  // EstateSales.net login form
+  const emailEl = await findFirst(page, [
+    '#email',
+    'input[name="email"]',
+    'input[type="email"]',
+    'input[placeholder*="email" i]',
+  ]);
+  if (!emailEl) {
+    await screenshot(page, 'es-no-email-field');
+    throw new Error(
+      '[agent] Could not find EstateSales.net email input.\n' +
+      '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
+    );
   }
+  await emailEl.fill(ES_EMAIL);
+
+  const passEl = await findFirst(page, [
+    '#password-input',
+    '#password',
+    'input[name="password"]',
+    'input[type="password"]',
+    'input[placeholder*="password" i]',
+  ]);
+  if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
+  await passEl.fill(ES_PASSWORD);
+
+  // The page has several stray type="submit" buttons (Back, clear) — match the
+  // visible Sign In button by text before falling back to generic selectors.
+  const submitEl = await findFirst(page, [
+    'button:has-text("Sign In")',
+    'button:has-text("Log In")',
+    'button:has-text("Login")',
+    'button[type="submit"]',
+    'input[type="submit"]',
+  ]);
+  if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
+  await submitEl.click();
+  // Angular SPA — redirect after login is client-side, not a full navigation
+  await page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }).catch(() => {});
+  await page.waitForTimeout(2500);
+  await screenshot(page, 'es-after-login');
+
+  // Verify login succeeded via DOM — EstateSales.net is an Angular SPA that can
+  // render the sign-in wall without changing the URL, so URL checks are unreliable.
+  if (await onSignInWall(page)) {
+    await screenshot(page, 'es-login-failed');
+    throw new Error(
+      '[agent] EstateSales.net login failed — still on the sign-in form after submitting credentials. ' +
+      'Reconnect EstateSales in VZT Settings (check email + password).'
+    );
+  }
+  console.log('[agent] Logged into EstateSales.net successfully.');
 
   // Navigate to the sale management page
   console.log('[agent] Navigating to EstateSales.net sale page...');
   await page.goto(ES_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
   await screenshot(page, 'es-sale-page');
 
-  // When using a storageState session, verify it is still valid after navigation.
-  // If the site bounced us to a sign-in page the session has expired.
-  if (ES_STORAGE_STATE) {
-    const salePageUrl = page.url();
-    if (/\/(sign-?in|log-?in)/i.test(salePageUrl)) {
-      await screenshot(page, 'es-session-expired');
-      throw new Error(
-        '[agent] EstateSales.net session expired or invalid — re-export your session from VZT Settings.'
-      );
-    }
+  // Verify we are authenticated on the sale page. EstateSales.net is an Angular
+  // SPA and can silently render the sign-in wall without changing the URL.
+  if (await onSignInWall(page)) {
+    await screenshot(page, 'es-session-expired');
+    throw new Error(
+      '[agent] EstateSales.net is showing the sign-in wall on the sale page — not authenticated. ' +
+      'Reconnect EstateSales in VZT Settings.'
+    );
   }
 
   // ── Prepare temp image dir ───────────────────────────────────────────────
@@ -1214,32 +1208,19 @@ async function run() {
   if (!ES_URL) {
     throw new Error('ESTATESALES_URL is required');
   }
-  if (!ES_STORAGE_STATE && (!ES_EMAIL || !ES_PASSWORD)) {
+  if (!ES_EMAIL || !ES_PASSWORD) {
     throw new Error(
-      'EstateSales.net auth is missing. Provide either:\n' +
-      '  ES_STORAGE_STATE (exported Playwright session JSON — preferred for Google-SSO accounts), OR\n' +
-      '  ESTATESALES_EMAIL + ESTATESALES_PASSWORD (email/password login).\n' +
-      'Set credentials in VZT Settings.'
+      'EstateSales.net auth is missing. Requires ESTATESALES_EMAIL + ESTATESALES_PASSWORD ' +
+      'set in VZT Settings.'
     );
   }
 
   await updateJobStatus('running');
 
-  // Parse storageState JSON if provided (Google-SSO session import)
-  let parsedStorageState;
-  if (ES_STORAGE_STATE) {
-    try {
-      parsedStorageState = JSON.parse(ES_STORAGE_STATE);
-    } catch (e) {
-      throw new Error('[agent] ES_STORAGE_STATE is not valid session JSON — re-export it from VZT Settings.');
-    }
-  }
-
   const browser = await chromium.launch({ headless: IS_CI });
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    storageState: parsedStorageState,
   });
   const page = await context.newPage();
 

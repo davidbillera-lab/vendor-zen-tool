@@ -1,29 +1,15 @@
 /**
- * convert-cookies.js
+ * convert-cookies.js — DEPRECATED (no longer used).
  *
- * Converts a Cookie-Editor (or EditThisCookie) JSON export into a Playwright
- * storageState file (es-session.json) that test-local.js / agent.js can load.
- *
- * WHY THIS EXISTS:
- *   EstateSales.net uses Google SSO. Google refuses to complete OAuth inside an
- *   automation-controlled browser (the popup closes instantly with no account
- *   chooser). So we can't capture the session by logging in through Playwright.
- *   Instead, log in normally in your real Chrome, export the estatesales.net
- *   cookies with the free "Cookie-Editor" extension, and run this to convert.
- *
- * USAGE:
- *   1. In your normal Chrome, log in to https://www.estatesales.net
- *   2. Install the "Cookie-Editor" extension (Chrome Web Store, free).
- *   3. While on estatesales.net, open Cookie-Editor → Export → "Export as JSON"
- *      (this copies the cookies to your clipboard).
- *   4. Paste them into a file named es-cookies.json in THIS folder
- *      (estatesales-agent/). Save.
- *   5. Run:  node convert-cookies.js
- *
- * Output: es-session.json (gitignored — treat as a credential)
+ * The EstateSales.net agent now logs in with native email + password on every
+ * run (set in VZT Settings). The Playwright cookie/storageState session machine
+ * this script supported has been retired. Kept for git history only.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+
+console.error('[DEPRECATED] This script is retired. The EstateSales agent now logs in with email + password set in VZT Settings. No session capture/conversion is needed.');
+process.exit(1);
 
 const INPUT  = process.argv[2] || './es-cookies.json';
 const OUTPUT = './es-session.json';
