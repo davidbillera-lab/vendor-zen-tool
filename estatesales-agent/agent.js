@@ -23,6 +23,7 @@
 
 import 'dotenv/config';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import fs from 'fs';
 import https from 'https';
 import http from 'http';
@@ -54,7 +55,9 @@ if (IS_CI) chromium.use(StealthPlugin());
 // Persistent local browser profile (gitignored). reCAPTCHA v3 scores are
 // reputation-based — a cookie-less fresh context every run starts at the
 // bottom. Reusing one profile lets the score build across runs.
-const CHROME_PROFILE_DIR = path.resolve('./.chrome-profile');
+// Anchored to this file, not the process CWD — launching from the repo root
+// would otherwise drop a cookie-bearing profile outside the .gitignore rule.
+const CHROME_PROFILE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '.chrome-profile');
 const SCREENSHOTS_DIR    = './screenshots';
 const IMAGES_DIR         = './downloaded-images';
 
@@ -735,7 +738,10 @@ async function uploadLots(page, lots) {
   // Type like a human — the page runs reCAPTCHA v3, which scores interaction
   // behavior. Instant programmatic fills get the login masked-rejected as
   // "Password was incorrect" even when the credentials are right.
+  // Clear first: the persistent profile can autofill/remember the field, and
+  // pressSequentially APPENDS at the cursor — it does not replace like fill().
   await emailEl.click();
+  await emailEl.fill('');
   await emailEl.pressSequentially(ES_EMAIL, { delay: 55 + Math.floor(Math.random() * 45) });
 
   const passEl = await findFirst(page, [
@@ -747,6 +753,7 @@ async function uploadLots(page, lots) {
   ]);
   if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
   await passEl.click();
+  await passEl.fill('');
   await passEl.pressSequentially(ES_PASSWORD, { delay: 65 + Math.floor(Math.random() * 45) });
   await page.waitForTimeout(600);
 
@@ -1174,13 +1181,15 @@ async function fillEsImageDescription(page, text) {
     const ce = document.querySelector('[contenteditable="true"]');
     if (ce) {
       ce.focus();
-      ce.innerHTML = t;
+      // textContent, not innerHTML — lot titles are data, not markup. innerHTML
+      // would let a crafted title persist as live HTML on EstateSales.
+      ce.textContent = t;
       ce.dispatchEvent(new Event('input', { bubbles: true }));
       ce.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
     if (window.tinymce && window.tinymce.editors && window.tinymce.editors.length > 0) {
-      window.tinymce.editors[0].setContent(t);
+      window.tinymce.editors[0].setContent(t, { format: 'text' });
       return true;
     }
     const ta = document.querySelector(
@@ -1298,7 +1307,9 @@ async function run() {
       viewport: { width: 1280, height: 900 },
     });
   }
-  const page = await context.newPage();
+  // A persistent context pre-opens one blank page — reuse it rather than
+  // leaving an orphan tab open for the whole run.
+  const page = context.pages()[0] ?? await context.newPage();
 
   let lots = [];
 
