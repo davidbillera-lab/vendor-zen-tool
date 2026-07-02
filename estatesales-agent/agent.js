@@ -30,8 +30,6 @@ import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { createClient } from '@supabase/supabase-js';
 
-chromium.use(StealthPlugin());
-
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const JOB_ID             = process.env.JOB_ID;
@@ -45,6 +43,18 @@ const SUPABASE_URL       = process.env.SUPABASE_URL;
 const SUPABASE_KEY       = process.env.SUPABASE_SERVICE_KEY;
 
 const IS_CI              = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+
+// The stealth plugin's spoofs (fake plugins, chrome.runtime mock) are a decade
+// of cat-and-mouse and are themselves detectable by modern anti-bot checks —
+// reCAPTCHA v3 on the ES sign-in form masked-rejects logins it scores as bots.
+// Only use stealth where it's load-bearing: headless CI. A headed local run on
+// real Chrome presents a genuine fingerprint that spoofs would only corrupt.
+if (IS_CI) chromium.use(StealthPlugin());
+
+// Persistent local browser profile (gitignored). reCAPTCHA v3 scores are
+// reputation-based — a cookie-less fresh context every run starts at the
+// bottom. Reusing one profile lets the score build across runs.
+const CHROME_PROFILE_DIR = path.resolve('./.chrome-profile');
 const SCREENSHOTS_DIR    = './screenshots';
 const IMAGES_DIR         = './downloaded-images';
 
@@ -353,9 +363,20 @@ async function findFirst(page, selectors, timeout = 5_000) {
 // changing the URL, so URL-based auth checks silently pass when unauthenticated.
 // Detect auth state by the DOM instead — a visible password field on a page that
 // should be authenticated means we are still walled.
+// NOTE: must match the same selector family the login fill uses. The password
+// field can sit revealed as type="text" (value visible in plaintext), which a
+// bare input[type="password"] check misses — that miss once turned a rejected
+// login into a false "success" that surfaced later as "+ UPLOAD not found".
 async function onSignInWall(page) {
-  const pwd = page.locator('input[type="password"]').first();
-  return await pwd.isVisible().catch(() => false);
+  const candidates = page.locator(
+    '#password-input, #password, input[name="password"], input[type="password"], input[placeholder*="password" i]'
+  );
+  const count = await candidates.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    if (await candidates.nth(i).isVisible().catch(() => false)) return true;
+  }
+  // Fallback marker in case the form markup changes: the wall's heading.
+  return await page.getByText(/sign in to estatesales/i).first().isVisible().catch(() => false);
 }
 
 // Per-image download guards. A hung CDN socket or a runaway response would
@@ -711,7 +732,11 @@ async function uploadLots(page, lots) {
       '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
     );
   }
-  await emailEl.fill(ES_EMAIL);
+  // Type like a human — the page runs reCAPTCHA v3, which scores interaction
+  // behavior. Instant programmatic fills get the login masked-rejected as
+  // "Password was incorrect" even when the credentials are right.
+  await emailEl.click();
+  await emailEl.pressSequentially(ES_EMAIL, { delay: 55 + Math.floor(Math.random() * 45) });
 
   const passEl = await findFirst(page, [
     '#password-input',
@@ -721,7 +746,9 @@ async function uploadLots(page, lots) {
     'input[placeholder*="password" i]',
   ]);
   if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
-  await passEl.fill(ES_PASSWORD);
+  await passEl.click();
+  await passEl.pressSequentially(ES_PASSWORD, { delay: 65 + Math.floor(Math.random() * 45) });
+  await page.waitForTimeout(600);
 
   // The page has several stray type="submit" buttons (Back, clear) — match the
   // visible Sign In button by text before falling back to generic selectors.
@@ -734,10 +761,27 @@ async function uploadLots(page, lots) {
   ]);
   if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
   await submitEl.click();
-  // Angular SPA — redirect after login is client-side, not a full navigation
-  await page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }).catch(() => {});
+  // Angular SPA — redirect after login is client-side, not a full navigation.
+  // Wait for a definitive outcome: the rejection banner appearing, or leaving
+  // the /sign-in route.
+  const rejectionBanner = page.getByText(/password was incorrect/i).first();
+  await Promise.race([
+    rejectionBanner.waitFor({ state: 'visible', timeout: NAV_TIMEOUT }),
+    page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }),
+  ]).catch(() => {});
   await page.waitForTimeout(2500);
   await screenshot(page, 'es-after-login');
+
+  // ES masks reCAPTCHA v3 bot rejections as credential errors, so this banner
+  // means EITHER a wrong password OR a low bot score — surface both hypotheses.
+  if (await rejectionBanner.isVisible().catch(() => false)) {
+    await screenshot(page, 'es-login-rejected');
+    throw new Error(
+      '[agent] EstateSales.net rejected the sign-in ("Email Address and/or Password was incorrect"). ' +
+      'If these credentials work in a normal browser, this is reCAPTCHA v3 scoring the automated ' +
+      'browser as a bot — not a wrong password.'
+    );
+  }
 
   // Verify login succeeded via DOM — EstateSales.net is an Angular SPA that can
   // render the sign-in wall without changing the URL, so URL checks are unreliable.
@@ -753,6 +797,11 @@ async function uploadLots(page, lots) {
   // Navigate to the sale management page
   console.log('[agent] Navigating to EstateSales.net sale page...');
   await page.goto(ES_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  // The wizard is client-rendered: domcontentloaded lands on a "Loading..."
+  // shell where neither the wall nor the wizard exists yet — checking auth
+  // instantly would race the render and always pass. Let the SPA settle first.
+  await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+  await page.waitForTimeout(1000);
   await screenshot(page, 'es-sale-page');
 
   // Verify we are authenticated on the sale page. EstateSales.net is an Angular
@@ -762,6 +811,18 @@ async function uploadLots(page, lots) {
     throw new Error(
       '[agent] EstateSales.net is showing the sign-in wall on the sale page — not authenticated. ' +
       'Reconnect EstateSales in VZT Settings.'
+    );
+  }
+
+  // ES silently redirects a dead wizard URL (sale already published/closed) to
+  // the account dashboard. Without this check that surfaces later as a
+  // misleading per-lot '+ UPLOAD file input not found' error.
+  if (!page.url().includes('/sale-wizard/')) {
+    await screenshot(page, 'es-wizard-unavailable');
+    throw new Error(
+      `[agent] EstateSales.net redirected the sale wizard URL to ${page.url()} — ` +
+      'the sale is likely already published/closed. Update ESTATESALES_URL to a ' +
+      "current sale's wizard Pictures step."
     );
   }
 
@@ -1217,11 +1278,26 @@ async function run() {
 
   await updateJobStatus('running');
 
-  const browser = await chromium.launch({ headless: IS_CI });
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 900 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  });
+  // CI: bundled headless Chromium + stealth + masked UA (strips "HeadlessChrome").
+  // Local: the machine's REAL Chrome (channel) with a persistent profile and no
+  // spoofing at all — a genuine fingerprint + cookie reputation is what passes
+  // reCAPTCHA v3 on the ES sign-in form; a hardcoded Chrome/120 UA contradicts
+  // the browser's own client hints and reads as a bot.
+  let browser = null;
+  let context;
+  if (IS_CI) {
+    browser = await chromium.launch({ headless: true });
+    context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
+  } else {
+    context = await chromium.launchPersistentContext(CHROME_PROFILE_DIR, {
+      headless: false,
+      channel: 'chrome',
+      viewport: { width: 1280, height: 900 },
+    });
+  }
   const page = await context.newPage();
 
   let lots = [];
@@ -1233,25 +1309,37 @@ async function run() {
     console.log('[agent] Logging into DOA...');
     await page.goto('https://denveronlineauctions.com/Account/Login', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
 
+    // The persistent local profile can still hold a live DOA session from a
+    // prior run, in which case /Account/Login redirects straight past the
+    // form — only fill it when it actually renders.
     // #MainContent_Email avoids the newsletter popup email input
-    await page.fill('#MainContent_Email', DOA_EMAIL);
-    await page.fill('#MainContent_Password', DOA_PASSWORD);
-    // ASP.NET WebForms login — submit is an <input>, not a <button>
-    const doaSubmit = await findFirst(page, [
-      '#MainContent_LoginButton',
-      'input[type="submit"]',
-      'button[type="submit"]',
-      'button:has-text("Log in")',
-      'input[value="Log in"]',
-    ]);
-    if (!doaSubmit) throw new Error('[agent] Could not find DOA login submit button.');
-    await doaSubmit.click();
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+    const doaFormPresent = await page.locator('#MainContent_Email')
+      .waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
+    if (doaFormPresent) {
+      await page.fill('#MainContent_Email', DOA_EMAIL);
+      await page.fill('#MainContent_Password', DOA_PASSWORD);
+      // ASP.NET WebForms login — submit is an <input>, not a <button>
+      const doaSubmit = await findFirst(page, [
+        '#MainContent_LoginButton',
+        'input[type="submit"]',
+        'button[type="submit"]',
+        'button:has-text("Log in")',
+        'input[value="Log in"]',
+      ]);
+      if (!doaSubmit) throw new Error('[agent] Could not find DOA login submit button.');
+      await doaSubmit.click();
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+    } else {
+      console.log('[agent] DOA session already active (login form not shown) — continuing.');
+    }
     await screenshot(page, 'doa-after-login');
 
-    // Verify login
-    const afterLoginUrl = page.url();
-    if (afterLoginUrl.includes('/Account/Login')) {
+    // Verify login. DOA renders "You are now logged in as ..." ON the
+    // /Account/Login URL when a session is already active, so the URL alone
+    // can't distinguish success from failure.
+    const doaLoggedInMarker = await page.getByText(/logged in as/i).first()
+      .isVisible().catch(() => false);
+    if (page.url().includes('/Account/Login') && !doaLoggedInMarker) {
       throw new Error(
         '[agent] DOA login failed — still on login page.\n' +
         '  Check screenshot "doa-after-login". Verify DOA credentials in VZT Settings.'
@@ -1311,7 +1399,9 @@ async function run() {
     await screenshot(page, 'error-state');
     throw err;
   } finally {
-    await browser.close();
+    // Persistent context has no separate browser handle — close whichever exists.
+    await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
     // Remove the temp dir of downloaded customer photos even on crash —
     // per-file cleanup in uploadLotImages only covers the happy path, so an
     // error mid-run would otherwise leave private images on disk.

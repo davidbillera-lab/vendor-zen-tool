@@ -44,9 +44,12 @@ supabase/.temp/
 estatesales-agent/.estatesales-test.env
 estatesales-agent/es-session.json
 estatesales-agent/es-cookies.json
+# Persistent local Chrome profile for the agent — contains cookies/session data
+estatesales-agent/.chrome-profile/
 # Run artifacts — screenshots can show a logged-in account; logs are noise
 estatesales-agent/screenshots/
 estatesales-agent/*.out
+estatesales-agent/smoke-run-*.log
 
 # Local image/scratch artifacts — large binaries + captures, not source
 screenshots/
