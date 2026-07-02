@@ -17,6 +17,7 @@ import NotFound from "./pages/NotFound";
 import { AIChatPanel } from "@/components/AIChatPanel";
 import DenverBatches from "./pages/DenverBatches";
 import EstateSalesUpload from "./pages/EstateSalesUpload";
+import BulkIntake from "./pages/BulkIntake";
 
 const queryClient = new QueryClient();
 
@@ -38,6 +39,7 @@ const App = () => (
             <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
             <Route path="/denver-batches" element={<ProtectedRoute><DenverBatches /></ProtectedRoute>} />
             <Route path="/estatesales-upload" element={<ProtectedRoute><EstateSalesUpload /></ProtectedRoute>} />
+            <Route path="/bulk-intake" element={<ProtectedRoute><BulkIntake /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
           <AIChatPanel />

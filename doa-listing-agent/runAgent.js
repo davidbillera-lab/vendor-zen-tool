@@ -28,10 +28,16 @@ const CREDENTIALS_ENCRYPTION_KEY  = process.env.CREDENTIALS_ENCRYPTION_KEY;
  * Returns the value unchanged for legacy plaintext rows.
  */
 async function decryptCredential(value, keyBase64) {
-  if (!keyBase64 || !value) return value;
+  if (!value) return value;
   let parsed;
   try { parsed = JSON.parse(value); } catch { return value; }
-  if (!parsed?.iv || !parsed?.ciphertext) return value;
+  if (!parsed?.iv || !parsed?.ciphertext) return value; // legacy plaintext row
+  // Value IS an encrypted envelope. Decrypting requires the key — if it's
+  // missing we must NOT silently pass the ciphertext through as the password
+  // (that turns into a confusing login failure). Fail loudly instead.
+  if (!keyBase64) {
+    throw new Error('CREDENTIALS_ENCRYPTION_KEY is required to decrypt this credential but is not set.');
+  }
   const keyBytes = Buffer.from(keyBase64, 'base64');
   const key = await webcrypto.subtle.importKey(
     'raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt'],
@@ -76,6 +82,36 @@ if (error || !creds) {
   console.error('  The user must add their DOA credentials in VZT Settings before');
   console.error('  triggering the agent.');
   if (error) console.error(`  Supabase error: ${error.message}`);
+  process.exit(1);
+}
+
+// ── Validate the DOA batch exists (denver_batch_rows) ─────────────────────────
+// A DOA batch is a set of rows in denver_batch_rows keyed by batch_id — the SAME
+// table agent.js reads in --batch mode. We do NOT authorize against la_batches:
+// that is the LiveAuctioneers platform, a separate system that shares no ownership
+// with DOA (denver_batch_rows.batch_id does not map 1:1 to la_batches.id), so
+// gating a DOA run on it would reject valid batches.
+//
+// Guard: the batch must actually exist — a bad/typo'd BATCH_ID otherwise silently
+// runs 0 lots. We use a HEAD count (no row bodies pulled). Per-tenant ownership
+// authz is intentionally NOT done here: the single-tenant schema has no owner
+// column on denver_batch_rows, so there is nothing to check against. Enforcing it
+// is deferred to the multi-tenant migration (add an owner column + RLS), tracked
+// in decisions.md. Inspecting one arbitrary row's columns gave a false sense of a
+// check while enforcing nothing, so it has been removed rather than left half-done.
+const { count: batchCount, error: batchErr } = await supabase
+  .from('denver_batch_rows')
+  .select('id', { count: 'exact', head: true })
+  .eq('batch_id', BATCH_ID);
+
+if (batchErr) {
+  console.error(`[runAgent] ERROR: Could not read batch ${BATCH_ID} from denver_batch_rows.`);
+  console.error(`  Supabase error: ${batchErr.message}`);
+  process.exit(1);
+}
+
+if (!batchCount || batchCount === 0) {
+  console.error(`[runAgent] ERROR: Batch ${BATCH_ID} has no rows in denver_batch_rows. Nothing to run.`);
   process.exit(1);
 }
 

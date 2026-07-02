@@ -48,6 +48,33 @@ const CORS_HEADERS = {
 let tokenCache: { token: string; expiresAt: number } | null = null;
 
 // ---------------------------------------------------------------------------
+// Module-scope per-user rate limiter (10 req/min on cache-miss path)
+// ---------------------------------------------------------------------------
+
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+const rateLimitMap = new Map<string, RateLimitEntry>();
+const RATE_LIMIT_MAX = 10;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+function checkRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(userId);
+  if (!entry || now >= entry.resetAt) {
+    rateLimitMap.set(userId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true; // allowed
+  }
+  if (entry.count >= RATE_LIMIT_MAX) {
+    return false; // blocked
+  }
+  entry.count += 1;
+  return true; // allowed
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -288,7 +315,10 @@ serve(async (req: Request) => {
     });
   }
 
-  // --- Cache miss: fetch from eBay ---
+  // --- Cache miss: fetch from eBay (rate-limit before burning eBay quota) ---
+  if (!checkRateLimit(user.id)) {
+    return json({ error: "Rate limit exceeded — max 10 requests per minute" }, 429);
+  }
   const ebayToken = await getEbayToken();
   if (!ebayToken) {
     return json({ error: "Could not obtain eBay access token — check EBAY_CLIENT_ID/SECRET" }, 503);

@@ -4,6 +4,36 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 
 ---
 
+## 2026-06-20 — EstateSales dedup ledger is owner-scoped in code (service-role bypasses RLS)
+
+**Decision:** Every read/write against `estatesales_uploaded_lots` in `agent.js` now filters by `.eq('user_id', jobUserId)`, and `jobUserId` is resolved from `estatesales_jobs` (by `JOB_ID`) *before* the first ledger read. `reserveLot` also writes `user_id: jobUserId` on insert. The owner is resolved once; if the job row is missing, the agent throws a `LedgerError` (hard stop) rather than running unscoped.
+
+**Why:** The agent authenticates to Supabase with the **service-role key**, which **bypasses RLS entirely**. RLS therefore provides zero protection on this path — the agent must scope ledger queries itself or one tenant's run could read/confirm/fail another tenant's lots. CodexQC flagged the unscoped queries as the remaining FIX-FIRST blocker after the prior round.
+
+**Consequence:** The DB unique constraint is still `(es_url, lot_url)`, not `(user_id, es_url, lot_url)`. Tightening it to include `user_id` is **deferred to the pre-paying-tenant checklist** — a cross-tenant key collision is only theoretical today (each tenant has distinct `es_url`/`lot_url`), and the query-level scoping already prevents cross-tenant reads/writes. When onboarding the first external tenant, add the migration to drop the old unique index and create `(user_id, es_url, lot_url)`. Do not remove the `.eq('user_id', …)` filters — they are the actual isolation guarantee, not RLS.
+
+---
+
+## 2026-06-20 — EstateSales agent NEVER saves the Sale wizard; ledger confirms on caption, not save
+
+**Decision:** The EstateSales upload agent (`agent.js`) does the Pictures step only — bulk-upload all images, then for each picture open the editor (pencil on the first image, auto-advance after), paste the DOA-scraped title into the Description field, hit NEXT, repeat — and then **stops**. It deliberately does NOT click "Save and Continue". The dedup ledger (`estatesales_uploaded_lots`) now marks a lot `uploaded` when its images are uploaded AND every picture in its range was captioned successfully — decoupled from any save signal. A lot with any uncaptioned picture is marked `failed` (fail-safe, left for retry). The old `saveEsPictures()` call + the now-orphaned `hasErrorOrAuthState()` helper were removed.
+
+**Why:** This is the operator's mandated workflow — David finishes the add manually with "Save and Continue" so he can review and complete the rest of the wizard setup by hand. EstateSales.net drafts auto-persist: uploaded images and pasted descriptions survive even if the browser closes before Save and Continue, so the agent stopping short loses nothing. CodexQC flagged "agent never saves → uploads could be lost" as 🔴 Blocking; that concern is theoretical given draft auto-persistence and is overridden by the explicit operator requirement. Gating the ledger on caption success (not save) makes a false `uploaded` impossible — a lot only confirms if its descriptions actually pasted.
+
+**Consequence:** "Uploaded" in the ledger means images + descriptions are on ES, not that the sale is published. Final wizard persistence is David's manual step and is intentionally outside the agent's contract. Do not re-add a save click or re-couple the ledger to a save signal. `clickEsNext` matches only "Next" (case-insensitive) — do not add "Continue"/"Go" synonyms, which would collide with "SAVE AND CONTINUE".
+
+---
+
+## 2026-06-20 — EstateSales agent auth: capture Playwright storageState in Settings, encrypt at rest
+
+**Decision:** Added a "EstateSales.net Session" paste field (Textarea) to `EstateSalesCredentialsCard.tsx` that writes the captured Playwright session JSON to `user_estatesales_credentials.estatesales_storage_state`. The field client-side-validates the paste is JSON containing a `cookies` array before saving, and the card only ever reads the column's *presence* (never pulls the secret back into the browser). Added `estatesales_storage_state` to `PASSWORD_FIELDS` in `save-credentials` so the session is AES-GCM encrypted at rest; `runAgent.js` `decryptCredential()` already decrypts it transparently on read.
+
+**Why:** EstateSales.net is Google-SSO-only, which blocks in-Playwright email/password login. The agent (`agent.js`) already supports a two-path auth: Path A loads `ES_STORAGE_STATE` and skips sign-in entirely; Path B falls back to email/password (which hits the Google wall and fails). The local agent works because it has `es-session.json` on disk; CI failed ("still on login page, 0 of 201 lots") because the DB column feeding `ES_STORAGE_STATE` was NULL — there was no UI to populate it. The entire backend path (DB column → runAgent decrypt → agent skip-login → newContext storageState) was already wired; the only missing link was a Settings field. This adds that field rather than rebuilding any backend.
+
+**Consequence:** The session expires periodically (live Google cookies). When CI uploads start failing on the login step, the operator re-captures and re-pastes a fresh session — no code change needed. The session JSON is a live credential: never commit `es-session.json`/`es-cookies.json`, never log the column value. The card's inline "How to capture" guide documents the Cookie-Editor → `convert-cookies.js` → paste flow for the operator.
+
+---
+
 ## 2026-06-13 — eBay required item specifics guardrail: extract + pre-flight check before Trading API
 
 **Decision:** Extracted `buildEffectiveSpecifics(categoryId, row)` from `buildAddFixedPriceItemXml`. The new helper computes the exact specifics dict that will be submitted (user values + brand/mpn/upc + category-specific defaults). In `publishRow()`, immediately after the QA merge and before the XML build, the guardrail calls `buildEffectiveSpecifics` and cross-references against `requiredAspects` (from Taxonomy API). Any required aspect still missing → hard fail with a human-readable error listing the missing keys. Nothing hits the Trading API.
@@ -183,3 +213,17 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 **On the recurring Codex "untracked migration" / "missing column" Blockers:** The 3 newest Codex runs' Blocking items are **verified false positives** — Codex diffs the large `main...HEAD` divergence and leans on handoff prose, approximating/hallucinating filenames and line numbers (one cited a non-existent `20260612000000_*.sql`; the real file is `20260616000000`). Every column/status those findings claim is "missing" is present in the tracked migration. The only genuine actionable item — a stale-reservation comment that contradicted the no-reclaim code — was fixed in `8f05b14`. The 5 original blockers are cleared; do not re-open them on the next Codex pass.
 
 **Consequence:** Schema is now reproducible from source (Codex's top sellability flag for this path is closed). Migration is **applied by hand by David** (Supabase SQL editor / `supabase db push`) — not auto-pushed. Out of scope by deliberate decision (do not fold in): `ebay-category-aspects` anon-client auth (eBay-fragility rule — no eBay changes without a concrete runtime failure), `CREDENTIALS_ENCRYPTION_KEY` validation, workflow `JOB_ID`-required, temp-file `finally` cleanup, lockfile rationalization — tracked as non-blocking follow-ups. Static gate: `node --check` both agent files + `npm run build` green; `npm run lint` covers only `.ts/.tsx` so it does not validate the `.js` agent files. Commits `51fbebe` + `8f05b14` on `vercel-deploy`.
+
+---
+
+## 2026-06-21 — DOA agent authorizes against denver_batch_rows, NOT la_batches (LiveAuctioneers fully decoupled)
+
+**Context:** A CodexQC (`gpt-5.5`) pass on `vercel-deploy` flagged a 🔴 Blocker in `doa-listing-agent/runAgent.js`: the batch-ownership authorization queried `la_batches` by `id` and checked `created_by`, but the DOA agent actually reads lots from `denver_batch_rows` keyed by `batch_id`. The live DB confirmed `denver_batch_rows.batch_id` does **not** map 1:1 to `la_batches.id` (only batches created via the LiveAuctioneers flow have a matching `la_batches` row), so the check would reject valid DOA batches outright.
+
+**Decision (David's directive, verbatim):** *"I dont care about the liveauctioneers part of the build at all I am not even using it right now and it should not share anything with DOA."* The DOA path must not reference `la_batches` for any load-bearing logic. Replaced the `la_batches` authz block with a `denver_batch_rows`-only **existence check**: the batch must exist (≥1 row for `batch_id` — a bad/typo'd `BATCH_ID` otherwise silently runs 0 lots), implemented as a `head: true` exact `count` so no row bodies are pulled.
+
+A follow-up CodexQC pass flagged the original `select('*').limit(1)` + conditional owner check (inspecting one arbitrary row for a `created_by`/`user_id`/`owner_id` column): it pulled full row bodies and enforced nothing on the single-tenant schema, giving a false sense of an ownership check. That half-baked owner check was **removed** rather than left in. Per-tenant ownership authz is deferred to the multi-tenant migration (add an owner column + RLS).
+
+**Why:** `denver_batch_rows` has no owner column in the single-tenant schema today (DOA credentials are already user-scoped via `.eq('user_id', USER_ID)` against `user_doa_credentials`). Gating on `la_batches` was both a forbidden DOA↔LiveAuctioneers coupling and a correctness bug. The existence check restores a genuine fail-loud guard against bad input without inventing authority that doesn't exist; a HEAD count is the cheapest way to do it.
+
+**Consequence:** `la_batches` remains referenced ONLY in `supabaseReader.js` as optional, non-fatal name/URL enrichment (already wrapped in try/catch). True per-tenant DOA batch-ownership authz requires adding an owner column to `denver_batch_rows` — deferred to the pre-paying-tenant multi-tenant checklist (alongside the `(user_id, es_url, lot_url)` ledger constraint tightening). `node --check doa-listing-agent/runAgent.js` green.

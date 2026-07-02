@@ -15,18 +15,9 @@
  *
  * All credentials and URLs are injected via process.env by runAgent.js.
  *
- * EstateSales.net login supports two modes:
- *   A) storageState (preferred for Google-SSO accounts): inject ES_STORAGE_STATE
- *      containing an exported Playwright session JSON string. The agent reuses
- *      the session without touching the login form.
- *   B) Email/password fallback: ES_EMAIL + ES_PASSWORD (may not work for
- *      Google-SSO-only accounts).
- *
- * One-time session capture (operator runs locally, never commit the output):
- *   node -e "const {chromium}=require('playwright'); (async()=>{const b=await chromium.launch({headless:false}); const c=await b.newContext(); const p=await c.newPage(); await p.goto('https://www.estatesales.net/sign-in'); console.log('Log in via Google in the window, then press Enter here'); process.stdin.once('data', async()=>{ const s=await c.storageState(); require('fs').writeFileSync('es-session.json', JSON.stringify(s)); await b.close(); process.exit(0); });})();"
- * Then paste es-session.json contents into VZT Settings
- * (user_estatesales_credentials.estatesales_storage_state).
- * NEVER commit es-session.json.
+ * EstateSales.net login: native email + password on every run.
+ *   Requires ESTATESALES_EMAIL + ESTATESALES_PASSWORD, injected by runAgent.js
+ *   from the encrypted credentials stored in VZT Settings.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -39,8 +30,6 @@ import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { createClient } from '@supabase/supabase-js';
 
-chromium.use(StealthPlugin());
-
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const JOB_ID             = process.env.JOB_ID;
@@ -50,11 +39,22 @@ const DOA_URL            = process.env.DOA_URL;
 const ES_EMAIL           = process.env.ESTATESALES_EMAIL;
 const ES_PASSWORD        = process.env.ESTATESALES_PASSWORD;
 const ES_URL             = process.env.ESTATESALES_URL;
-const ES_STORAGE_STATE   = process.env.ES_STORAGE_STATE;
 const SUPABASE_URL       = process.env.SUPABASE_URL;
 const SUPABASE_KEY       = process.env.SUPABASE_SERVICE_KEY;
 
 const IS_CI              = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+
+// The stealth plugin's spoofs (fake plugins, chrome.runtime mock) are a decade
+// of cat-and-mouse and are themselves detectable by modern anti-bot checks —
+// reCAPTCHA v3 on the ES sign-in form masked-rejects logins it scores as bots.
+// Only use stealth where it's load-bearing: headless CI. A headed local run on
+// real Chrome presents a genuine fingerprint that spoofs would only corrupt.
+if (IS_CI) chromium.use(StealthPlugin());
+
+// Persistent local browser profile (gitignored). reCAPTCHA v3 scores are
+// reputation-based — a cookie-less fresh context every run starts at the
+// bottom. Reusing one profile lets the score build across runs.
+const CHROME_PROFILE_DIR = path.resolve('./.chrome-profile');
 const SCREENSHOTS_DIR    = './screenshots';
 const IMAGES_DIR         = './downloaded-images';
 
@@ -77,6 +77,35 @@ const STALE_RESERVATION_MS = 30 * 60 * 1000; // 30 minutes
 const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } })
   : null;
+
+// AGENT_TEST_MODE disables the ledger so local smoke tests can never touch the
+// production estatesales_uploaded_lots ledger. test-local.js injects a fake
+// JOB_ID, which would otherwise write user_id:null rows on real (es_url, lot_url)
+// keys and poison the dedup ledger. test-local.js sets AGENT_TEST_MODE=true.
+const AGENT_TEST_MODE = process.env.AGENT_TEST_MODE === 'true';
+
+// FAIL CLOSED. The dedup ledger is the only thing standing between a real run and
+// duplicate uploads (David's rule: duplicates are worse than blocked runs). A
+// non-test run with no Supabase client or no JOB_ID would silently run WITHOUT
+// dedup — exactly the failure we must never allow. So a real run REQUIRES both;
+// abort at startup if either is missing. Only AGENT_TEST_MODE may run ledger-less.
+if (!AGENT_TEST_MODE) {
+  if (!supabase) {
+    console.error('[agent] FATAL: SUPABASE_URL + SUPABASE_SERVICE_KEY are required for a real run.');
+    console.error('  Without them the dedup ledger is disabled and the agent could upload duplicates.');
+    console.error('  For a local no-ledger smoke test, run via test-local.js (sets AGENT_TEST_MODE=true).');
+    process.exit(1);
+  }
+  if (!JOB_ID) {
+    console.error('[agent] FATAL: JOB_ID is required for a real run (scopes the dedup ledger by tenant).');
+    console.error('  It is injected by runAgent.js / the job runner. For a local smoke test use test-local.js.');
+    process.exit(1);
+  }
+}
+
+// True only when a real, ledger-backed run is in effect. AGENT_TEST_MODE forces
+// it off; the fail-closed guard above guarantees supabase + JOB_ID exist here.
+const LEDGER_ENABLED = !!supabase && !AGENT_TEST_MODE;
 
 async function updateJobStatus(status, error = null) {
   if (!supabase || !JOB_ID) return;
@@ -112,11 +141,14 @@ async function updateJobFields(fields) {
  * Fails closed: if the ledger can't be read we abort rather than risk
  * uploading duplicates.
  */
-async function fetchUploadedLotUrls() {
-  if (!supabase) return new Set();
+async function fetchUploadedLotUrls(jobUserId) {
+  if (!LEDGER_ENABLED) return new Set();
+  // Service-role key bypasses RLS — scope by user_id in code so one tenant's
+  // ledger never hides another tenant's lots.
   const { data, error } = await supabase
     .from('estatesales_uploaded_lots')
     .select('lot_url')
+    .eq('user_id', jobUserId)
     .eq('es_url', ES_URL)
     .eq('status', 'uploaded');
   if (error) throw new Error(`[agent] Could not read uploaded-lots ledger: ${error.message}`);
@@ -142,7 +174,7 @@ async function fetchUploadedLotUrls() {
  * them and duplicates are the caller's problem.
  */
 async function reserveLot(lot, jobUserId) {
-  if (!supabase) return { claimed: true }; // no ledger → proceed (no dedup)
+  if (!LEDGER_ENABLED) return { claimed: true }; // no ledger → proceed (no dedup)
   if (!lot.source_url) return { claimed: true }; // can't key without URL → proceed
 
   const now = new Date().toISOString();
@@ -167,24 +199,29 @@ async function reserveLot(lot, jobUserId) {
   }
 
   if (insertErr.code !== '23505') {
-    // A real DB error (not a unique violation) — surface it
-    throw new Error(`[agent] reserveLot DB error for lot ${lot.lot_number}: ${insertErr.message}`);
+    // A real DB error (not a unique violation). The dedup ledger can no longer be
+    // trusted, so fail closed: throw a fatalLedger error to hard-stop the run.
+    throw new LedgerError(`[agent] reserveLot DB error for lot ${lot.lot_number}: ${insertErr.message}`);
   }
 
   // Unique violation — a row already exists for (es_url, lot_url). Inspect it.
   const { data: existing, error: fetchErr } = await supabase
     .from('estatesales_uploaded_lots')
     .select('status, reserved_at')
+    .eq('user_id', jobUserId)
     .eq('es_url', ES_URL)
     .eq('lot_url', lot.source_url)
     .single();
 
   if (fetchErr) {
-    throw new Error(`[agent] reserveLot: could not read existing row for lot ${lot.lot_number}: ${fetchErr.message}`);
+    // Can't read the conflicting row → can't make a safe dedup decision. Fail
+    // closed: throw a fatalLedger error to hard-stop the run.
+    throw new LedgerError(`[agent] reserveLot: could not read existing row for lot ${lot.lot_number}: ${fetchErr.message}`);
   }
 
   if (existing.status === 'uploaded') {
-    return { claimed: false, reason: 'already uploaded in a previous run' };
+    // Truly on ES from a prior run — counts toward lots_uploaded.
+    return { claimed: false, alreadyUploaded: true, reason: 'already uploaded in a previous run' };
   }
 
   if (existing.status === 'reserved') {
@@ -238,8 +275,8 @@ class LedgerError extends Error {
  * A 23505 (unique violation) here would be a bug (we already hold the
  * reservation row) so it is also surfaced as an error.
  */
-async function confirmLotUploaded(lot) {
-  if (!supabase) return; // no ledger — nothing to record
+async function confirmLotUploaded(lot, jobUserId) {
+  if (!LEDGER_ENABLED) return; // no ledger — nothing to record
   if (!lot.source_url) return; // no key — can't update
 
   // Confirm ONLY the reservation this run owns: require status='reserved' and,
@@ -250,6 +287,7 @@ async function confirmLotUploaded(lot) {
   let query = supabase
     .from('estatesales_uploaded_lots')
     .update({ status: 'uploaded', uploaded_at: new Date().toISOString() })
+    .eq('user_id', jobUserId)
     .eq('es_url', ES_URL)
     .eq('lot_url', lot.source_url)
     .eq('status', 'reserved');
@@ -275,11 +313,12 @@ async function confirmLotUploaded(lot) {
 /**
  * Mark a reserved lot as failed in the ledger (best-effort — does not throw).
  */
-async function markLotFailed(lot) {
-  if (!supabase || !lot.source_url) return;
+async function markLotFailed(lot, jobUserId) {
+  if (!LEDGER_ENABLED || !lot.source_url) return;
   let query = supabase
     .from('estatesales_uploaded_lots')
     .update({ status: 'failed' })
+    .eq('user_id', jobUserId)
     .eq('es_url', ES_URL)
     .eq('lot_url', lot.source_url)
     .eq('status', 'reserved'); // only transition our own reservation
@@ -320,26 +359,90 @@ async function findFirst(page, selectors, timeout = 5_000) {
   return null;
 }
 
+// EstateSales.net is an Angular SPA: it renders the sign-in wall WITHOUT
+// changing the URL, so URL-based auth checks silently pass when unauthenticated.
+// Detect auth state by the DOM instead — a visible password field on a page that
+// should be authenticated means we are still walled.
+// NOTE: must match the same selector family the login fill uses. The password
+// field can sit revealed as type="text" (value visible in plaintext), which a
+// bare input[type="password"] check misses — that miss once turned a rejected
+// login into a false "success" that surfaced later as "+ UPLOAD not found".
+async function onSignInWall(page) {
+  const candidates = page.locator(
+    '#password-input, #password, input[name="password"], input[type="password"], input[placeholder*="password" i]'
+  );
+  const count = await candidates.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    if (await candidates.nth(i).isVisible().catch(() => false)) return true;
+  }
+  // Fallback marker in case the form markup changes: the wall's heading.
+  return await page.getByText(/sign in to estatesales/i).first().isVisible().catch(() => false);
+}
+
+// Per-image download guards. A hung CDN socket or a runaway response would
+// otherwise stall the whole run (no timeout) or fill the disk (no size cap).
+const DOWNLOAD_TIMEOUT_MS = 30_000;          // abort a single image after 30s
+const DOWNLOAD_MAX_BYTES  = 25 * 1024 * 1024; // 25 MB ceiling per image
+
 /**
  * Download a remote image to a local temp file. Returns the local path.
+ * Follows HTTP redirects (CDN/image hosts commonly 301/302 to a signed URL)
+ * and accepts any 2xx status, not just 200. Enforces a request timeout and a
+ * max-byte ceiling; any failure unlinks the partial file before rejecting.
  */
-async function downloadImage(url, destPath) {
+async function downloadImage(url, destPath, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http;
-    const file = fs.createWriteStream(destPath);
-    client.get(url, (res) => {
-      if (res.statusCode !== 200) {
-        file.close();
-        fs.unlink(destPath, () => {});
-        return reject(new Error(`HTTP ${res.statusCode} downloading ${url}`));
-      }
-      res.pipe(file);
-      file.on('finish', () => { file.close(); resolve(destPath); });
-    }).on('error', (err) => {
-      file.close();
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
       fs.unlink(destPath, () => {});
       reject(err);
+    };
+    const req = client.get(url, (res) => {
+      const { statusCode } = res;
+
+      // Follow redirects (301/302/303/307/308) to the Location target.
+      if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
+        res.resume(); // drain so the socket can be reused
+        if (redirectsLeft <= 0) {
+          return fail(new Error(`Too many redirects downloading ${url}`));
+        }
+        const next = new URL(res.headers.location, url).toString();
+        settled = true; // hand off to the recursive call; don't unlink here
+        return resolve(downloadImage(next, destPath, redirectsLeft - 1));
+      }
+
+      if (statusCode < 200 || statusCode >= 300) {
+        res.resume();
+        return fail(new Error(`HTTP ${statusCode} downloading ${url}`));
+      }
+
+      let bytes = 0;
+      res.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > DOWNLOAD_MAX_BYTES) {
+          req.destroy();
+          fail(new Error(`Image exceeds ${DOWNLOAD_MAX_BYTES} bytes: ${url}`));
+        }
+      });
+
+      const file = fs.createWriteStream(destPath);
+      file.on('error', fail);
+      res.pipe(file);
+      file.on('finish', () => {
+        if (settled) return;
+        settled = true;
+        file.close();
+        resolve(destPath);
+      });
     });
+    req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+      req.destroy();
+      fail(new Error(`Timed out after ${DOWNLOAD_TIMEOUT_MS}ms downloading ${url}`));
+    });
+    req.on('error', fail);
   });
 }
 
@@ -375,37 +478,6 @@ async function readTinyMceContent(page) {
     return (content || '').trim();
   } catch {
     return '';
-  }
-}
-
-/**
- * Detects whether the page is currently showing a validation/error state or has
- * been bounced to the sign-in page. Used as a NEGATIVE gate: even a "positive"
- * signal is rejected if any of these are present, so an error alert or a login
- * redirect can never be mistaken for a successful save (which would silently
- * mark a never-created lot as 'uploaded').
- */
-async function hasErrorOrAuthState(page) {
-  try {
-    // A login redirect means the session dropped — definitely not a save.
-    if (/sign-?in|log-?in|login|account\/login/i.test(new URL(page.url()).pathname)) {
-      return true;
-    }
-    return await page.evaluate(() => {
-      const sel = [
-        '.validation-summary-errors',
-        '.field-validation-error',
-        '.alert-danger',
-        '.alert-error',
-        '[class*="error"]:not([class*="success"])',
-        '[class*="invalid"]:not([class*="success"])',
-      ].join(', ');
-      return Array.from(document.querySelectorAll(sel)).some(
-        (n) => n.offsetParent !== null && (n.textContent || '').trim().length > 0
-      );
-    });
-  } catch {
-    return false;
   }
 }
 
@@ -579,121 +651,179 @@ async function scrapeLots(page) {
  *            via the "+ UPLOAD" input. Build a flat imageTitles[] so picture
  *            index i maps to the title of the lot that owns that picture.
  *   Step 2 — Caption: open each uploaded picture's editor, paste the owning lot's
- *            title into the description, "Next" until done.
- *   Step 3 — SAVE AND CONTINUE → confirmLotUploaded() per lot (throws fatalLedger
- *            on a ledger anomaly, hard-stopping the run). If the save can't be
- *            confirmed, markLotFailed() each lot for retry (best-effort).
+ *            title into the description, "Next" until done. A lot is confirmed in
+ *            the ledger (confirmLotUploaded) once its images uploaded AND all its
+ *            descriptions pasted; otherwise markLotFailed() for retry.
+ *
+ * The agent NEVER saves the wizard — David clicks "Save and Continue" manually and
+ * finishes the rest of the sale setup himself. Ledger confirmation is decoupled
+ * from that manual save (see the Pictures-step block below).
  */
 async function uploadLots(page, lots) {
   let succeeded = 0;
-  let skippedCount = 0;
+  let alreadyUploadedCount = 0; // lots confirmed uploaded in a prior run (on ES)
+  let blockedCount = 0;         // lots reserved by another run / previously failed — NOT on ES
   const failedLots = [];
 
-  // ── Dedup: skip lots CONFIRMED uploaded to this sale ─────────────────────
-  // Only 'uploaded' rows are pre-skipped here; 'reserved' and 'failed' rows
-  // are handled per-lot via reserveLot(), which conservatively skips them
-  // (no auto-reclaim — see reserveLot for the duplicate-safety reasoning).
-  // Lots without a source_url can't be matched against the ledger and are
-  // treated as pending (they pass through to upload without dedup).
-  const uploadedUrls = await fetchUploadedLotUrls();
-  const pending = lots.filter((l) => !l.source_url || !uploadedUrls.has(l.source_url));
-  const preSkipped = lots.length - pending.length;
-  if (preSkipped > 0) {
-    console.log(`[agent] Skipping ${preSkipped} already-confirmed-uploaded lot(s) — ${pending.length} remaining.`);
-    skippedCount += preSkipped;
-  }
-  if (pending.length === 0) {
-    console.log('[agent] All lots already uploaded to this sale — nothing to do.');
-    return { succeeded: 0, failed: 0, failedLots: [], skipped: skippedCount };
-  }
-
-  // user_id for ledger rows (RLS select policy scopes the UI to the owner)
+  // ── Resolve the row owner (tenant) FIRST ─────────────────────────────────
+  // The agent runs with the Supabase service-role key, which BYPASSES RLS, so
+  // every ledger read/write MUST be scoped by user_id here in code — RLS does
+  // NOT isolate tenants on this path. Resolve the owner before any ledger read
+  // so the dedup fetch below can be owner-scoped too. When the ledger is
+  // enabled we MUST resolve a real owner: a row with user_id:null is a "ghost
+  // reservation" — invisible to the owner-scoped UI but still occupying the
+  // unique (es_url, lot_url) key, silently blocking future runs forever. Fail
+  // closed if we can't resolve it. In test mode (LEDGER_ENABLED=false) this
+  // whole block is skipped — no ledger writes.
   let jobUserId = null;
-  if (supabase && JOB_ID) {
-    const { data: jobRow } = await supabase
+  if (LEDGER_ENABLED) {
+    if (!JOB_ID) {
+      throw new LedgerError('Ledger enabled but JOB_ID is missing — cannot resolve row owner. Aborting to avoid ghost reservations.');
+    }
+    const { data: jobRow, error: jobErr } = await supabase
       .from('estatesales_jobs')
       .select('user_id')
       .eq('id', JOB_ID)
       .single();
+    if (jobErr) {
+      throw new LedgerError(`Ledger enabled but job lookup failed (${jobErr.message}) — cannot resolve row owner. Aborting to avoid ghost reservations.`);
+    }
     jobUserId = jobRow?.user_id ?? null;
+    if (!jobUserId) {
+      throw new LedgerError(`Ledger enabled but job ${JOB_ID} has no user_id — cannot resolve row owner. Aborting to avoid ghost reservations.`);
+    }
   }
 
-  if (!ES_STORAGE_STATE) {
-    console.log('[agent] Logging into EstateSales.net...');
-    // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
-    await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-    await screenshot(page, 'es-login-page');
-
-    // EstateSales.net login form
-    const emailEl = await findFirst(page, [
-      '#email',
-      'input[name="email"]',
-      'input[type="email"]',
-      'input[placeholder*="email" i]',
-    ]);
-    if (!emailEl) {
-      await screenshot(page, 'es-no-email-field');
-      throw new Error(
-        '[agent] Could not find EstateSales.net email input.\n' +
-        '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
-      );
-    }
-    await emailEl.fill(ES_EMAIL);
-
-    const passEl = await findFirst(page, [
-      '#password-input',
-      '#password',
-      'input[name="password"]',
-      'input[type="password"]',
-      'input[placeholder*="password" i]',
-    ]);
-    if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
-    await passEl.fill(ES_PASSWORD);
-
-    // The page has several stray type="submit" buttons (Back, clear) — match the
-    // visible Sign In button by text before falling back to generic selectors.
-    const submitEl = await findFirst(page, [
-      'button:has-text("Sign In")',
-      'button:has-text("Log In")',
-      'button:has-text("Login")',
-      'button[type="submit"]',
-      'input[type="submit"]',
-    ]);
-    if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
-    await submitEl.click();
-    // Angular SPA — redirect after login is client-side, not a full navigation
-    await page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }).catch(() => {});
-    await screenshot(page, 'es-after-login');
-
-    // Verify login succeeded — look for a sign we're authenticated
-    const currentUrl = page.url();
-    if (/\/(sign-?in|log-?in)/i.test(currentUrl)) {
-      await screenshot(page, 'es-login-failed');
-      throw new Error(
-        '[agent] EstateSales.net login appears to have failed — still on login page.\n' +
-        '  Check screenshot "es-login-failed". Verify credentials in VZT Settings.'
-      );
-    }
-    console.log('[agent] Logged into EstateSales.net successfully.');
-  } else {
-    console.log('[agent] Using imported EstateSales.net session (storageState).');
+  // ── Dedup: skip lots CONFIRMED uploaded to this sale (by THIS owner) ──────
+  // Only 'uploaded' rows are pre-skipped here; 'reserved' and 'failed' rows
+  // are handled per-lot via reserveLot(), which conservatively skips them
+  // (no auto-reclaim — see reserveLot for the duplicate-safety reasoning).
+  // Lots without a source_url can't be matched against the ledger and are
+  // treated as pending (they pass through to upload without dedup). Scoped by
+  // jobUserId so one tenant's ledger never hides or blocks another's lots.
+  const uploadedUrls = await fetchUploadedLotUrls(jobUserId);
+  const pending = lots.filter((l) => !l.source_url || !uploadedUrls.has(l.source_url));
+  const preSkipped = lots.length - pending.length;
+  if (preSkipped > 0) {
+    console.log(`[agent] Skipping ${preSkipped} already-confirmed-uploaded lot(s) — ${pending.length} remaining.`);
+    alreadyUploadedCount += preSkipped;
   }
+  if (pending.length === 0) {
+    console.log('[agent] All lots already uploaded to this sale — nothing to do.');
+    return { succeeded: 0, failed: 0, failedLots: [], skipped: alreadyUploadedCount, blocked: 0 };
+  }
+
+  console.log('[agent] Logging into EstateSales.net...');
+  // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
+  await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  await screenshot(page, 'es-login-page');
+
+  // EstateSales.net login form
+  const emailEl = await findFirst(page, [
+    '#email',
+    'input[name="email"]',
+    'input[type="email"]',
+    'input[placeholder*="email" i]',
+  ]);
+  if (!emailEl) {
+    await screenshot(page, 'es-no-email-field');
+    throw new Error(
+      '[agent] Could not find EstateSales.net email input.\n' +
+      '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
+    );
+  }
+  // Type like a human — the page runs reCAPTCHA v3, which scores interaction
+  // behavior. Instant programmatic fills get the login masked-rejected as
+  // "Password was incorrect" even when the credentials are right.
+  await emailEl.click();
+  await emailEl.pressSequentially(ES_EMAIL, { delay: 55 + Math.floor(Math.random() * 45) });
+
+  const passEl = await findFirst(page, [
+    '#password-input',
+    '#password',
+    'input[name="password"]',
+    'input[type="password"]',
+    'input[placeholder*="password" i]',
+  ]);
+  if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
+  await passEl.click();
+  await passEl.pressSequentially(ES_PASSWORD, { delay: 65 + Math.floor(Math.random() * 45) });
+  await page.waitForTimeout(600);
+
+  // The page has several stray type="submit" buttons (Back, clear) — match the
+  // visible Sign In button by text before falling back to generic selectors.
+  const submitEl = await findFirst(page, [
+    'button:has-text("Sign In")',
+    'button:has-text("Log In")',
+    'button:has-text("Login")',
+    'button[type="submit"]',
+    'input[type="submit"]',
+  ]);
+  if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
+  await submitEl.click();
+  // Angular SPA — redirect after login is client-side, not a full navigation.
+  // Wait for a definitive outcome: the rejection banner appearing, or leaving
+  // the /sign-in route.
+  const rejectionBanner = page.getByText(/password was incorrect/i).first();
+  await Promise.race([
+    rejectionBanner.waitFor({ state: 'visible', timeout: NAV_TIMEOUT }),
+    page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }),
+  ]).catch(() => {});
+  await page.waitForTimeout(2500);
+  await screenshot(page, 'es-after-login');
+
+  // ES masks reCAPTCHA v3 bot rejections as credential errors, so this banner
+  // means EITHER a wrong password OR a low bot score — surface both hypotheses.
+  if (await rejectionBanner.isVisible().catch(() => false)) {
+    await screenshot(page, 'es-login-rejected');
+    throw new Error(
+      '[agent] EstateSales.net rejected the sign-in ("Email Address and/or Password was incorrect"). ' +
+      'If these credentials work in a normal browser, this is reCAPTCHA v3 scoring the automated ' +
+      'browser as a bot — not a wrong password.'
+    );
+  }
+
+  // Verify login succeeded via DOM — EstateSales.net is an Angular SPA that can
+  // render the sign-in wall without changing the URL, so URL checks are unreliable.
+  if (await onSignInWall(page)) {
+    await screenshot(page, 'es-login-failed');
+    throw new Error(
+      '[agent] EstateSales.net login failed — still on the sign-in form after submitting credentials. ' +
+      'Reconnect EstateSales in VZT Settings (check email + password).'
+    );
+  }
+  console.log('[agent] Logged into EstateSales.net successfully.');
 
   // Navigate to the sale management page
   console.log('[agent] Navigating to EstateSales.net sale page...');
   await page.goto(ES_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  // The wizard is client-rendered: domcontentloaded lands on a "Loading..."
+  // shell where neither the wall nor the wizard exists yet — checking auth
+  // instantly would race the render and always pass. Let the SPA settle first.
+  await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+  await page.waitForTimeout(1000);
   await screenshot(page, 'es-sale-page');
 
-  // When using a storageState session, verify it is still valid after navigation.
-  // If the site bounced us to a sign-in page the session has expired.
-  if (ES_STORAGE_STATE) {
-    const salePageUrl = page.url();
-    if (/\/(sign-?in|log-?in)/i.test(salePageUrl)) {
-      await screenshot(page, 'es-session-expired');
-      throw new Error(
-        '[agent] EstateSales.net session expired or invalid — re-export your session from VZT Settings.'
-      );
-    }
+  // Verify we are authenticated on the sale page. EstateSales.net is an Angular
+  // SPA and can silently render the sign-in wall without changing the URL.
+  if (await onSignInWall(page)) {
+    await screenshot(page, 'es-session-expired');
+    throw new Error(
+      '[agent] EstateSales.net is showing the sign-in wall on the sale page — not authenticated. ' +
+      'Reconnect EstateSales in VZT Settings.'
+    );
+  }
+
+  // ES silently redirects a dead wizard URL (sale already published/closed) to
+  // the account dashboard. Without this check that surfaces later as a
+  // misleading per-lot '+ UPLOAD file input not found' error.
+  if (!page.url().includes('/sale-wizard/')) {
+    await screenshot(page, 'es-wizard-unavailable');
+    throw new Error(
+      `[agent] EstateSales.net redirected the sale wizard URL to ${page.url()} — ` +
+      'the sale is likely already published/closed. Update ESTATESALES_URL to a ' +
+      "current sale's wizard Pictures step."
+    );
   }
 
   // ── Prepare temp image dir ───────────────────────────────────────────────
@@ -702,17 +832,18 @@ async function uploadLots(page, lots) {
   // ─────────────────────────────────────────────────────────────────────────
   // EstateSales.net Sale Wizard › Pictures step is a BULK photo uploader, not a
   // per-item form. David's actual flow:
-  //   1. Bulk-add every lot's images to the Pictures step.
+  //   1. Bulk-add every lot's images to the Pictures step (one Upload action).
   //   2. Open each uploaded picture and paste the owning lot's title into the
   //      description, hitting "Next" until done.
-  //   3. SAVE AND CONTINUE.
+  // The agent STOPS there. David hits "Save and Continue" and finishes the rest
+  // of the wizard setup manually — the agent must never save the wizard.
   // We upload in lot order and build a flat imageTitles[] so picture index i
   // maps to the title of the lot that owns that picture.
   // ─────────────────────────────────────────────────────────────────────────
 
   // ── Step 1: Bulk-upload images, per-lot batches ──────────────────────────
   const imageTitles = [];        // flat: imageTitles[pictureIndex] = lot title
-  const uploadedLotState = [];   // { lot } in upload order — confirmed after save
+  const uploadedLotState = [];   // { lot, startIdx, count } — confirmed once captioned (not on save)
   let thumbCount = await countEsThumbnails(page);
 
   for (let i = 0; i < pending.length; i++) {
@@ -724,22 +855,26 @@ async function uploadLots(page, lots) {
     try {
       reservation = await reserveLot(lot, jobUserId);
     } catch (reserveErr) {
-      // reserveLot only throws on real DB errors — surface and abort the lot
+      // reserveLot throws only on a real ledger DB error (LedgerError, fatalLedger).
+      // That breaks the dedup guarantee for every remaining lot, so fail closed and
+      // hard-stop the whole run — continuing would risk duplicate uploads.
       await screenshot(page, `es-reserve-error-lot-${i + 1}`);
-      console.error(`[agent]   ERROR reserving lot ${i + 1}: ${reserveErr.message}`);
-      failedLots.push({ index: i + 1, title: lot.title, error: reserveErr.message });
-      continue;
+      console.error(`[agent]   FATAL ledger error reserving lot ${i + 1}: ${reserveErr.message}`);
+      throw reserveErr;
     }
     if (!reservation.claimed) {
       console.log(`[agent]   Skipping lot ${i + 1} — ${reservation.reason}`);
-      skippedCount++;
+      // Only a row already at status 'uploaded' is truly on ES; 'reserved'/'failed'
+      // are blocked and must NOT be counted as uploaded (they need reconciliation).
+      if (reservation.alreadyUploaded) alreadyUploadedCount++;
+      else blockedCount++;
       continue;
     }
 
     if (!lot.imageUrls || lot.imageUrls.length === 0) {
       const msg = `Lot ${i + 1} has no images to upload`;
       console.warn(`[agent]   WARNING: ${msg}`);
-      await markLotFailed(lot);
+      await markLotFailed(lot, jobUserId);
       failedLots.push({ index: i + 1, title: lot.title, error: msg });
       continue;
     }
@@ -749,64 +884,67 @@ async function uploadLots(page, lots) {
       if (uploaded === 0) {
         const msg = `No images uploaded for lot ${i + 1}`;
         console.warn(`[agent]   WARNING: ${msg}`);
-        await markLotFailed(lot);
+        await markLotFailed(lot, jobUserId);
         failedLots.push({ index: i + 1, title: lot.title, error: msg });
         continue;
       }
       thumbCount += uploaded;
+      const startIdx = imageTitles.length;
       for (let k = 0; k < uploaded; k++) imageTitles.push(lot.title);
-      uploadedLotState.push({ lot });
+      uploadedLotState.push({ lot, startIdx, count: uploaded });
       console.log(`[agent]   Uploaded ${uploaded} image(s) for lot ${i + 1}`);
     } catch (err) {
       await screenshot(page, `es-upload-error-lot-${i + 1}`);
       console.error(`[agent]   ERROR uploading images for lot ${i + 1}: ${err.message}`);
-      await markLotFailed(lot);
+      await markLotFailed(lot, jobUserId);
       failedLots.push({ index: i + 1, title: lot.title, error: err.message });
     }
   }
 
   if (imageTitles.length === 0) {
     console.warn('[agent] No images uploaded for any lot — nothing to caption.');
-    return { succeeded, failed: failedLots.length, failedLots, skipped: skippedCount };
+    return { succeeded, failed: failedLots.length, failedLots, skipped: alreadyUploadedCount, blocked: blockedCount };
   }
 
   // ── Step 2: Per-image description pass ───────────────────────────────────
   // Open each uploaded picture's editor and paste its owning lot's title into
   // the description, advancing with "Next" until all images are captioned.
-  let captioned = 0;
+  // captionResults[i] = whether picture i's description was set. On a thrown
+  // error captionResults stays [] → every lot reads as not-captioned → marked
+  // failed (fail-safe: never confirm a lot whose descriptions did not paste).
+  let captionResults = [];
   try {
-    captioned = await captionEsImages(page, imageTitles);
+    captionResults = await captionEsImages(page, imageTitles);
+    const captioned = captionResults.filter(Boolean).length;
     console.log(`[agent]   Captioned ${captioned}/${imageTitles.length} image(s).`);
   } catch (err) {
     await screenshot(page, 'es-caption-error');
     console.error(`[agent]   ERROR during description pass: ${err.message}`);
   }
 
-  // ── Step 3: Commit the Pictures step ─────────────────────────────────────
-  const saved = await saveEsPictures(page);
-  await screenshot(page, 'es-after-save-pictures');
-
-  // ── Ledger: confirm fully-uploaded lots ──────────────────────────────────
-  // Images bulk-uploaded AND the Pictures step saved → confirm each lot. A
-  // ledger anomaly in confirmLotUploaded throws (fatalLedger) and hard-stops
-  // the run — uploaded to ES but un-recordable means manual intervention.
-  if (saved) {
-    for (const { lot } of uploadedLotState) {
-      await confirmLotUploaded(lot);
+  // ── Ledger: confirm lots whose images uploaded AND descriptions pasted ────
+  // "uploaded" in the ledger = images on ES + descriptions captioned. Final
+  // wizard persistence ("Save and Continue") is David's manual step, decoupled
+  // from the ledger — the agent never saves. A ledger anomaly in
+  // confirmLotUploaded throws (fatalLedger) and hard-stops the run.
+  for (const { lot, startIdx, count } of uploadedLotState) {
+    const allCaptioned = count > 0 &&
+      Array.from({ length: count }, (_, k) => captionResults[startIdx + k]).every(Boolean);
+    if (allCaptioned) {
+      await confirmLotUploaded(lot, jobUserId);
       succeeded++;
-    }
-    console.log(`[agent]   ${succeeded} lot(s) confirmed uploaded to EstateSales.`);
-  } else {
-    console.warn('[agent]   WARNING: Pictures step save not confirmed — marking uploaded lots failed for retry.');
-    for (const { lot } of uploadedLotState) {
-      await markLotFailed(lot);
-      failedLots.push({ index: null, title: lot.title, error: 'Pictures step save not confirmed' });
+    } else {
+      await markLotFailed(lot, jobUserId);
+      failedLots.push({ index: null, title: lot.title,
+        error: 'Image description not captioned (agent does not save; left for retry)' });
     }
   }
+  console.log(`[agent]   ${succeeded} lot(s) confirmed (images + descriptions). ` +
+    `David completes "Save and Continue" manually.`);
 
-  await updateJobFields({ lots_uploaded: succeeded, lots_skipped: skippedCount });
-
-  return { succeeded, failed: failedLots.length, failedLots, skipped: skippedCount };
+  // Job-field accounting is owned by run() (single source of truth) — it folds in
+  // alreadyUploaded/blocked counts before writing lots_uploaded/lots_skipped.
+  return { succeeded, failed: failedLots.length, failedLots, skipped: alreadyUploadedCount, blocked: blockedCount };
 }
 
 /**
@@ -901,24 +1039,54 @@ async function uploadLotImages(page, lot, lotIndex, priorThumbCount) {
 
   await fileInput.setInputFiles(localPaths);
 
-  // Wait for the uploads to register: network settle + thumbnail count rise.
+  // Confirm the uploads actually registered on ES: network settle + thumbnail
+  // count rise. We must NOT confirm/caption a lot whose images never landed.
   await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
   const target = priorThumbCount + localPaths.length;
   const deadline = Date.now() + 60_000;
-  let registered = false;
-  while (Date.now() < deadline) {
-    if ((await countEsThumbnails(page)) >= target) { registered = true; break; }
+  let observed = await countEsThumbnails(page);
+  let registered = observed >= target;
+  while (!registered && Date.now() < deadline) {
     await page.waitForTimeout(1_000);
-  }
-  if (!registered) {
-    // Thumbnails couldn't be counted (selector miss) or upload is slow — give
-    // it a final settle. setInputFiles itself succeeded, so proceed best-effort.
-    await page.waitForTimeout(2_000).catch(() => {});
+    observed = await countEsThumbnails(page);
+    registered = observed >= target;
   }
 
-  // Clean up temp image files
+  // Clean up temp image files regardless of outcome.
   for (const p of localPaths) {
     try { fs.unlinkSync(p); } catch { /* non-fatal */ }
+  }
+
+  if (!registered) {
+    if (observed === 0) {
+      // Thumbnail selectors never matched anything — we cannot prove the images
+      // landed on ES. Fail closed on real runs: confirming a lot we can't verify
+      // risks marking it uploaded when it isn't (missing live items are worse than
+      // blocked runs). Only AGENT_TEST_MODE (local smoke test, ledger disabled) is
+      // allowed to proceed best-effort so selector work can continue offline.
+      await screenshot(page, `es-thumb-unconfirmed-lot-${lotIndex}`);
+      if (AGENT_TEST_MODE) {
+        console.warn(
+          `[agent]   Could not count thumbnails for lot ${lotIndex} (selectors matched 0) ` +
+          `— TEST MODE: proceeding best-effort. Refine countEsThumbnails selectors.`
+        );
+        return localPaths.length;
+      }
+      throw new Error(
+        `[agent] Could not verify image upload for lot ${lotIndex} on ES ` +
+        `(thumbnail selectors matched 0 — cannot confirm images landed). Not confirming ` +
+        `this lot. Check screenshot "es-thumb-unconfirmed-lot-${lotIndex}" and update ` +
+        `countEsThumbnails selectors.`
+      );
+    }
+    // Thumbnails ARE countable (observed > 0) but did not rise to the expected
+    // total — the upload did not fully register. Fail the lot so it is never
+    // captioned/confirmed as if its images were on ES.
+    await screenshot(page, `es-upload-incomplete-lot-${lotIndex}`);
+    throw new Error(
+      `[agent] Image upload for lot ${lotIndex} did not register on ES ` +
+      `(saw ${observed} thumbnail(s), expected >= ${target}). Not confirming this lot.`
+    );
   }
 
   return localPaths.length;
@@ -927,23 +1095,28 @@ async function uploadLotImages(page, lot, lotIndex, priorThumbCount) {
 /**
  * captionEsImages(page, imageTitles)
  *
- * Opens the first uploaded picture's editor, then for each picture pastes the
- * owning lot's title (imageTitles[i]) into the description field and advances
- * with "Next" until all pictures are captioned or Next is unavailable. Returns
- * the number of pictures captioned. Screenshots the editor on first open so the
+ * Opens the first uploaded picture's editor (David's two-step: click the image,
+ * then click the orange pencil), then for each picture pastes the owning lot's
+ * title (imageTitles[i]) into the description field and advances with "Next"
+ * until all pictures are captioned or Next is unavailable. Returns a boolean
+ * array results[] (length = imageTitles.length); results[i] = whether picture i's
+ * description was set. If Next fails to advance mid-pass, the loop breaks and the
+ * remaining entries stay false. Screenshots the editor on first open so the
  * description/Next selectors can be refined against real DOM.
  */
 async function captionEsImages(page, imageTitles) {
   const total = imageTitles.length;
+  const results = new Array(total).fill(false);
 
-  // Open the first image's editor — try the edit pencil, then the thumbnail.
+  // Open the first image's editor. David's flow is click the image, then click
+  // the orange pencil icon — lead with pencil-specific selectors, then fall back.
   const openEditor = await findFirst(page, [
-    '[class*="image"] [class*="edit"]',
-    'button[title*="edit" i]',
-    '[aria-label*="edit" i]',
     '.fa-pencil',
-    '.fa-edit',
     'i[class*="pencil"]',
+    '[aria-label*="edit" i]',
+    'button[title*="edit" i]',
+    '[class*="image"] [class*="edit"]',
+    '.fa-edit',
     '[class*="image-card"]',
     '[class*="thumbnail"]',
     '.image-grid img',
@@ -956,11 +1129,10 @@ async function captionEsImages(page, imageTitles) {
   await page.waitForTimeout(1_500);
   await screenshot(page, 'es-image-editor-first'); // refine selectors from this
 
-  let captioned = 0;
   for (let i = 0; i < total; i++) {
     const ok = await fillEsImageDescription(page, imageTitles[i]);
-    if (ok) captioned++;
-    else console.warn(`[agent]   WARNING: could not set description for image ${i + 1}/${total}`);
+    results[i] = ok;
+    if (!ok) console.warn(`[agent]   WARNING: could not set description for image ${i + 1}/${total}`);
 
     if (i < total - 1) {
       const advanced = await clickEsNext(page);
@@ -971,7 +1143,7 @@ async function captionEsImages(page, imageTitles) {
       await page.waitForTimeout(800);
     }
   }
-  return captioned;
+  return results;
 }
 
 /**
@@ -1025,53 +1197,67 @@ async function fillEsImageDescription(page, text) {
 }
 
 /**
+ * readEsImageDescription(page)
+ *
+ * Reads the image editor's current description value (mirror of
+ * fillEsImageDescription's selector cascade). Returns a string, or null if no
+ * field is present. Used to confirm the editor actually advanced after "Next".
+ */
+async function readEsImageDescription(page) {
+  return await page.evaluate(() => {
+    const el = document.querySelector(
+      'textarea[name*="description" i], textarea[id*="description" i], ' +
+      'textarea[placeholder*="description" i], textarea[placeholder*="caption" i], ' +
+      'input[name*="description" i], [contenteditable="true"], textarea'
+    );
+    if (!el) return null;
+    if (el.getAttribute && el.getAttribute('contenteditable') === 'true') return el.innerHTML;
+    return el.value;
+  }).catch(() => null);
+}
+
+/**
  * clickEsNext(page)
  *
  * Advances the image editor to the next picture. Returns false if no enabled
- * "Next" control exists (end of the set).
+ * "Next" control exists (end of the set), if the click throws, OR if the editor
+ * does not actually advance (description field unchanged) — so the caller never
+ * treats a swallowed no-op as a successful advance.
+ *
+ * Matches only "Next" (Playwright :has-text is case-insensitive → matches
+ * "NEXT"); we deliberately do NOT add Continue/Go synonyms because "Continue"
+ * collides with the wizard's "SAVE AND CONTINUE" (which the agent must NEVER
+ * click — David saves manually).
  */
 async function clickEsNext(page) {
   const nextEl = await findFirst(page, [
     'button:has-text("Next"):not([disabled])',
     'button[aria-label*="next" i]:not([disabled])',
-    '[class*="next"]:not([disabled])',
-    'button:has-text(">"):not([disabled])',
+    'a[aria-label*="next" i]:not([disabled])',
+    'button[class*="next"]:not([disabled])',
+    'a[class*="next"]:not([disabled])',
   ], 3_000);
   if (!nextEl) return false;
   if (await nextEl.isDisabled().catch(() => false)) return false;
-  await nextEl.click().catch(() => {});
-  return true;
-}
 
-/**
- * saveEsPictures(page)
- *
- * Commits the Pictures step via "SAVE AND CONTINUE". Returns true if the click
- * landed without surfacing an error/auth state (the wizard is an SPA and may
- * not navigate). Returns false if the button is missing or an error appears.
- */
-async function saveEsPictures(page) {
-  const saveEl = await findFirst(page, [
-    'button:has-text("SAVE AND CONTINUE")',
-    'button:has-text("Save and Continue")',
-    'button:has-text("Save & Continue")',
-    'button:has-text("Save")',
-  ], 5_000);
-  if (!saveEl) {
-    await screenshot(page, 'es-no-save-pictures');
-    console.warn('[agent]   WARNING: Could not find "SAVE AND CONTINUE" button.');
-    return false;
+  // Snapshot the current description so we can confirm the click advanced to a
+  // different picture (the just-pasted title vs. the next picture's caption,
+  // typically empty on a fresh upload).
+  const before = await readEsImageDescription(page);
+
+  try {
+    await nextEl.click();
+  } catch {
+    return false; // do NOT swallow — a failed click means we did not advance
   }
-  await Promise.all([
-    page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {}),
-    saveEl.click(),
-  ]);
-  await page.waitForTimeout(1_500);
-  if (await hasErrorOrAuthState(page)) {
-    await screenshot(page, 'es-save-pictures-error');
-    return false;
+
+  // Verify advancement: poll briefly for the description field to change.
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline) {
+    if ((await readEsImageDescription(page)) !== before) return true;
+    await page.waitForTimeout(250);
   }
-  return true;
+  return false;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -1083,33 +1269,35 @@ async function run() {
   if (!ES_URL) {
     throw new Error('ESTATESALES_URL is required');
   }
-  if (!ES_STORAGE_STATE && (!ES_EMAIL || !ES_PASSWORD)) {
+  if (!ES_EMAIL || !ES_PASSWORD) {
     throw new Error(
-      'EstateSales.net auth is missing. Provide either:\n' +
-      '  ES_STORAGE_STATE (exported Playwright session JSON — preferred for Google-SSO accounts), OR\n' +
-      '  ESTATESALES_EMAIL + ESTATESALES_PASSWORD (email/password login).\n' +
-      'Set credentials in VZT Settings.'
+      'EstateSales.net auth is missing. Requires ESTATESALES_EMAIL + ESTATESALES_PASSWORD ' +
+      'set in VZT Settings.'
     );
   }
 
   await updateJobStatus('running');
 
-  // Parse storageState JSON if provided (Google-SSO session import)
-  let parsedStorageState;
-  if (ES_STORAGE_STATE) {
-    try {
-      parsedStorageState = JSON.parse(ES_STORAGE_STATE);
-    } catch (e) {
-      throw new Error('[agent] ES_STORAGE_STATE is not valid session JSON — re-export it from VZT Settings.');
-    }
+  // CI: bundled headless Chromium + stealth + masked UA (strips "HeadlessChrome").
+  // Local: the machine's REAL Chrome (channel) with a persistent profile and no
+  // spoofing at all — a genuine fingerprint + cookie reputation is what passes
+  // reCAPTCHA v3 on the ES sign-in form; a hardcoded Chrome/120 UA contradicts
+  // the browser's own client hints and reads as a bot.
+  let browser = null;
+  let context;
+  if (IS_CI) {
+    browser = await chromium.launch({ headless: true });
+    context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
+  } else {
+    context = await chromium.launchPersistentContext(CHROME_PROFILE_DIR, {
+      headless: false,
+      channel: 'chrome',
+      viewport: { width: 1280, height: 900 },
+    });
   }
-
-  const browser = await chromium.launch({ headless: IS_CI });
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 900 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    storageState: parsedStorageState,
-  });
   const page = await context.newPage();
 
   let lots = [];
@@ -1121,25 +1309,37 @@ async function run() {
     console.log('[agent] Logging into DOA...');
     await page.goto('https://denveronlineauctions.com/Account/Login', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
 
+    // The persistent local profile can still hold a live DOA session from a
+    // prior run, in which case /Account/Login redirects straight past the
+    // form — only fill it when it actually renders.
     // #MainContent_Email avoids the newsletter popup email input
-    await page.fill('#MainContent_Email', DOA_EMAIL);
-    await page.fill('#MainContent_Password', DOA_PASSWORD);
-    // ASP.NET WebForms login — submit is an <input>, not a <button>
-    const doaSubmit = await findFirst(page, [
-      '#MainContent_LoginButton',
-      'input[type="submit"]',
-      'button[type="submit"]',
-      'button:has-text("Log in")',
-      'input[value="Log in"]',
-    ]);
-    if (!doaSubmit) throw new Error('[agent] Could not find DOA login submit button.');
-    await doaSubmit.click();
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+    const doaFormPresent = await page.locator('#MainContent_Email')
+      .waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
+    if (doaFormPresent) {
+      await page.fill('#MainContent_Email', DOA_EMAIL);
+      await page.fill('#MainContent_Password', DOA_PASSWORD);
+      // ASP.NET WebForms login — submit is an <input>, not a <button>
+      const doaSubmit = await findFirst(page, [
+        '#MainContent_LoginButton',
+        'input[type="submit"]',
+        'button[type="submit"]',
+        'button:has-text("Log in")',
+        'input[value="Log in"]',
+      ]);
+      if (!doaSubmit) throw new Error('[agent] Could not find DOA login submit button.');
+      await doaSubmit.click();
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+    } else {
+      console.log('[agent] DOA session already active (login form not shown) — continuing.');
+    }
     await screenshot(page, 'doa-after-login');
 
-    // Verify login
-    const afterLoginUrl = page.url();
-    if (afterLoginUrl.includes('/Account/Login')) {
+    // Verify login. DOA renders "You are now logged in as ..." ON the
+    // /Account/Login URL when a session is already active, so the URL alone
+    // can't distinguish success from failure.
+    const doaLoggedInMarker = await page.getByText(/logged in as/i).first()
+      .isVisible().catch(() => false);
+    if (page.url().includes('/Account/Login') && !doaLoggedInMarker) {
       throw new Error(
         '[agent] DOA login failed — still on login page.\n' +
         '  Check screenshot "doa-after-login". Verify DOA credentials in VZT Settings.'
@@ -1162,27 +1362,36 @@ async function run() {
     // ── Phase 2: EstateSales upload ──────────────────────────────────────────
     console.log('\n[agent] ── Phase 2: EstateSales Upload ─────────────────────');
     const uploadResult = await uploadLots(page, lots);
-    // On rerun where all lots were already uploaded, report skipped+succeeded
-    // so the operator sees "199 of 199" rather than "0 of 199".
-    const totalAccountedFor = uploadResult.succeeded + uploadResult.skipped;
+    const { succeeded, failed, failedLots } = uploadResult;
+    const skipped = uploadResult.skipped;          // confirmed uploaded in a prior run
+    const blocked = uploadResult.blocked ?? 0;     // reserved by another run / previously failed
+    // CONFIRMED on ES = newly uploaded this run + already-uploaded in a prior run.
+    // Blocked lots are NOT on ES (or unconfirmed) and must never be counted as
+    // uploaded — counting them would let a job report success with missing items.
+    const confirmedUploaded = succeeded + skipped;
     console.log(
-      `\n[agent] Phase 2 complete — ${uploadResult.succeeded} newly uploaded, ` +
-      `${uploadResult.skipped} already uploaded (skipped), ${uploadResult.failed} failed. ` +
-      `(${totalAccountedFor}/${lots.length} total accounted for)`
+      `\n[agent] Phase 2 complete — ${succeeded} newly uploaded, ` +
+      `${skipped} already uploaded (skipped), ${blocked} blocked (needs reconciliation), ` +
+      `${failed} failed. (${confirmedUploaded}/${lots.length} confirmed on ES)`
     );
     await updateJobFields({
-      lots_uploaded: uploadResult.succeeded,
-      lots_skipped:  uploadResult.skipped,
+      lots_uploaded: confirmedUploaded,
+      lots_skipped:  skipped,
     });
-    if (uploadResult.failed > 0) {
-      const summary = uploadResult.failedLots.map(l => `Lot ${l.index}: ${l.error}`).join('; ');
-      if (uploadResult.succeeded === 0 && uploadResult.skipped === 0) {
-        throw new Error(`All ${uploadResult.failed} lot(s) failed to upload. ${summary}`);
+    const problems = failed + blocked;
+    if (problems > 0) {
+      const failSummary = failedLots.map(l => `Lot ${l.index ?? '?'}: ${l.error}`).join('; ');
+      const blockedNote = blocked > 0
+        ? `${blocked} lot(s) blocked (reserved by another run or previously failed — verify on ES, then clear/mark the ledger row to retry)`
+        : '';
+      const parts = [failSummary, blockedNote].filter(Boolean).join('; ');
+      if (confirmedUploaded === 0) {
+        throw new Error(`No lots confirmed on ES — ${problems} lot(s) failed/blocked. ${parts}`);
       }
       // Partial success — throw a typed error so the entry point can distinguish
-      const partialErr = new Error(`${uploadResult.failed} of ${lots.length - uploadResult.skipped} lot(s) failed: ${summary}`);
+      const partialErr = new Error(`${problems} of ${lots.length} lot(s) not confirmed: ${parts}`);
       partialErr.partial = true;
-      partialErr.succeeded = uploadResult.succeeded;
+      partialErr.succeeded = succeeded;
       throw partialErr;
     }
 
@@ -1190,7 +1399,13 @@ async function run() {
     await screenshot(page, 'error-state');
     throw err;
   } finally {
-    await browser.close();
+    // Persistent context has no separate browser handle — close whichever exists.
+    await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+    // Remove the temp dir of downloaded customer photos even on crash —
+    // per-file cleanup in uploadLotImages only covers the happy path, so an
+    // error mid-run would otherwise leave private images on disk.
+    try { fs.rmSync(IMAGES_DIR, { recursive: true, force: true }); } catch { /* non-fatal */ }
   }
 }
 
@@ -1207,7 +1422,12 @@ run()
       console.warn('\n[agent] Partial failure:', err.message);
       // partial_failed is a terminal status and gets completed_at set in updateJobStatus
       await updateJobStatus('partial_failed', err.message);
-      process.exit(0);
+      // Exit non-zero: a partial failure means some lots did NOT upload. The
+      // GitHub Actions run must go red so the "Upload screenshots on failure"
+      // step fires (selector debugging) and ops telemetry doesn't read a green
+      // run as a clean upload. The estatesales_jobs row carries the precise
+      // 'partial_failed' status for the app; the exit code is the CI signal.
+      process.exit(1);
     }
     console.error('\n[agent] FATAL:', err.message);
     await updateJobStatus('failed', err.message);

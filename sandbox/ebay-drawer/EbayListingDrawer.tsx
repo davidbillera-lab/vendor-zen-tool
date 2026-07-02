@@ -15,7 +15,7 @@
  * Gate behind VITE_FEATURE_EBAY_DRAWER env var (defaults off).
  */
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { AlertCircle, CheckCircle2, ExternalLink, Image as ImageIcon } from "lucide-react";
 import { toast } from "sonner";
 
@@ -400,26 +400,24 @@ export function EbayListingDrawer({
   const [workingImages, setWorkingImages] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const prevRowId = useRef<string | null>(null);
 
   // On open / row change: fetch aspects and seed working state
   useEffect(() => {
     if (!open || !row) {
-      prevRowId.current = null; // SF1: reset so re-open for same row re-fetches
       setAspectFields([]);
       setStatus("idle");
       return;
     }
 
-    // Guard: same row already loading/loaded in this open — do not re-fetch
-    if (prevRowId.current === row.id) return;
-    prevRowId.current = row.id;
-
-    // Snapshot row values — prevents stale-closure surprises in async callbacks
+    // Snapshot row values used in this effect — prevents stale-closure surprises
     const rowId = row.id;
     const imageUrls = row.image_urls ?? [];
     const itemSpecifics = row.item_specifics ?? {};
     const category = row.category;
+
+    // B3: closure-scoped stale flag — if the effect re-runs (row/category changed)
+    // the cleanup sets stale=true so the in-flight fetch discards its result.
+    let stale = false;
 
     setWorkingImages(imageUrls);
     setAspectFields([]); // B4: clear prior row's fields immediately on new load
@@ -441,7 +439,7 @@ export function EbayListingDrawer({
     setStatus("loading");
     fetchCategoryAspects(categoryId)
       .then((result) => {
-        if (prevRowId.current !== rowId) return; // B3: stale result — row changed, discard
+        if (stale) return; // B3: stale guard — row changed while fetch was in flight
         if (!result) {
           // Edge fn unavailable — taxonomy unknown, block publish to avoid missing required fields
           setStatus("error");
@@ -452,10 +450,13 @@ export function EbayListingDrawer({
         setStatus("loaded");
       })
       .catch(() => {
-        if (prevRowId.current !== rowId) return; // B3: discard stale error
+        if (stale) return; // B3: discard stale error
         setStatus("error");
+        // aspectFields already cleared above — leave empty so canPublish stays blocked
       });
-  }, [open, row?.id, row?.image_urls, row?.item_specifics, row?.category]);
+
+    return () => { stale = true; }; // B3: mark in-flight fetch as stale on cleanup
+  }, [open, row?.id, row?.category]); // SF1: image_urls/item_specifics are snapshots, not reactive triggers
 
   // ---------------------------------------------------------------------------
   // Field updates

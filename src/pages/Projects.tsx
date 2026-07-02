@@ -3,10 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { 
-  FolderOpen, 
-  Plus, 
-  Search, 
+import {
+  FolderOpen,
+  Plus,
+  Search,
   Calendar,
   Package,
   Trash2,
@@ -15,7 +15,8 @@ import {
   Users,
   Gavel,
   Store,
-  Loader2
+  Loader2,
+  Layers
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
@@ -438,6 +439,20 @@ export default function Projects() {
                 ) : (
                   <p className="text-xs text-muted-foreground italic">No platforms yet</p>
                 )}
+
+                {/* Bulk Intake shortcut */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 w-full h-7 text-xs gap-1"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`/bulk-intake?project=${project.id}`);
+                  }}
+                >
+                  <Layers className="h-3 w-3" />
+                  Bulk Intake
+                </Button>
 
                 {/* Hover indicator */}
                 <div className="absolute bottom-0 left-0 right-0 h-1 bg-primary rounded-b-xl opacity-0 group-hover:opacity-100 transition-opacity" />

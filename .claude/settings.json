@@ -13,6 +13,10 @@
       "PowerShell(vercel whoami)",
       "Bash(npx tsc --noEmit *)",
       "PowerShell(npx tsc --noEmit *)",
+      "Bash(npm run build)",
+      "Bash(npm run lint)",
+      "PowerShell(npm run build)",
+      "PowerShell(npm run lint)",
       "Bash(vercel env ls *)",
       "mcp__mission-control__mc_get_project_context",
       "mcp__mission-control__mc_browse_vault",
@@ -26,7 +30,12 @@
       "mcp__claude_ai_Vercel__list_deployments",
       "mcp__claude_ai_Vercel__get_project",
       "mcp__claude_ai_Vercel__list_projects",
-      "mcp__claude_ai_Vercel__list_teams"
+      "mcp__claude_ai_Vercel__list_teams",
+      "mcp__supabase__get_project",
+      "mcp__supabase__list_projects",
+      "mcp__claude_ai_Supabase__get_project",
+      "mcp__claude_ai_Supabase__list_projects",
+      "PowerShell(Get-Process *)"
     ]
   }
 }

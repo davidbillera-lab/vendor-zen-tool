@@ -36,19 +36,30 @@ export function EstateSalesCredentialsCard() {
       toast.error("Enter email and password");
       return;
     }
-    setIsSaving(true);
+
     const fields: Record<string, string> = { estatesales_email: email.trim() };
-    if (password.trim()) fields.estatesales_password = password.trim();
-    const { error } = await supabase.functions.invoke("save-credentials", {
-      body: { platform: "estatesales", fields },
-    });
-    setIsSaving(false);
-    if (error) {
-      toast.error("Failed to save: " + error.message);
-    } else {
-      setIsConnected(true);
-      setPassword("");
-      toast.success("EstateSales.net credentials saved");
+    // Send the password exactly as typed — some accounts allow leading/trailing
+    // spaces, and this is now the agent's sole login credential. Trim only for
+    // the presence check.
+    if (password.trim()) fields.estatesales_password = password;
+
+    setIsSaving(true);
+    try {
+      const { error } = await supabase.functions.invoke("save-credentials", {
+        body: { platform: "estatesales", fields },
+      });
+      if (error) {
+        toast.error("Failed to save: " + error.message);
+      } else {
+        setIsConnected(true);
+        setPassword("");
+        toast.success("EstateSales.net credentials saved");
+      }
+    } catch (err) {
+      // invoke() can throw (network/function error) rather than return { error }.
+      toast.error("Failed to save: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -105,6 +116,9 @@ export function EstateSalesCredentialsCard() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder={isConnected ? "leave blank to keep current" : "Your EstateSales.net password"}
           />
+          <p className="text-xs text-muted-foreground">
+            The agent signs in with this email and password each run.
+          </p>
         </div>
       </div>
 
