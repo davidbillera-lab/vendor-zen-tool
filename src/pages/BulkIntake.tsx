@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
-import { Loader2, Upload, Layers } from "lucide-react";
+import { Loader2, Upload } from "lucide-react";
 
 // ── Helpers (outside component) ───────────────────────────────────────────────
 
@@ -96,6 +96,8 @@ export default function BulkIntake() {
   const [isGrouping, setIsGrouping] = useState(false);
   const [lots, setLots] = useState<LotGroup[]>([]);
   const [lotListings, setLotListings] = useState<Map<number, LotListing>>(new Map());
+  // Uploaded image URLs per lot, cached so a retry doesn't re-upload or duplicate
+  const [lotUploadedUrls, setLotUploadedUrls] = useState<Map<number, string[]>>(new Map());
   const [lotStatus, setLotStatus] = useState<Map<number, LotStatus>>(new Map());
   const [lotErrors, setLotErrors] = useState<Map<number, string>>(new Map());
   const [targetEbay, setTargetEbay] = useState(true);
@@ -178,8 +180,19 @@ export default function BulkIntake() {
         body: { images: base64Images },
       });
       if (error) throw error;
+      if (!data || !Array.isArray(data.lots)) {
+        throw new Error(data?.error || 'Unexpected response from grouping service');
+      }
       setLots(data.lots);
-      toast({ title: `${data.lots.length} lots identified` });
+      if (data.fallback) {
+        toast({
+          title: 'AI grouping unavailable — each photo is its own lot',
+          description: 'Merge related photos manually before publishing.',
+          variant: 'destructive',
+        });
+      } else {
+        toast({ title: `${data.lots.length} lots identified` });
+      }
     } catch (err) {
       toast({ title: 'Grouping failed', description: String(err), variant: 'destructive' });
     } finally {
@@ -201,13 +214,20 @@ export default function BulkIntake() {
     const { data: { user } } = await supabase.auth.getUser();
     setIsPublishing(true);
 
-    // Reset status maps
-    setLotStatus(new Map());
+    // Clear stale errors but keep 'done' statuses so a retry skips finished lots
     setLotErrors(new Map());
+
+    let successCount = 0;
+    let failCount = 0;
 
     for (let lotIdx = 0; lotIdx < lots.length; lotIdx++) {
       const lot = lots[lotIdx];
       const lotNumber = lot.lot;
+
+      if (lotStatus.get(lotIdx) === 'done') {
+        successCount++;
+        continue;
+      }
 
       const updateStatus = (status: LotStatus) =>
         setLotStatus(prev => new Map(prev).set(lotIdx, status));
@@ -215,10 +235,18 @@ export default function BulkIntake() {
         setLotErrors(prev => new Map(prev).set(lotIdx, msg));
 
       try {
-        // 1. Upload images
+        // 1. Upload images (reuse cached URLs on retry)
         updateStatus('uploading');
-        const lotFiles = lot.imageIndices.map(i => files[i]);
-        const uploadedUrls = await Promise.all(lotFiles.map(uploadImage));
+        let uploadedUrls = lotUploadedUrls.get(lotIdx);
+        if (!uploadedUrls) {
+          const lotFiles = lot.imageIndices.map(i => files[i]).filter(Boolean);
+          if (lotFiles.length === 0) {
+            throw new Error('No valid photos in this lot');
+          }
+          uploadedUrls = await Promise.all(lotFiles.map(uploadImage));
+          const urls = uploadedUrls;
+          setLotUploadedUrls(prev => new Map(prev).set(lotIdx, urls));
+        }
 
         // 2. Generate or use existing edits
         updateStatus('generating');
@@ -269,7 +297,7 @@ export default function BulkIntake() {
               shipping_cost: 0,
               handling_time: 3,
               returns_accepted: true,
-              return_period: '30 Days',
+              return_period: 30,
               return_shipping: 'Buyer',
               promotion_rate: 0,
               promotion_type: 'flat',
@@ -283,10 +311,13 @@ export default function BulkIntake() {
             .single();
           if (insertError) throw insertError;
           if (listing.injectedCorrectionIds?.length && rowData) {
+            // Supabase builders are lazy — without .then() the request never fires
             supabase.rpc('record_correction_injections', {
               p_row_id: String(rowData.id),
               p_platform: 'ebay',
               p_ids: listing.injectedCorrectionIds,
+            }).then(({ error }) => {
+              if (error) console.warn('record_correction_injections skipped:', error.message);
             });
           }
         }
@@ -309,27 +340,31 @@ export default function BulkIntake() {
         }
 
         updateStatus('done');
+        successCount++;
       } catch (err) {
         updateStatus('error');
         setError(String(err));
+        failCount++;
       }
     }
 
     setIsPublishing(false);
-    toast({ title: `Published ${lots.length} lots` });
+    if (failCount === 0) {
+      toast({ title: `Published ${successCount} lots` });
+    } else {
+      toast({
+        title: `${successCount} lots published, ${failCount} failed`,
+        description: 'Fix the errors shown on each lot, then publish again — finished lots are skipped.',
+        variant: 'destructive',
+      });
+    }
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <MainLayout>
+    <MainLayout title="Bulk Intake" subtitle="Drop photos, group into lots, publish">
       <div className="p-6 max-w-6xl mx-auto space-y-6">
-        {/* Page header */}
-        <div className="flex items-center gap-3">
-          <Layers className="h-6 w-6" />
-          <h1 className="text-2xl font-bold">Bulk Intake</h1>
-        </div>
-
         {/* Consignor / Project picker — must select before dropping photos */}
         <Card>
           <CardHeader className="pb-3">
