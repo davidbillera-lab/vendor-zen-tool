@@ -99,6 +99,8 @@ export default function BulkIntake() {
   const [lotListings, setLotListings] = useState<Map<number, LotListing>>(new Map());
   // Uploaded image URLs per lot, cached so a retry doesn't re-upload or duplicate
   const [lotUploadedUrls, setLotUploadedUrls] = useState<Map<number, string[]>>(new Map());
+  // Photos pulled out of lots (or added after grouping) — held here, never published
+  const [unassigned, setUnassigned] = useState<number[]>([]);
   const [lotStatus, setLotStatus] = useState<Map<number, LotStatus>>(new Map());
   const [lotErrors, setLotErrors] = useState<Map<number, string>>(new Map());
   const [targetEbay, setTargetEbay] = useState(true);
@@ -107,6 +109,8 @@ export default function BulkIntake() {
   const [projects, setProjects] = useState<{ id: string; name: string; consignor_name: string | null }[]>([]);
   const [isPublishing, setIsPublishing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Authoritative running count of loaded files (state reads are stale in callbacks)
+  const filesCountRef = useRef(0);
   const [searchParams] = useSearchParams();
 
   // Fetch projects (la_batches) on mount — same pattern as BatchManager.tsx
@@ -139,9 +143,59 @@ export default function BulkIntake() {
       toast({ title: `${imageFiles.length - filtered.length} divider image(s) removed automatically` });
     }
     const thumbs = await Promise.all(filtered.map(generateThumbnail));
+    const start = filesCountRef.current;
+    filesCountRef.current += filtered.length;
     setFiles(prev => [...prev, ...filtered]);
     setThumbnails(prev => [...prev, ...thumbs]);
-  }, []);
+    // After grouping, new photos land in the Unassigned pool — drag onto a lot to use
+    if (lots.length > 0 && filtered.length > 0) {
+      setUnassigned(prev => [...prev, ...filtered.map((_, k) => start + k)]);
+      toast({ title: `${filtered.length} photo(s) added to Unassigned — drag onto a lot` });
+    }
+  }, [lots.length]);
+
+  // Move a photo to another lot, to Unassigned (null), or to a brand-new lot ('new').
+  // Blocked on published lots; clears the touched lots' upload cache + status so a
+  // retry re-uploads the corrected photo set.
+  const movePhoto = useCallback((imageIdx: number, target: number | null | 'new') => {
+    if (isPublishing) return;
+    const fromLot = lots.findIndex(l => l.imageIndices.includes(imageIdx));
+    if (fromLot !== -1 && lotStatus.get(fromLot) === 'done') return;
+    if (typeof target === 'number' && (target === fromLot || lotStatus.get(target) === 'done')) return;
+
+    setLots(prev => {
+      const next = prev.map((l, i) =>
+        i === fromLot ? { ...l, imageIndices: l.imageIndices.filter(x => x !== imageIdx) } :
+        i === target ? { ...l, imageIndices: [...l.imageIndices, imageIdx] } : l
+      );
+      return target === 'new'
+        ? [...next, { lot: Math.max(0, ...prev.map(l => l.lot)) + 1, imageIndices: [imageIdx] }]
+        : next;
+    });
+    setUnassigned(prev => {
+      const without = prev.filter(x => x !== imageIdx);
+      return target === null ? [...without, imageIdx] : without;
+    });
+    setLotUploadedUrls(prev => {
+      const next = new Map(prev);
+      if (fromLot !== -1) next.delete(fromLot);
+      if (typeof target === 'number') next.delete(target);
+      return next;
+    });
+    setLotStatus(prev => {
+      const next = new Map(prev);
+      if (fromLot !== -1) next.delete(fromLot);
+      if (typeof target === 'number') next.delete(target);
+      return next;
+    });
+  }, [isPublishing, lots, lotStatus]);
+
+  const readDraggedPhoto = (e: React.DragEvent): number | null => {
+    const raw = e.dataTransfer.getData('application/x-photo-index');
+    if (!raw) return null; // e.g. an OS file drag, not one of our thumbnails
+    const idx = Number(raw);
+    return Number.isInteger(idx) && idx >= 0 ? idx : null;
+  };
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -229,6 +283,9 @@ export default function BulkIntake() {
 
     for (let lotIdx = 0; lotIdx < lots.length; lotIdx++) {
       const lot = lots[lotIdx];
+
+      // Emptied by photo edits — not an error, just nothing to publish
+      if (lot.imageIndices.length === 0) continue;
 
       if (lotStatus.get(lotIdx) === 'done') {
         successCount++;
@@ -367,6 +424,39 @@ export default function BulkIntake() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
+  const renderPhoto = (i: number, locked: boolean, showRemove: boolean) => (
+    <div key={i} className="relative group">
+      <img
+        src={thumbnails[i]}
+        alt={`Photo ${i + 1}`}
+        draggable={!locked}
+        onDragStart={e => e.dataTransfer.setData('application/x-photo-index', String(i))}
+        className={`h-20 w-20 object-cover rounded border ${locked ? '' : 'cursor-grab active:cursor-grabbing'}`}
+      />
+      {!locked && showRemove && (
+        <button
+          type="button"
+          onClick={() => movePhoto(i, null)}
+          title="Remove from lot"
+          className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs leading-none"
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+
+  const dropOnLot = (target: number | null | 'new') => (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const idx = readDraggedPhoto(e);
+    if (idx !== null) movePhoto(idx, target);
+  };
+
+  const allowDrop = (e: React.DragEvent<HTMLDivElement>) => e.preventDefault();
+
+  const publishableCount = lots.filter(l => l.imageIndices.length > 0).length;
+
   return (
     <MainLayout title="Bulk Intake" subtitle="Drop photos, group into lots, publish">
       <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -426,7 +516,9 @@ export default function BulkIntake() {
                 <>
                   <p className="text-lg font-medium">Drop estate sale photos here</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Drag &amp; drop or click to select. Divider images auto-removed.
+                    {lots.length > 0
+                      ? 'New photos land in Unassigned below — drag them onto a lot.'
+                      : 'Drag & drop or click to select. Divider images auto-removed.'}
                   </p>
                 </>
               ) : (
@@ -481,16 +573,31 @@ export default function BulkIntake() {
         {/* Lot cards — shown after grouping */}
         {lots.length > 0 && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold">{lots.length} Lots</h2>
+            <div>
+              <h2 className="text-lg font-semibold">{publishableCount} Lots</h2>
+              <p className="text-xs text-muted-foreground">
+                Drag photos between lots to fix the grouping. Hover a photo and click × to pull it out.
+              </p>
+            </div>
             {lots.map((lot, lotIdx) => {
               const status = lotStatus.get(lotIdx) ?? 'idle';
               const listing = lotListings.get(lotIdx);
               const err = lotErrors.get(lotIdx);
+              const locked = status === 'done' || isPublishing;
+              const isEmpty = lot.imageIndices.length === 0;
 
               return (
-                <Card key={lotIdx}>
+                <Card
+                  key={lotIdx}
+                  onDragOver={locked ? undefined : allowDrop}
+                  onDrop={locked ? undefined : dropOnLot(lotIdx)}
+                  className={isEmpty ? 'opacity-60 border-dashed' : undefined}
+                >
                   <CardHeader className="flex flex-row items-center justify-between pb-2">
-                    <CardTitle className="text-sm">Lot {lot.lot}</CardTitle>
+                    <CardTitle className="text-sm">
+                      Lot {lot.lot}
+                      {isEmpty && <span className="ml-2 font-normal text-muted-foreground">(empty — will be skipped)</span>}
+                    </CardTitle>
                     {status !== 'idle' && (
                       <Badge
                         variant={
@@ -514,16 +621,13 @@ export default function BulkIntake() {
                     )}
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    {/* Thumbnails for this lot */}
-                    <div className="flex gap-2 flex-wrap">
-                      {lot.imageIndices.map(i => (
-                        <img
-                          key={i}
-                          src={thumbnails[i]}
-                          className="h-20 w-20 object-cover rounded border"
-                          alt=""
-                        />
-                      ))}
+                    {/* Thumbnails for this lot — draggable, removable */}
+                    <div className="flex gap-2 flex-wrap min-h-[2rem]">
+                      {isEmpty ? (
+                        <p className="text-xs text-muted-foreground italic">Drag photos here or leave empty to skip.</p>
+                      ) : (
+                        lot.imageIndices.map(i => renderPhoto(i, locked, true))
+                      )}
                     </div>
 
                     {/* Editable fields if listing has been generated */}
@@ -578,6 +682,36 @@ export default function BulkIntake() {
                 </Card>
               );
             })}
+
+            {/* New-lot drop target — split an item Gemini wrongly merged */}
+            {!isPublishing && (
+              <div
+                onDragOver={allowDrop}
+                onDrop={dropOnLot('new')}
+                className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-4 text-center text-sm text-muted-foreground"
+              >
+                Drag a photo here to start a new lot
+              </div>
+            )}
+
+            {/* Unassigned pool — removed or late-added photos, never published */}
+            {unassigned.length > 0 && (
+              <Card onDragOver={allowDrop} onDrop={dropOnLot(null)}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">
+                    Unassigned ({unassigned.length})
+                    <span className="ml-2 font-normal text-muted-foreground">
+                      — held out of all lots; drag onto a lot to use
+                    </span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-2 flex-wrap">
+                    {unassigned.map(i => renderPhoto(i, isPublishing, false))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         )}
 
@@ -609,7 +743,7 @@ export default function BulkIntake() {
 
               <Button
                 onClick={handlePublish}
-                disabled={isPublishing || lots.length === 0}
+                disabled={isPublishing || publishableCount === 0}
                 className="w-full"
               >
                 {isPublishing ? (
@@ -618,7 +752,7 @@ export default function BulkIntake() {
                     Publishing...
                   </>
                 ) : (
-                  `Generate & Publish ${lots.length} Lots`
+                  `Generate & Publish ${publishableCount} Lots`
                 )}
               </Button>
             </CardContent>
