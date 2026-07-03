@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { MainLayout } from "@/components/layout/MainLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { generateListing, uploadImage, type GeneratedListing } from "@/lib/api/listings";
+import { getNextLotNumber } from "@/lib/crosspost/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -220,9 +221,14 @@ export default function BulkIntake() {
     let successCount = 0;
     let failCount = 0;
 
+    // Continue each table's lot sequence — Gemini's lot labels restart at 1 every
+    // session and must never be used as DB lot numbers (duplicates hide lots and
+    // collide on the DOA agent run). Fetched fresh per publish so retries stay correct.
+    let nextEbayLot = targetEbay ? await getNextLotNumber('ebay_batch_rows', selectedBatchId) : 0;
+    let nextDenverLot = targetDoa && selectedBatchId ? await getNextLotNumber('denver_batch_rows', selectedBatchId) : 1;
+
     for (let lotIdx = 0; lotIdx < lots.length; lotIdx++) {
       const lot = lots[lotIdx];
-      const lotNumber = lot.lot;
 
       if (lotStatus.get(lotIdx) === 'done') {
         successCount++;
@@ -285,7 +291,7 @@ export default function BulkIntake() {
             .from('ebay_batch_rows')
             .insert({
               batch_id: selectedBatchId,
-              lot_number: lotNumber,
+              lot_number: nextEbayLot,
               title: listing.title || '',
               description: listing.description || '',
               price: listing.price || 0,
@@ -310,6 +316,7 @@ export default function BulkIntake() {
             .select()
             .single();
           if (insertError) throw insertError;
+          nextEbayLot++;
           if (listing.injectedCorrectionIds?.length && rowData) {
             // Supabase builders are lazy — without .then() the request never fires
             supabase.rpc('record_correction_injections', {
@@ -323,20 +330,18 @@ export default function BulkIntake() {
         }
 
         if (targetDoa) {
-          // Schema confirmed from src/lib/crosspost/api.ts buildDenverBatchRow:
-          // batch_id (required), lot_number (integer), title, description,
-          // starting_bid, image_urls, status
-          // Note: condition and created_by are NOT in the confirmed schema — omitted.
           const { error: doaError } = await supabase.from('denver_batch_rows').insert({
             batch_id: selectedBatchId || null,
-            lot_number: lotNumber,
+            lot_number: nextDenverLot,
             title: (listing.title || '').substring(0, 100),
             description: listing.description || '',
             starting_bid: listing.startingBid ?? listing.price ?? 0,
             image_urls: uploadedUrls,
             status: 'pending',
+            created_by: user?.id ?? null,
           });
           if (doaError) throw doaError;
+          nextDenverLot++;
         }
 
         updateStatus('done');

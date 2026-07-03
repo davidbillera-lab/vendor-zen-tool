@@ -61,11 +61,12 @@ export default function DenverBatches() {
     else setRefreshing(true);
 
     try {
+      // No platforms/is_active filter: la_batches has no is_active column, and
+      // neither publish flow maintains the platforms array — a batch is a Denver
+      // batch iff it actually has denver_batch_rows (filtered below).
       const { data: batchRows, error } = await supabase
         .from("la_batches")
         .select("id, name, created_at, platforms")
-        .contains("platforms", ["denver"])
-        .eq("is_active", true)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -101,7 +102,8 @@ export default function DenverBatches() {
 
       const enriched: Batch[] = results
         .filter((r): r is PromiseFulfilledResult<Batch> => r.status === "fulfilled")
-        .map((r) => r.value);
+        .map((r) => r.value)
+        .filter((b) => b.counts.total > 0);
 
       setBatches(enriched);
     } catch (err: unknown) {
