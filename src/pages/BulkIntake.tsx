@@ -412,7 +412,11 @@ export default function BulkIntake() {
 
     setIsPublishing(false);
     if (failCount === 0) {
-      toast({ title: `Published ${successCount} lots` });
+      toast({
+        title: `Published ${successCount} lots`,
+        description: 'Workspace cleared — ready for the next batch.',
+      });
+      resetWorkspace();
     } else {
       toast({
         title: `${successCount} lots published, ${failCount} failed`,
@@ -420,6 +424,20 @@ export default function BulkIntake() {
         variant: 'destructive',
       });
     }
+  };
+
+  // Full reset after a clean publish — keeps the selected consignor/project
+  const resetWorkspace = () => {
+    setFiles([]);
+    setThumbnails([]);
+    setLots([]);
+    setLotListings(new Map());
+    setLotStatus(new Map());
+    setLotErrors(new Map());
+    setLotUploadedUrls(new Map());
+    setUnassigned([]);
+    filesCountRef.current = 0;
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
