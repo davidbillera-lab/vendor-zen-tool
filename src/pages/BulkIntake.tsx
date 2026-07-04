@@ -17,48 +17,69 @@ import { Loader2, Upload } from "lucide-react";
 
 // ── Helpers (outside component) ───────────────────────────────────────────────
 
-async function generateThumbnail(file: File): Promise<string> {
+// One decode per file: produces the 256px thumbnail AND the divider verdict.
+// (Previously each file was decoded twice — thumbnail + divider check — which
+// doubled memory pressure on large drops.)
+async function processImageFile(file: File): Promise<{ thumb: string; isDivider: boolean }> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
     img.onload = () => {
       URL.revokeObjectURL(img.src);
       const size = 256;
       const ratio = Math.min(size / img.width, size / img.height);
-      canvas.width = img.width * ratio;
-      canvas.height = img.height * ratio;
-      ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.5));
+      const thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = img.width * ratio;
+      thumbCanvas.height = img.height * ratio;
+      thumbCanvas.getContext('2d')?.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
+      const thumb = thumbCanvas.toDataURL('image/jpeg', 0.5);
+
+      const divCanvas = document.createElement('canvas');
+      divCanvas.width = 256;
+      divCanvas.height = 256;
+      const divCtx = divCanvas.getContext('2d');
+      divCtx?.drawImage(img, 0, 0, 256, 256);
+      const data = divCtx?.getImageData(0, 0, 256, 256).data;
+      let isDivider = false;
+      if (data) {
+        const n = data.length / 4;
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+        const avg = sum / n;
+        let varSum = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const d = (data[i] + data[i + 1] + data[i + 2]) / 3 - avg;
+          varSum += d * d;
+        }
+        isDivider = avg > 200 && varSum / n < 500;
+      }
+      resolve({ thumb, isDivider });
     };
     img.onerror = () => reject(new Error('Failed to load image'));
     img.src = URL.createObjectURL(file);
   });
 }
 
-async function isLikelyDivider(file: File): Promise<boolean> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    img.onload = () => {
-      URL.revokeObjectURL(img.src);
-      canvas.width = 256;
-      canvas.height = 256;
-      ctx?.drawImage(img, 0, 0, 256, 256);
-      const data = ctx?.getImageData(0, 0, 256, 256).data;
-      if (!data) return resolve(false);
-      const pixels: number[] = [];
-      for (let i = 0; i < data.length; i += 4) {
-        pixels.push((data[i] + data[i + 1] + data[i + 2]) / 3);
-      }
-      const avg = pixels.reduce((a, b) => a + b, 0) / pixels.length;
-      const variance = pixels.reduce((acc, v) => acc + Math.pow(v - avg, 2), 0) / pixels.length;
-      resolve(avg > 200 && variance < 500);
-    };
-    img.onerror = () => resolve(false);
-    img.src = URL.createObjectURL(file);
+// Bounded-concurrency map: large photo drops must not decode hundreds of
+// images simultaneously (browser memory spike / hang).
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+  onProgress?: (done: number) => void
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  let done = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+      done++;
+      onProgress?.(done);
+    }
   });
+  await Promise.all(workers);
+  return results;
 }
 
 async function fileToBase64(file: File): Promise<string> {
@@ -101,6 +122,8 @@ export default function BulkIntake() {
   const [lotUploadedUrls, setLotUploadedUrls] = useState<Map<number, string[]>>(new Map());
   // Photos pulled out of lots (or added after grouping) — held here, never published
   const [unassigned, setUnassigned] = useState<number[]>([]);
+  const [ingestProgress, setIngestProgress] = useState<{ done: number; total: number } | null>(null);
+  const [groupProgress, setGroupProgress] = useState<{ done: number; total: number } | null>(null);
   const [lotStatus, setLotStatus] = useState<Map<number, LotStatus>>(new Map());
   const [lotErrors, setLotErrors] = useState<Map<number, string>>(new Map());
   const [targetEbay, setTargetEbay] = useState(true);
@@ -134,23 +157,47 @@ export default function BulkIntake() {
     fetchProjects();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // File drop / select handler
+  // File drop / select handler — bounded concurrency + progress for large drops
   const handleFiles = useCallback(async (newFiles: File[]) => {
     const imageFiles = newFiles.filter(f => f.type.startsWith('image/'));
-    const dividerChecks = await Promise.all(imageFiles.map(isLikelyDivider));
-    const filtered = imageFiles.filter((_, i) => !dividerChecks[i]);
-    if (filtered.length < imageFiles.length) {
-      toast({ title: `${imageFiles.length - filtered.length} divider image(s) removed automatically` });
-    }
-    const thumbs = await Promise.all(filtered.map(generateThumbnail));
-    const start = filesCountRef.current;
-    filesCountRef.current += filtered.length;
-    setFiles(prev => [...prev, ...filtered]);
-    setThumbnails(prev => [...prev, ...thumbs]);
-    // After grouping, new photos land in the Unassigned pool — drag onto a lot to use
-    if (lots.length > 0 && filtered.length > 0) {
-      setUnassigned(prev => [...prev, ...filtered.map((_, k) => start + k)]);
-      toast({ title: `${filtered.length} photo(s) added to Unassigned — drag onto a lot` });
+    if (imageFiles.length === 0) return;
+    setIngestProgress({ done: 0, total: imageFiles.length });
+    try {
+      const processed = await mapWithConcurrency(
+        imageFiles,
+        6,
+        f => processImageFile(f).catch(() => null),
+        done => setIngestProgress({ done, total: imageFiles.length })
+      );
+
+      const kept: File[] = [];
+      const thumbs: string[] = [];
+      let dividers = 0;
+      let unreadable = 0;
+      processed.forEach((p, i) => {
+        if (!p) unreadable++;
+        else if (p.isDivider) dividers++;
+        else {
+          kept.push(imageFiles[i]);
+          thumbs.push(p.thumb);
+        }
+      });
+      if (dividers > 0) toast({ title: `${dividers} divider image(s) removed automatically` });
+      if (unreadable > 0) {
+        toast({ title: `${unreadable} file(s) couldn't be read and were skipped`, variant: 'destructive' });
+      }
+
+      const start = filesCountRef.current;
+      filesCountRef.current += kept.length;
+      setFiles(prev => [...prev, ...kept]);
+      setThumbnails(prev => [...prev, ...thumbs]);
+      // After grouping, new photos land in the Unassigned pool — drag onto a lot to use
+      if (lots.length > 0 && kept.length > 0) {
+        setUnassigned(prev => [...prev, ...kept.map((_, k) => start + k)]);
+        toast({ title: `${kept.length} photo(s) added to Unassigned — drag onto a lot` });
+      }
+    } finally {
+      setIngestProgress(null);
     }
   }, [lots.length]);
 
@@ -225,33 +272,84 @@ export default function BulkIntake() {
     }
   };
 
-  // Group lots via Gemini vision edge function
+  // Group lots via Gemini vision edge function.
+  // Large batches are sent in overlapping chunks: one giant request is slow,
+  // can exceed payload/output limits, and degrades grouping quality. Chunks
+  // overlap so an item photographed across a boundary still merges into one lot.
+  const GROUP_CHUNK_SIZE = 60;
+  const GROUP_CHUNK_OVERLAP = 6;
+
   const handleGroupLots = async () => {
     if (files.length === 0) return;
     setIsGrouping(true);
     try {
       const base64Images = thumbnails.map(t => t.split(',')[1]);
-      const { data, error } = await supabase.functions.invoke('group-lots-vision', {
-        body: { images: base64Images },
-      });
-      if (error) throw error;
-      if (!data || !Array.isArray(data.lots)) {
-        throw new Error(data?.error || 'Unexpected response from grouping service');
+
+      // Chunk ranges: after the first, each starts GROUP_CHUNK_OVERLAP early
+      const ranges: { start: number; end: number }[] = [];
+      for (let s = 0; s < base64Images.length; ) {
+        const start = s === 0 ? 0 : s - GROUP_CHUNK_OVERLAP;
+        const end = Math.min(base64Images.length, s + GROUP_CHUNK_SIZE);
+        ranges.push({ start, end });
+        s = end;
       }
-      setLots(data.lots);
-      if (data.fallback) {
+      if (ranges.length > 1) setGroupProgress({ done: 0, total: ranges.length });
+
+      // imageIdx -> position in mergedLots; overlap images stitch chunk results together
+      const assignment = new Map<number, number>();
+      const mergedLots: LotGroup[] = [];
+      let anyFallback = false;
+
+      for (let c = 0; c < ranges.length; c++) {
+        const { start, end } = ranges[c];
+        const { data, error } = await supabase.functions.invoke('group-lots-vision', {
+          body: { images: base64Images.slice(start, end) },
+        });
+        if (error) throw error;
+        if (!data || !Array.isArray(data.lots)) {
+          throw new Error(data?.error || 'Unexpected response from grouping service');
+        }
+        if (data.fallback) anyFallback = true;
+
+        for (const lot of data.lots as LotGroup[]) {
+          const globalIdxs = lot.imageIndices
+            .map(i => i + start)
+            .filter(i => i >= start && i < end);
+          if (globalIdxs.length === 0) continue;
+          // If any image was already placed by the previous chunk (overlap),
+          // this whole lot joins that existing lot.
+          const existing = globalIdxs.map(i => assignment.get(i)).find(v => v !== undefined);
+          const pos = existing !== undefined ? existing : mergedLots.length;
+          if (existing === undefined) mergedLots.push({ lot: pos + 1, imageIndices: [] });
+          for (const gi of globalIdxs) {
+            if (!assignment.has(gi)) {
+              assignment.set(gi, pos);
+              mergedLots[pos].imageIndices.push(gi);
+            }
+          }
+        }
+        if (ranges.length > 1) setGroupProgress({ done: c + 1, total: ranges.length });
+      }
+
+      const finalLots = mergedLots
+        .filter(l => l.imageIndices.length > 0)
+        .map((l, i) => ({ lot: i + 1, imageIndices: l.imageIndices }));
+      setLots(finalLots);
+
+      if (anyFallback) {
         toast({
-          title: 'AI grouping unavailable — each photo is its own lot',
+          title: 'AI grouping partially unavailable — some photos became single lots',
           description: 'Merge related photos manually before publishing.',
           variant: 'destructive',
         });
       } else {
-        toast({ title: `${data.lots.length} lots identified` });
+        toast({ title: `${finalLots.length} lots identified` });
       }
     } catch (err) {
       toast({ title: 'Grouping failed', description: String(err), variant: 'destructive' });
     } finally {
       setIsGrouping(false);
+      setGroupProgress(null);
     }
   };
 
@@ -534,7 +632,9 @@ export default function BulkIntake() {
                 <>
                   <p className="text-lg font-medium">Drop estate sale photos here</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    {lots.length > 0
+                    {ingestProgress
+                      ? `Processing photos… ${ingestProgress.done}/${ingestProgress.total}`
+                      : lots.length > 0
                       ? 'New photos land in Unassigned below — drag them onto a lot.'
                       : 'Drag & drop or click to select. Divider images auto-removed.'}
                   </p>
@@ -578,7 +678,7 @@ export default function BulkIntake() {
                 {isGrouping ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Grouping...
+                    {groupProgress ? `Grouping… ${groupProgress.done}/${groupProgress.total}` : 'Grouping...'}
                   </>
                 ) : (
                   'Group into Lots'
