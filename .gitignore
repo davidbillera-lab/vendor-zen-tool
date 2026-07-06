@@ -55,3 +55,4 @@ estatesales-agent/smoke-run-*.log
 screenshots/
 doa-listing-agent/*.zip
 .codex-qc/
+.claude/checkpoint*.md
