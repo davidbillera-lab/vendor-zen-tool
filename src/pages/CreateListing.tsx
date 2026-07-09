@@ -168,6 +168,11 @@ export default function CreateListing() {
   // Cross-post preselection (Mercari / Poshmark / Etsy paths auto-check the platform in CrossPostPanel)
   const [crossPostPreselect, setCrossPostPreselect] = useState<string | null>(null);
   const [ebayRows, setEbayRows] = useState<any[]>([]);
+  // The ebay_batch_rows id that belongs to the CURRENT on-screen generatedListing.
+  // Every DB write driven by generatedListing (debounced sync, verify, refine) MUST
+  // key on this id — targeting ebayRows[length-1] wrote item N+1's text onto row N
+  // whenever the insert round-trip outran the 600ms debounce (2026-07-05 purse batch).
+  const [activeEbayRowId, setActiveEbayRowId] = useState<string | null>(null);
   const [loadingEbay, setLoadingEbay] = useState(false);
   const [ebayShippingSettings, setEbayShippingSettings] = useState<ShippingSettings>({
     shippingType: "flat",
@@ -504,6 +509,7 @@ export default function CreateListing() {
     images.forEach(img => URL.revokeObjectURL(img.preview));
     setImages([]);
     setGeneratedListing(null);
+    setActiveEbayRowId(null);
     setActivePlatform(null);
     setAdditionalContext("");
   };
@@ -552,6 +558,7 @@ export default function CreateListing() {
     setProcessing(platform);
     setActivePlatform(platform);
     setGeneratedListing(null);
+    setActiveEbayRowId(null); // new item — no row belongs to the upcoming listing yet
 
     // Mercari / Poshmark / Etsy use the cross-post pipeline (clean base listing, then CrossPostPanel handles dispatch)
     const isCrossPostOnly = platform === 'mercari' || platform === 'poshmark' || platform === 'etsy';
@@ -627,6 +634,7 @@ export default function CreateListing() {
 
           if (!error && data) {
             setEbayRows(prev => [...prev, data]);
+            setActiveEbayRowId(data.id);
             setEbayLotNumber(prev => prev + 1);
             setCustomSku("");
             // v2.4: durably log which corrections shaped this row + bump times_injected.
@@ -792,7 +800,8 @@ export default function CreateListing() {
   // eBay: Verify listing with second LLM
   const handleEbayVerify = async () => {
     if (!generatedListing || !activePlatform) return;
-    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    // Resolve the row by the id captured at insert — never by position.
+    const lastEbayRow = ebayRows.find(r => r.id === activeEbayRowId) ?? null;
 
     setEbayVerifying(true);
     setEbayVerifyResult(null);
@@ -884,7 +893,8 @@ export default function CreateListing() {
   // eBay: Refine listing with prompt
   const handleEbayRefine = async () => {
     if (!ebayRefinePrompt.trim() || !generatedListing) return;
-    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    // Resolve the row by the id captured at insert — never by position.
+    const lastEbayRow = ebayRows.find(r => r.id === activeEbayRowId) ?? null;
 
     setEbayRefining(true);
     try {
@@ -1028,8 +1038,10 @@ export default function CreateListing() {
   const ebayDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!generatedListing) return;
-    const lastEbayRow = ebayRows[ebayRows.length - 1];
-    if (!lastEbayRow) return;
+    // Only ever sync to the row created FOR this listing. ebayRows[length-1] here
+    // raced the insert: the effect armed with item N+1's text while row N was
+    // still last, and a >600ms insert let the timer clobber row N.
+    if (!activeEbayRowId) return;
     if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current);
     ebayDebounceRef.current = setTimeout(async () => {
       await supabase.from('ebay_batch_rows').update({
@@ -1037,10 +1049,10 @@ export default function CreateListing() {
         description: generatedListing.description,
         price: generatedListing.price,
         custom_sku: customSku.trim() || null,
-      }).eq('id', lastEbayRow.id);
+      }).eq('id', activeEbayRowId);
     }, 600);
     return () => { if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current); };
-  }, [generatedListing, ebayRows, customSku]);
+  }, [generatedListing, activeEbayRowId, customSku]);
 
   const [downloadingImages, setDownloadingImages] = useState(false);
   const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
