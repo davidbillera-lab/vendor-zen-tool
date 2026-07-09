@@ -279,3 +279,15 @@ A follow-up CodexQC pass flagged the original `select('*').limit(1)` + condition
 **Still-wrong rows found during forensics (David to fix in the panel):** purse batch lot 4 (photos = black/gray suede patchwork fringe tote; text = the lot-5 cognac clutch) and mixed batch lot 9 (photos = Alpha Microsystems CRT monitor/terminal; title = lot 10's Alpha Micro 4000 system unit).
 
 **Meta-lesson:** every DB write driven by on-screen state must be keyed to an identity captured with that state, never to a positional lookup ("last row") that can drift between arm time and fire time. This is the same class of flaw as the ES caption offset issue (2026-07-06) — position-keyed writes against live collections.
+
+---
+
+## 2026-07-09 — CodexQC on the contamination fix: SHIP for a08a5ce itself; 3 pre-existing blockers fixed same-day (662a05a), 1 deferred as product decision
+
+**Context:** Tier 1 rule — Codex (gpt-5.5) second-opinion on `a08a5ce` before any main merge. Verdict FIX-FIRST ⚠️, but the fix itself was endorsed ("the activeEbayRowId approach is the right direction and avoids the prior last-row-wins race"). All four Blocking findings were pre-existing issues in `CreateListing.tsx`, each verified against real code before acting.
+
+**Fixed (662a05a):** (1) Success toasts fired even when the platform save failed — eBay showed error-then-success, LiveAuctioneers showed "Saved to Cloud" after a null save, Denver failures were completely silent; now a `platformSaveOk` flag gates the success toast and Denver failures toast destructively. (2) The debounced eBay sync wrote to the DB but never patched `ebayRows`, so the batch panel/CSV export could read pre-edit values; the sync now updates local state on write success. (3) Editor-modified images kept their previously-uploaded `url`, and the upload step skips images with a `url` — an edited photo would republish the stale original; edited images now clear `url` and re-upload.
+
+**Deferred (product decision for David):** the post-generation eBay item-specifics/shipping/promotion controls update component state only — the already-inserted row keeps its insert-time values. Codex is right that this is ambiguous, but whether those controls should EDIT the current row or act as defaults-for-next-item is a workflow choice, not a bug fix. Should-fix backlog also noted in the report (`.codex-qc/codex-qc-2026-07-09T17-16-51-774Z.md`, gitignored): stale `lot_count` increments, `parseFloat(NaN)` promotion rate, unchecked Denver Clear All delete, clipboard error handling, page decomposition for sellability.
+
+**Consequence:** a08a5ce + 662a05a together are the reviewed unit for the next main merge. Build green and lint-delta zero after both commits.
