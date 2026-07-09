@@ -530,7 +530,9 @@ export default function CreateListing() {
         const original = prev[i];
         const filename = original?.file?.name ?? `photo-${i + 1}.jpg`;
         const newFile = dataURLtoFile(url, filename);
-        return { file: newFile, preview: url, url: original?.url };
+        // Drop any previously-uploaded URL: the upload step skips images that
+        // already have one, which would publish the stale un-edited photo.
+        return { file: newFile, preview: url, url: undefined };
       });
     });
     setImageEditorOpen(false);
@@ -581,6 +583,10 @@ export default function CreateListing() {
       const generationPlatform: Platform = isCrossPostOnly ? 'facebook' : platform;
       const listing = await generateListing(generationPlatform, imageUrls, additionalContext, masterPrompt || undefined);
       setGeneratedListing(listing);
+
+      // Gate the success toast on the platform save actually succeeding — a
+      // failed insert must never end the flow on a success message.
+      let platformSaveOk = true;
 
       // Auto-save eBay to batch for bulk export
       if (platform === 'ebay') {
@@ -652,6 +658,7 @@ export default function CreateListing() {
             // Never swallow a save failure silently — a rejected insert here
             // looks exactly like "nothing saves" to the operator (no row added,
             // lot number stuck, no eBay push button). Surface it loudly.
+            platformSaveOk = false;
             console.error('eBay batch row save failed:', error);
             toast({
               title: "Listing didn't save to eBay batch",
@@ -691,6 +698,8 @@ export default function CreateListing() {
           const saved = await saveToCloudBatch(listing, imageUrls, lotNumber);
           if (saved) {
             setLotNumber(prev => prev + 1);
+          } else {
+            platformSaveOk = false; // saveToCloudBatch already toasted the failure
           }
         }
       }
@@ -722,6 +731,14 @@ export default function CreateListing() {
           if (!error && data) {
             setDenverLots(prev => [...prev, data]);
             setDenverLotNumber(prev => prev + 1);
+          } else if (error) {
+            platformSaveOk = false;
+            console.error('Denver batch row save failed:', error);
+            toast({
+              title: "Lot didn't save to Denver batch",
+              description: error.message || "The lot was not added. Try again.",
+              variant: "destructive"
+            });
           }
         }
       }
@@ -746,7 +763,7 @@ export default function CreateListing() {
       };
 
       const msg = toastMessages[platform];
-      if (msg) toast(msg);
+      if (msg && platformSaveOk) toast(msg);
 
     } catch (error) {
       toast({
@@ -1044,12 +1061,18 @@ export default function CreateListing() {
     if (!activeEbayRowId) return;
     if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current);
     ebayDebounceRef.current = setTimeout(async () => {
-      await supabase.from('ebay_batch_rows').update({
+      const updates = {
         title: generatedListing.title,
         description: generatedListing.description,
         price: generatedListing.price,
         custom_sku: customSku.trim() || null,
-      }).eq('id', activeEbayRowId);
+      };
+      const { error } = await supabase.from('ebay_batch_rows').update(updates).eq('id', activeEbayRowId);
+      // Keep local batch state in step with the DB — the batch panel and CSV
+      // export read ebayRows, which otherwise holds the pre-edit values.
+      if (!error) {
+        setEbayRows(prev => prev.map(r => r.id === activeEbayRowId ? { ...r, ...updates } : r));
+      }
     }, 600);
     return () => { if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current); };
   }, [generatedListing, activeEbayRowId, customSku]);
