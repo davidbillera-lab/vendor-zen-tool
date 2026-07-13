@@ -627,7 +627,7 @@ export default function CreateListing() {
               returns_accepted: ebayShippingSettings.returnsAccepted,
               return_period: ebayShippingSettings.returnPeriod,
               return_shipping: ebayShippingSettings.returnShipping,
-              promotion_rate: parseFloat(promotionRate),
+              promotion_rate: Number.isFinite(parseFloat(promotionRate)) ? parseFloat(promotionRate) : null,
               promotion_type: promotionType,
               custom_sku: customSku.trim() || null,
               injected_correction_ids: listing.injectedCorrectionIds?.length
@@ -879,6 +879,9 @@ export default function CreateListing() {
           condition: updates.condition || prev.condition,
           itemSpecifics: updates.item_specifics || prev.itemSpecifics,
         } : prev);
+        // Keep the specifics editor in step — the settings sync writes
+        // ebayItemSpecifics to the row and must not resurrect pre-verify values.
+        if (updates.item_specifics) setEbayItemSpecifics(updates.item_specifics);
 
         // Sync to DB row if one exists
         if (lastEbayRow) {
@@ -964,6 +967,9 @@ export default function CreateListing() {
           condition: updates.condition || prev.condition,
           itemSpecifics: updates.item_specifics || prev.itemSpecifics,
         } : prev);
+        // Keep the specifics editor in step — the settings sync writes
+        // ebayItemSpecifics to the row and must not resurrect pre-refine values.
+        if (updates.item_specifics) setEbayItemSpecifics(updates.item_specifics);
 
         // Sync to DB row if one exists
         if (lastEbayRow) {
@@ -1076,6 +1082,35 @@ export default function CreateListing() {
     }, 600);
     return () => { if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current); };
   }, [generatedListing, activeEbayRowId, customSku]);
+
+  // Debounced sync of the post-generation eBay controls (item specifics,
+  // shipping & returns, promotion) to the CURRENT row. Operator decision
+  // 2026-07-12: these controls EDIT the on-screen listing — the state also
+  // carries forward as the defaults for the next item, as before.
+  const ebaySettingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!activeEbayRowId) return;
+    if (ebaySettingsDebounceRef.current) clearTimeout(ebaySettingsDebounceRef.current);
+    ebaySettingsDebounceRef.current = setTimeout(async () => {
+      const rate = parseFloat(promotionRate);
+      const updates = {
+        item_specifics: ebayItemSpecifics,
+        shipping_type: ebayShippingSettings.shippingType,
+        shipping_cost: ebayShippingSettings.shippingCost,
+        handling_time: ebayShippingSettings.handlingTime,
+        returns_accepted: ebayShippingSettings.returnsAccepted,
+        return_period: ebayShippingSettings.returnPeriod,
+        return_shipping: ebayShippingSettings.returnShipping,
+        promotion_rate: Number.isFinite(rate) ? rate : null,
+        promotion_type: promotionType,
+      };
+      const { error } = await supabase.from('ebay_batch_rows').update(updates).eq('id', activeEbayRowId);
+      if (!error) {
+        setEbayRows(prev => prev.map(r => r.id === activeEbayRowId ? { ...r, ...updates } : r));
+      }
+    }, 600);
+    return () => { if (ebaySettingsDebounceRef.current) clearTimeout(ebaySettingsDebounceRef.current); };
+  }, [ebayItemSpecifics, ebayShippingSettings, promotionRate, promotionType, activeEbayRowId]);
 
   const [downloadingImages, setDownloadingImages] = useState(false);
   const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
