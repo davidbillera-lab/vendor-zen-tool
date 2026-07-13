@@ -291,3 +291,9 @@ A follow-up CodexQC pass flagged the original `select('*').limit(1)` + condition
 **Deferred (product decision for David):** the post-generation eBay item-specifics/shipping/promotion controls update component state only — the already-inserted row keeps its insert-time values. Codex is right that this is ambiguous, but whether those controls should EDIT the current row or act as defaults-for-next-item is a workflow choice, not a bug fix. Should-fix backlog also noted in the report (`.codex-qc/codex-qc-2026-07-09T17-16-51-774Z.md`, gitignored): stale `lot_count` increments, `parseFloat(NaN)` promotion rate, unchecked Denver Clear All delete, clipboard error handling, page decomposition for sellability.
 
 **Consequence:** a08a5ce + 662a05a together are the reviewed unit for the next main merge. Build green and lint-delta zero after both commits.
+
+---
+
+## 2026-07-12 — Post-generation eBay controls now EDIT the current row (operator decision closing the deferred CodexQC blocker)
+
+**Decision (David):** the item-specifics, shipping & returns, and promotion controls shown after an eBay generation edit the CURRENT saved listing — not defaults-only. Implemented in `8fff906` (vercel-deploy) as a second debounced sync keyed to `activeEbayRowId` (same identity-keyed pattern as the 07-09 contamination fix): edits persist to the row and patch `ebayRows`, and the component state still carries forward as the defaults for the next item, preserving prior insert behavior. Verify/refine now push refined specifics into the editor state so the settings sync can't resurrect pre-verify values. `promotion_rate` normalized at insert and sync (blank/invalid → null, was NaN — a CodexQC should-fix in the same path). Build green, lint delta zero. Reviewed unit for main merge is now a08a5ce + 662a05a + 8fff906 — the last commit implements a Codex-flagged fix in the direction Codex suggested, but has not itself had a second-opinion pass.
