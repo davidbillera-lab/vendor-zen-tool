@@ -65,20 +65,25 @@ const SELECTORS = {
   // Confirmed selectors from live DOA login page (April 2026).
   // The page has a newsletter popup with input[type="email"] that loads first —
   // always use the specific MainContent IDs to avoid targeting the wrong field.
+  // DOA now runs on the "Xpert Online Auctions" platform. The login username
+  // control is #username / name="ctl00$MainContent$username" and is type="text"
+  // (labeled "Email or Username"). Confirmed live 2026-07-17.
+  // DO NOT add input[name="email"] or input[type="email"] here: the page has two
+  // newsletter signup boxes with name="email" / type="email", and the old fallback
+  // chain silently filled the newsletter box, leaving the real login field empty.
   loginEmail: [
-    '#MainContent_Email',               // confirmed — DOA login form
+    '#username',                                  // confirmed 2026-07-17 (Xpert platform)
+    'input[name="ctl00$MainContent$username"]',   // ASP.NET control name
+    'input[name$="$username"]',                    // scoped fallback (login form only)
+    '#MainContent_Email',                          // legacy pre-2026-07 DOA form
     'input[name="Email"]',
-    'input[name="email"]',
-    'input[type="email"]',
-    'input[name="username"]',
-    'input[placeholder*="email" i]',
   ],
   loginPassword: [
-    '#MainContent_Password',            // confirmed — DOA login form
-    'input[name="Password"]',
-    'input[name="password"]',
-    'input[type="password"]',
-    'input[placeholder*="password" i]',
+    '#Password',                                   // confirmed 2026-07-17 (Xpert platform)
+    'input[name="ctl00$MainContent$Password"]',    // ASP.NET control name
+    'input[name$="$Password"]',                    // scoped fallback (login form only)
+    '#MainContent_Password',                       // legacy pre-2026-07 DOA form
+    'input[type="password"]',                      // safe: only one password input on the login page
   ],
   loginSubmit: [
     'button[type="submit"]',
