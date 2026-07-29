@@ -36,6 +36,7 @@ import { EbayShippingSettings, type ShippingSettings } from "./EbayShippingSetti
 import { DraggableImageGrid } from "../DraggableImageGrid";
 import { AIGenerateButton } from "../AIGenerateButton";
 import { EbayListingDrawer, type DrawerEbayRow } from "@/components/ebay/EbayListingDrawer";
+import { captureCorrection } from "@/lib/hermes/captureCorrection";
 
 interface EbayRow {
   id: string;
@@ -79,62 +80,6 @@ interface EbayRow {
 // Fire-and-forget: record a human correction of an AI identification so the
 // generation prompt can learn from it (self-improving loop). Never throws —
 // a capture failure must never block the listing flow.
-async function captureCorrection(input: {
-  source: "ai_verify" | "refine";
-  category?: string | null;
-  wrongTitle?: string | null;
-  correctedTitle?: string | null;
-  wrongSpecifics?: Record<string, string> | null;
-  correctedSpecifics?: Record<string, string> | null;
-  correctionNote?: string | null;
-  imageUrls?: string[] | null;
-  // v2.4: when this correction lands on a row that was generated WITH learned
-  // corrections injected, the injected lesson(s) failed -> flag them so they get
-  // down-weighted/retired. All optional; absent = nothing to flag (v1 behavior).
-  rowId?: string | null;
-  injectedCorrectionIds?: string[] | null;
-  correctedField?: "title" | "specifics" | "both";
-}) {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    await supabase.from("listing_corrections").insert({
-      user_id: user.id,
-      source: input.source,
-      platform: "ebay",
-      category: input.category ?? null,
-      wrong_title: input.wrongTitle ?? null,
-      corrected_title: input.correctedTitle ?? null,
-      wrong_specifics: input.wrongSpecifics ?? null,
-      corrected_specifics: input.correctedSpecifics ?? null,
-      correction_note: input.correctionNote ?? null,
-      image_urls: input.imageUrls ?? null,
-    });
-    // v2.4: if this row was shaped by injected lessons and got re-corrected on the
-    // same kind of field, the lesson failed -> mark it (bumps times_failed, retires
-    // at threshold, feeds the re-correction-rate metric). Fire-and-forget.
-    if (input.rowId && input.injectedCorrectionIds?.length) {
-      supabase.rpc("mark_corrections_re_corrected", {
-        p_row_id: input.rowId,
-        p_field: input.correctedField ?? "both",
-        p_ids: input.injectedCorrectionIds,
-      }).then(({ error }) => {
-        if (error) console.warn("mark_corrections_re_corrected skipped (non-blocking):", error.message);
-      });
-    }
-    // Fire-and-forget: embed the new correction(s) so semantic retrieval can
-    // surface them later. Never awaited into the UI path; failures are ignored.
-    supabase.functions
-      .invoke("embed-corrections", { body: { limit: 25 } })
-      .catch((e) => console.warn("embed-corrections invoke skipped (non-blocking):", e));
-    supabase.functions
-      .invoke("distill-lessons", { body: {} })
-      .catch((e) => console.warn("distill-lessons trigger skipped (non-blocking):", e));
-  } catch (e) {
-    console.warn("captureCorrection failed (non-blocking):", e);
-  }
-}
-
 interface EbayBatchPanelProps {
   projectId: string | null;
   rows: EbayRow[];
@@ -182,9 +127,10 @@ export function EbayBatchPanel({
   const [isToolbarRefining, setIsToolbarRefining] = useState(false);
   const [hasPublished, setHasPublished] = useState(false);
   const [showRemovePublishedDialog, setShowRemovePublishedDialog] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [publishedCount, setPublishedCount] = useState(0);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
-  const [inlineEdit, setInlineEdit] = useState<{ id: string; field: 'title' | 'price'; value: string } | null>(null);
+  const [inlineEdit, setInlineEdit] = useState<{ id: string; field: 'title' | 'price' | 'custom_sku'; value: string } | null>(null);
   // specFixes[rowId][specKey] = current draft value for an empty item_specific
   const [specFixes, setSpecFixes] = useState<Record<string, Record<string, string>>>({});
   const [crossPostRowId, setCrossPostRowId] = useState<string | null>(null);
@@ -332,9 +278,95 @@ export function EbayBatchPanel({
       const parsed = parseFloat(inlineEdit.value);
       updates.price = isNaN(parsed) ? row.price : parsed;
     }
+    if (inlineEdit.field === 'custom_sku') {
+      // Blank clears it — publish then falls back to the lot number.
+      // eBay's Custom label (SKU) caps at 50 characters.
+      updates.custom_sku = inlineEdit.value.trim().substring(0, 50) || null;
+    }
     await supabase.from('ebay_batch_rows').update(updates).eq('id', inlineEdit.id);
     onRowsChange(rows.map(r => r.id === inlineEdit.id ? { ...r, ...updates } : r));
     setInlineEdit(null);
+  };
+
+  // Reconciles this project against live eBay listings and marks already-listed
+  // rows as published, so the duplicate guard protects the existing backlog too.
+  // Runs a DRY RUN first and only writes after explicit confirmation.
+  const handleReconcileWithEbay = async () => {
+    setReconciling(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("ebay-reconcile", {
+        body: { batch_id: projectId },
+      });
+      if (error) {
+        let description = error.message;
+        try {
+          const body = await (error as any).context?.json?.();
+          if (body?.error) description = body.error;
+        } catch {}
+        toast({ title: "Sync failed", description, variant: "destructive" });
+        return;
+      }
+
+      const dupNote = data.duplicatesOnEbay?.length
+        ? `\n\n⚠ ${data.duplicatesOnEbay.length} title(s) are ALREADY listed more than once on eBay — check Seller Hub.`
+        : "";
+
+      if (!data.wouldMark) {
+        toast({
+          title: "Nothing to sync",
+          description: `Checked ${data.rowsChecked} row(s) against ${data.activeListingsOnEbay} active eBay listing(s). No matches.${dupNote}`,
+        });
+        return;
+      }
+
+      if (!confirm(
+        `${data.wouldMark} of ${data.rowsChecked} listing(s) in this project are ALREADY live on eBay.\n\n` +
+        `Mark them as Published so they can't be pushed again?${dupNote}`
+      )) return;
+
+      const { data: applied, error: applyError } = await supabase.functions.invoke("ebay-reconcile", {
+        body: { batch_id: projectId, apply: true },
+      });
+      if (applyError) {
+        toast({ title: "Sync failed", description: applyError.message, variant: "destructive" });
+        return;
+      }
+
+      const markedIds = new Set<string>(applied.markedIds ?? []);
+      onRowsChange(rows.map(r => markedIds.has(r.id) ? { ...r, status: "published" } : r));
+      setHasPublished(true);
+      toast({
+        title: `Marked ${applied.marked} listing(s) as published`,
+        description: "They're now protected from being pushed again.",
+      });
+    } catch (e) {
+      toast({ title: "Sync failed", description: e instanceof Error ? e.message : "Unknown", variant: "destructive" });
+    } finally {
+      setReconciling(false);
+    }
+  };
+
+  // Permanently removes published rows from the project (DB), not just the view.
+  // The listings stay live on eBay — this only clears them out of VZT.
+  const handleDeletePublishedRows = async () => {
+    const publishedRows = rows.filter(r => r.status === "published");
+    if (publishedRows.length === 0) return;
+    if (!confirm(
+      `Permanently delete ${publishedRows.length} published listing(s) from this project?\n\n` +
+      `They stay live on eBay — this only removes them from VZT. This cannot be undone.`
+    )) return;
+
+    const ids = publishedRows.map(r => r.id);
+    const { error } = await supabase.from('ebay_batch_rows').delete().in('id', ids);
+    if (error) {
+      toast({ title: "Delete failed", description: error.message, variant: "destructive" });
+      return;
+    }
+    onRowsChange(rows.filter(r => r.status !== "published"));
+    setSelectedIds(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next; });
+    setHasPublished(false);
+    setShowRemovePublishedDialog(false);
+    toast({ title: `Deleted ${ids.length} listing(s) from project` });
   };
 
   const handleClearAll = async () => {
@@ -1360,12 +1392,29 @@ export function EbayBatchPanel({
       toast({ title: "Missing Location", description: "Set an Item Location (ZIP or City, ST) before pushing to eBay.", variant: "destructive" });
       return;
     }
-    if (!confirm(`Push ${activeRows.length} listing(s) as drafts to your eBay Seller Hub?`)) return;
+    // Duplicate guard — never re-push something already listed. This is the last
+    // line of defence against double listings (and the double sales they cause).
+    const pushableRows = activeRows.filter(r => r.status !== "published");
+    const alreadyPublished = activeRows.length - pushableRows.length;
+
+    if (pushableRows.length === 0) {
+      toast({
+        title: "Already published",
+        description: `All ${activeRows.length} selected listing(s) are already on eBay. Nothing to push.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const skipNote = alreadyPublished > 0
+      ? `\n\n${alreadyPublished} already-published listing(s) will be SKIPPED to avoid duplicates.`
+      : "";
+    if (!confirm(`Push ${pushableRows.length} listing(s) as drafts to your eBay Seller Hub?${skipNote}`)) return;
 
     setPublishing(true);
     try {
       const { data, error } = await supabase.functions.invoke("ebay-publish", {
-        body: { rows: activeRows },
+        body: { rows: pushableRows },
       });
 
       if (error) {
@@ -1380,7 +1429,26 @@ export function EbayBatchPanel({
 
       const { succeeded, failed, results } = data;
       if (succeeded > 0) {
-        const succeededIds = new Set(results.filter((r: any) => r.success).map((r: any) => r.id));
+        const succeededIds = new Set<string>(results.filter((r: any) => r.success).map((r: any) => r.id));
+        const publishedIds = [...succeededIds];
+
+        // Persist the publish to the DATABASE, not just local state. Without this
+        // the rows reload as "draft" on the next visit and get pushed a second
+        // time — the cause of duplicate listings (and duplicate sales).
+        const { error: markError } = await supabase
+          .from('ebay_batch_rows')
+          .update({ status: 'published' })
+          .in('id', publishedIds);
+
+        if (markError) {
+          // Loud, not silent: an unmarked row is a future duplicate.
+          toast({
+            title: "⚠ Listings pushed but NOT marked as published",
+            description: `${publishedIds.length} listing(s) went live, but the database could not be updated — they may push again and duplicate. Do not re-push until this is resolved. (${markError.message})`,
+            variant: "destructive",
+          });
+        }
+
         onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
         setHasPublished(true);
         setPublishedCount(succeeded);
@@ -1437,6 +1505,19 @@ export function EbayBatchPanel({
       }
       const { succeeded, failed, results } = data;
       if (succeeded > 0) {
+        // Mark published in the DB before dropping it from view — otherwise the
+        // row returns as "draft" on reload and gets pushed again.
+        const { error: markError } = await supabase
+          .from('ebay_batch_rows')
+          .update({ status: 'published' })
+          .eq('id', row.id);
+        if (markError) {
+          toast({
+            title: "⚠ Pushed but NOT marked as published",
+            description: `Lot ${row.lot_number} is live on eBay but the database was not updated — it may push again and duplicate. (${markError.message})`,
+            variant: "destructive",
+          });
+        }
         onRowsChange(rows.filter(r => r.id !== row.id));
         setRowErrors(prev => { const next = { ...prev }; delete next[row.id]; return next; });
         setSpecFixes(prev => { const next = { ...prev }; delete next[row.id]; return next; });
@@ -1664,6 +1745,18 @@ export function EbayBatchPanel({
               </Button>
             )}
             {rows.length > 0 && (
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={handleReconcileWithEbay}
+                disabled={reconciling}
+                title="Check which of these are already live on eBay and mark them so they can't be pushed twice"
+              >
+                {reconciling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                Sync eBay Status
+              </Button>
+            )}
+            {rows.length > 0 && (
               <Button variant="outline" onClick={handleClearAll}>
                 Clear All
               </Button>
@@ -1681,25 +1774,33 @@ export function EbayBatchPanel({
               </DialogTitle>
             </DialogHeader>
             <p className="text-sm text-muted-foreground">
-              Remove them from this view? They'll stay in the database and remain visible in your other apps.
+              These are now marked <span className="font-medium text-foreground">Published</span> and are
+              blocked from being pushed again, so they can't duplicate. What should happen to them here?
             </p>
-            <div className="flex gap-3 pt-2">
+            <div className="flex flex-col gap-2 pt-2">
               <Button
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                className="w-full bg-green-600 hover:bg-green-700 text-white"
                 onClick={() => {
                   onRowsChange(rows.filter(r => r.status !== "published"));
                   setHasPublished(false);
                   setShowRemovePublishedDialog(false);
                 }}
               >
-                Remove from View
+                Hide from view (keep in project)
+              </Button>
+              <Button
+                variant="destructive"
+                className="w-full"
+                onClick={handleDeletePublishedRows}
+              >
+                Delete from project (permanent)
               </Button>
               <Button
                 variant="outline"
-                className="flex-1"
+                className="w-full"
                 onClick={() => setShowRemovePublishedDialog(false)}
               >
-                Keep in View
+                Keep in view
               </Button>
             </div>
           </DialogContent>
@@ -1853,6 +1954,35 @@ export function EbayBatchPanel({
                       }}
                     />
                     <span className="font-mono text-muted-foreground">#{row.lot_number}</span>
+                    {row.status === "published" && (
+                      <span
+                        className="shrink-0 rounded bg-green-600/15 text-green-500 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide"
+                        title="Already listed on eBay — will be skipped on push to prevent a duplicate"
+                      >LISTED</span>
+                    )}
+                    {/* Custom SKU — click to edit inline. Feeds eBay's "Custom label (SKU)";
+                        blank falls back to the lot number at publish time. */}
+                    {inlineEdit?.id === row.id && inlineEdit.field === 'custom_sku' ? (
+                      <input
+                        autoFocus
+                        className="w-24 shrink-0 bg-background border border-primary rounded px-1 py-0 text-xs font-mono focus:outline-none"
+                        value={inlineEdit.value}
+                        maxLength={50}
+                        placeholder="SKU"
+                        onChange={e => setInlineEdit(prev => prev ? { ...prev, value: e.target.value } : prev)}
+                        onBlur={saveInlineEdit}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); saveInlineEdit(); }
+                          if (e.key === 'Escape') setInlineEdit(null);
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className={`w-24 shrink-0 truncate font-mono text-xs cursor-text hover:underline decoration-dotted ${row.custom_sku ? 'text-foreground' : 'text-muted-foreground/50'}`}
+                        title={row.custom_sku ? `SKU: ${row.custom_sku} — click to edit` : "No SKU — click to set eBay Custom label (SKU)"}
+                        onClick={() => setInlineEdit({ id: row.id, field: 'custom_sku', value: row.custom_sku || '' })}
+                      >{row.custom_sku || 'SKU'}</span>
+                    )}
                     {inlineEdit?.id === row.id && inlineEdit.field === 'title' ? (
                       <input
                         autoFocus
