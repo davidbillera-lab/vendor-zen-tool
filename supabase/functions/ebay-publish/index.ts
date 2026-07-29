@@ -161,6 +161,95 @@ function mapConditionId(condition: string | null): number {
   return map[condition || ""] ?? 3000;
 }
 
+/* ──────────── Category-aware condition resolution ────────────
+ * eBay validates ConditionID PER CATEGORY — the same id is legal in one
+ * category and rejected in another (error 21916883 "Invalid condition id").
+ * There is no condition field in the UI, so a rejected id is unfixable by
+ * the operator. We ask eBay which conditions the category actually allows
+ * and remap to the closest legal one instead of failing the push.
+ */
+
+// Preference chain per condition: first entry is the ideal, rest are
+// progressively-more-conservative legal substitutes.
+const CONDITION_FALLBACKS: Record<number, number[]> = {
+  1000: [1000, 1500, 2750, 3000],
+  1500: [1500, 1000, 2750, 3000],
+  1750: [1750, 1500, 3000, 6000],
+  2000: [2000, 2010, 2020, 2030, 2500, 3000],
+  2500: [2500, 2000, 3000],
+  2750: [2750, 3000, 4000, 1500],
+  3000: [3000, 4000, 5000, 2750, 6000],
+  4000: [4000, 3000, 5000, 6000],
+  5000: [5000, 4000, 3000, 6000],
+  6000: [6000, 5000, 4000, 3000],
+  7000: [7000, 6000, 5000, 4000, 3000],
+};
+
+const conditionPolicyCache = new Map<string, number[] | null>();
+
+/**
+ * Returns the condition IDs eBay allows for a category, or null when the
+ * policy can't be determined (API down / no creds) so callers keep current
+ * behaviour rather than guessing.
+ */
+async function getAllowedConditionIds(
+  categoryId: string,
+  userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null,
+): Promise<number[] | null> {
+  if (conditionPolicyCache.has(categoryId)) return conditionPolicyCache.get(categoryId)!;
+  try {
+    const clientId = userCreds?.clientId ?? (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+    const clientSecret = userCreds?.clientSecret ?? (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+    if (!clientId || !clientSecret) return null;
+
+    const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      },
+      body: new URLSearchParams({ grant_type: "client_credentials", scope: "https://api.ebay.com/oauth/api_scope" }),
+    });
+    if (!tokenRes.ok) return null;
+    const { access_token } = await tokenRes.json();
+
+    const res = await fetch(
+      `https://api.ebay.com/sell/metadata/v1/marketplace/EBAY_US/get_item_condition_policies?filter=categoryIds:{${categoryId}}`,
+      { headers: { Authorization: `Bearer ${access_token}`, "Accept-Language": "en-US" } },
+    );
+    if (!res.ok) { conditionPolicyCache.set(categoryId, null); return null; }
+    const data = await res.json();
+    const policy = (data.itemConditionPolicies ?? [])[0];
+    const ids = (policy?.itemConditions ?? [])
+      .map((c: any) => parseInt(String(c.conditionId), 10))
+      .filter((n: number) => Number.isFinite(n));
+    // An empty list means "eBay imposes no condition restriction here" — treat
+    // as unknown so we don't remap against a phantom constraint.
+    const result = ids.length > 0 ? ids : null;
+    conditionPolicyCache.set(categoryId, result);
+    return result;
+  } catch {
+    conditionPolicyCache.set(categoryId, null);
+    return null;
+  }
+}
+
+/**
+ * Picks a ConditionID that is legal for this category.
+ * Returns the original id unchanged when the policy is unknown.
+ */
+function resolveConditionId(desiredId: number, allowed: number[] | null): { id: number; remapped: boolean } {
+  if (!allowed || allowed.length === 0) return { id: desiredId, remapped: false };
+  if (allowed.includes(desiredId)) return { id: desiredId, remapped: false };
+  for (const candidate of CONDITION_FALLBACKS[desiredId] ?? []) {
+    if (allowed.includes(candidate)) return { id: candidate, remapped: true };
+  }
+  // No chain match — fall back to whatever the category does allow, preferring
+  // a used-family id over "New" so we never overstate an item's condition.
+  const usedFirst = [...allowed].sort((a, b) => b - a);
+  return { id: usedFirst[0], remapped: true };
+}
+
 /* ──────────── Condition enum mapping (Inventory API) ──────────── */
 
 function mapConditionEnum(condition: string | null): string {
@@ -319,11 +408,15 @@ function buildEffectiveSpecifics(categoryId: string, row: EbayRow): Record<strin
   return specifics;
 }
 
-function buildAddFixedPriceItemXml(row: EbayRow): string {
+function buildAddFixedPriceItemXml(
+  row: EbayRow,
+  conditionIdOverride?: number,
+  specificsOverride?: Record<string, string>,
+): string {
   const title = (row.title || "").substring(0, 80).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const description = row.description || "";
   const categoryId = row.category?.match(/\d{3,}/)?.[0] || "0";
-  const conditionId = mapConditionId(row.condition);
+  const conditionId = conditionIdOverride ?? mapConditionId(row.condition);
   const price = (row.price || 0).toFixed(2);
   const shippingCost = row.shipping_type === "free" ? "0.00"
     : row.shipping_cost ? row.shipping_cost.toFixed(2)
@@ -335,8 +428,10 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
     ? `<PictureDetails>${imageUrls.map(u => `<PictureURL>${u}</PictureURL>`).join("")}</PictureDetails>`
     : "";
 
-  // Item specifics — computed by shared helper (also used by guardrail in publishRow)
-  const specifics = buildEffectiveSpecifics(categoryId, row);
+  // Item specifics — computed by shared helper (also used by guardrail in publishRow).
+  // publishRow passes an override that has been length-clamped to eBay's per-aspect
+  // limits; without it we would send the unclamped values and fail the push.
+  const specifics = specificsOverride ?? buildEffectiveSpecifics(categoryId, row);
 
   const specificsXml = Object.entries(specifics).length > 0
     ? `<ItemSpecifics>${Object.entries(specifics).map(([k, v]) =>
@@ -397,7 +492,7 @@ function buildAddFixedPriceItemXml(row: EbayRow): string {
 
 /* ──────────── Taxonomy API — fallback category lookup ──────────── */
 
-async function getCategoryFromTaxonomy(title: string, userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null): Promise<{ id: string; name: string } | null> {
+async function getCategoryFromTaxonomy(title: string, userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null, excludeId?: string): Promise<{ id: string; name: string } | null> {
   try {
     const clientId = userCreds?.clientId ?? (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
     const clientSecret = userCreds?.clientSecret ?? (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
@@ -420,7 +515,19 @@ async function getCategoryFromTaxonomy(title: string, userCreds?: { clientId: st
     );
     if (!suggestRes.ok) return null;
     const data = await suggestRes.json();
-    const top = data.categorySuggestions?.[0]?.category;
+    // Exclude the known-bad category so we don't get the same parent back.
+    // eBay marks leaf categories as BEST_MATCH and parent categories as PARENTS_ALSO_SUGGESTED.
+    // Prefer BEST_MATCH; if none, fall back to the deepest category by tree level.
+    const suggestions: any[] = (data.categorySuggestions || [])
+      .filter((s: any) => !excludeId || String(s.category?.categoryId) !== excludeId);
+    const bestMatch = suggestions.find(s => s.relevancy === "BEST_MATCH");
+    let top = bestMatch?.category;
+    if (!top?.categoryId) {
+      const byDepth = [...suggestions].sort(
+        (a, b) => (b.categoryTreeNodeLevel || 0) - (a.categoryTreeNodeLevel || 0)
+      );
+      top = byDepth[0]?.category;
+    }
     if (!top?.categoryId) return null;
     return { id: String(top.categoryId), name: String(top.categoryName || top.categoryId) };
   } catch {
@@ -462,6 +569,85 @@ async function getRequiredAspectsForCategory(categoryId: string, userCreds?: { c
   }
 }
 
+/* ──────────── Aspect value length limits ────────────
+ * eBay rejects any item-specific value longer than the aspect's max length
+ * (commonly 65 chars — the "Features" line is the usual casualty). The
+ * operator has no way to know the limit, so we clamp to it instead of
+ * letting the push fail.
+ */
+
+const ASPECT_VALUE_FALLBACK_MAX = 65;
+const aspectLimitCache = new Map<string, Record<string, number>>();
+
+async function getAspectMaxLengths(
+  categoryId: string,
+  userCreds?: { clientId: string; clientSecret: string; refreshToken: string } | null,
+): Promise<Record<string, number>> {
+  if (aspectLimitCache.has(categoryId)) return aspectLimitCache.get(categoryId)!;
+  try {
+    const clientId = userCreds?.clientId ?? (Deno.env.get("EBAY_CLIENT_ID") ?? "").trim();
+    const clientSecret = userCreds?.clientSecret ?? (Deno.env.get("EBAY_CLIENT_SECRET") ?? "").trim();
+    if (!clientId || !clientSecret) return {};
+
+    const tokenRes = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      },
+      body: new URLSearchParams({ grant_type: "client_credentials", scope: "https://api.ebay.com/oauth/api_scope" }),
+    });
+    if (!tokenRes.ok) return {};
+    const { access_token } = await tokenRes.json();
+
+    const res = await fetch(
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_aspects_for_category?category_id=${categoryId}`,
+      { headers: { Authorization: `Bearer ${access_token}` } },
+    );
+    if (!res.ok) return {};
+    const data = await res.json();
+
+    const limits: Record<string, number> = {};
+    for (const a of data.aspects ?? []) {
+      const name = String(a.localizedAspectName ?? "");
+      const max = Number(a.aspectConstraint?.aspectMaxLength);
+      if (name && Number.isFinite(max) && max > 0) limits[name] = max;
+    }
+    aspectLimitCache.set(categoryId, limits);
+    return limits;
+  } catch {
+    return {};
+  }
+}
+
+/** Trims to `limit`, preferring a comma/word boundary so the value stays readable. */
+function clampAspectValue(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  const cut = value.substring(0, limit);
+  const boundary = Math.max(cut.lastIndexOf(", "), cut.lastIndexOf(" "));
+  // Only honour the boundary if it keeps most of the allowance.
+  return (boundary > limit * 0.6 ? cut.substring(0, boundary) : cut).replace(/[,\s]+$/, "");
+}
+
+function clampSpecifics(
+  specifics: Record<string, string>,
+  maxLengths: Record<string, number>,
+): { specifics: Record<string, string>; clamped: string[] } {
+  const out: Record<string, string> = {};
+  const clamped: string[] = [];
+  for (const [name, raw] of Object.entries(specifics)) {
+    const value = String(raw ?? "");
+    const limit = maxLengths[name] ?? ASPECT_VALUE_FALLBACK_MAX;
+    if (value.length > limit) {
+      out[name] = clampAspectValue(value, limit);
+      clamped.push(`${name} (${value.length}→${limit})`);
+    } else {
+      out[name] = value;
+    }
+  }
+  return { specifics: out, clamped };
+}
+
 /* ──────────── Pre-publish QA agent ──────────── */
 
 async function runPrePublishQA(
@@ -497,7 +683,7 @@ Current Item Specifics: ${JSON.stringify(currentSpecifics)}
 Required Specifics Missing Values: ${missingAspects.length > 0 ? missingAspects.join(", ") : "none"}
 
 RULES:
-1. CATEGORY: Only set categoryOk=false if you are VERY confident the category is wrong (e.g. a tank model kit in "Women's Makeup" is clearly wrong; a lamp in "Lamps & Shades" is fine). When in doubt, leave it alone (categoryOk=true). If you correct it, describe the item in 4-6 words — the system will resolve the eBay category ID from your description.
+1. CATEGORY: eBay requires a LEAF (terminal) category — broad parent names like "Coins: US", "Stamps", "Electronics", "Clothing", "Jewelry" are NOT valid leaf categories and will cause a publish failure. If the category name sounds like a broad group (a grouping of types) rather than a specific item type, set categoryOk=false and describe the specific item in 4-6 words so the system can resolve the correct leaf category. Only set categoryOk=false if you are confident the category is wrong — a specific type name like "Half Dollars" or "Lamps & Shades" is fine.
 2. ITEM SPECIFICS: For missing required specifics, fill only values you can confidently determine from the title, description, or images. Omit anything uncertain.
 
 Return ONLY valid JSON, no markdown:
@@ -531,11 +717,18 @@ Return ONLY valid JSON, no markdown:
 
     const data = await res.json();
     const text = (data.content?.[0]?.text ?? "").trim();
-    const qa = JSON.parse(text);
+    // The model often wraps JSON in a ```json fence despite being told not to.
+    // Unwrapped, JSON.parse throws and the whole QA pass is silently skipped —
+    // which is what let missing required specifics reach eBay one at a time.
+    const jsonText = text
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+    const qa = JSON.parse(jsonText);
 
     if (qa.categoryOk === false && qa.itemDescription) {
       // Resolve correct category ID via Taxonomy API using Claude's item description
-      const corrected = await getCategoryFromTaxonomy(qa.itemDescription, userCreds);
+      const corrected = await getCategoryFromTaxonomy(qa.itemDescription, userCreds, categoryId);
       return {
         correctedCategoryId: corrected?.id,
         correctedCategoryName: corrected?.name,
@@ -578,7 +771,7 @@ async function publishRow(
     const requiredAspects = await getRequiredAspectsForCategory(categoryId, userCreds);
     const qa = await runPrePublishQA(row, categoryId, categoryName, requiredAspects, userCreds);
 
-    if (qa.correctedCategoryId && qa.correctedCategoryId !== categoryId) {
+    if (qa.correctedCategoryId) {
       console.log(`[ebay-publish] LOT-${row.lot_number}: QA OVERRIDE category ${categoryId} (${categoryName}) → ${qa.correctedCategoryId} (${qa.correctedCategoryName}). Reason: ${qa.qaLog}`);
       categoryId = qa.correctedCategoryId;
     } else {
@@ -590,17 +783,35 @@ async function publishRow(
       ? { ...row, item_specifics: { ...(row.item_specifics || {}), ...qa.filledSpecifics } }
       : row;
 
-    // Hard guardrail — reject before hitting Trading API if any required aspect is still missing
-    const effectiveSpecifics = buildEffectiveSpecifics(categoryId, { ...qaRow, category: categoryId });
+    // Hard guardrail — reject before hitting Trading API if any required aspect is still missing.
+    // Reports EVERY missing aspect at once so the operator fixes them in one pass
+    // instead of rediscovering them one eBay rejection at a time.
+    const rawSpecifics = buildEffectiveSpecifics(categoryId, { ...qaRow, category: categoryId });
+    const aspectMaxLengths = await getAspectMaxLengths(categoryId, userCreds);
+    const { specifics: effectiveSpecifics, clamped } = clampSpecifics(rawSpecifics, aspectMaxLengths);
+    if (clamped.length > 0) {
+      console.log(`[ebay-publish] LOT-${row.lot_number}: trimmed over-long item specifics — ${clamped.join(", ")}`);
+    }
     const stillMissing = requiredAspects.filter(a => !effectiveSpecifics[a]);
     if (stillMissing.length > 0) {
       return {
         success: false,
-        error: `Lot ${row.lot_number}: Missing required item specifics: ${stillMissing.join(", ")}. Add these in the item specifics panel before publishing.`,
+        error: `Lot ${row.lot_number}: Missing required item specifics (${stillMissing.length}): ${stillMissing.join(", ")}. Add all of these in the item specifics panel before publishing.`,
       };
     }
 
-    const xml = buildAddFixedPriceItemXml({ ...qaRow, category: categoryId });
+    // Category-aware condition: eBay rejects ids that are illegal for the
+    // final category, and the operator has no UI field to correct it.
+    const desiredConditionId = mapConditionId(qaRow.condition);
+    const allowedConditions = await getAllowedConditionIds(categoryId, userCreds);
+    const resolvedCondition = resolveConditionId(desiredConditionId, allowedConditions);
+    if (resolvedCondition.remapped) {
+      console.log(
+        `[ebay-publish] LOT-${row.lot_number}: condition "${qaRow.condition}" (${desiredConditionId}) not valid for category ${categoryId} — using ${resolvedCondition.id}. Allowed: [${(allowedConditions ?? []).join(", ")}]`,
+      );
+    }
+
+    const xml = buildAddFixedPriceItemXml({ ...qaRow, category: categoryId }, resolvedCondition.id, effectiveSpecifics);
 
     const res = await fetch(tradingApiUrl, {
       method: "POST",
@@ -647,10 +858,21 @@ async function publishRow(
     const hasCategoryError = realErrors.some(b => categoryErrorCodes.has(extract(b, "ErrorCode")));
     if (hasCategoryError) {
       console.log(`[ebay-publish] LOT-${row.lot_number}: category error detected, querying Taxonomy API for "${row.title}"`);
-      const corrected = await getCategoryFromTaxonomy(row.title || "", userCreds);
-      if (corrected && corrected.id !== categoryId) {
+      const corrected = await getCategoryFromTaxonomy(row.title || "", userCreds, categoryId);
+      if (corrected) {
         console.log(`[ebay-publish] LOT-${row.lot_number}: retrying with Taxonomy category ${corrected.id} (${corrected.name})`);
-        const retryXml = buildAddFixedPriceItemXml({ ...row, category: corrected.id });
+        // Re-resolve the condition against the NEW category — an id that was
+        // legal for the old category may be rejected by the corrected one.
+        const retryCondition = resolveConditionId(
+          mapConditionId(row.condition),
+          await getAllowedConditionIds(corrected.id, userCreds),
+        );
+        // Aspect limits are per-category too — re-clamp against the corrected one.
+        const retrySpecifics = clampSpecifics(
+          buildEffectiveSpecifics(corrected.id, { ...qaRow, category: corrected.id }),
+          await getAspectMaxLengths(corrected.id, userCreds),
+        ).specifics;
+        const retryXml = buildAddFixedPriceItemXml({ ...row, category: corrected.id }, retryCondition.id, retrySpecifics);
         const retryRes = await fetch(tradingApiUrl, {
           method: "POST",
           headers: {
@@ -670,6 +892,66 @@ async function publishRow(
           return { success: true, listingId: retryItemId, usedCategoryId: corrected.id, categoryName: corrected.name };
         }
       }
+    }
+
+    // Safety net: eBay rejected the condition id (21916883) and the metadata
+    // lookup didn't catch it (API unavailable, or policy disagrees). There is
+    // no condition field in the UI, so retry down the fallback chain rather
+    // than dead-ending the operator with an unfixable error.
+    const hasConditionError = realErrors.some(b => extract(b, "ErrorCode") === "21916883");
+    if (hasConditionError) {
+      const attempted = new Set<number>([resolvedCondition.id]);
+      const chain = (CONDITION_FALLBACKS[desiredConditionId] ?? []).filter(c => !attempted.has(c));
+      for (const candidate of chain) {
+        console.log(`[ebay-publish] LOT-${row.lot_number}: condition ${resolvedCondition.id} rejected — retrying with ${candidate}`);
+        const condRetryRes = await fetch(tradingApiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/xml",
+            "X-EBAY-API-CALL-NAME": "AddFixedPriceItem",
+            "X-EBAY-API-SITEID": "0",
+            "X-EBAY-API-COMPATIBILITY-LEVEL": "1193",
+            "X-EBAY-API-IAF-TOKEN": accessToken,
+          },
+          body: buildAddFixedPriceItemXml({ ...qaRow, category: categoryId }, candidate, effectiveSpecifics),
+        });
+        const condText = await condRetryRes.text();
+        const condAck = condText.match(/<Ack>(.*?)<\/Ack>/)?.[1] || "";
+        if (condAck === "Success" || condAck === "Warning") {
+          console.log(`[ebay-publish] LOT-${row.lot_number}: succeeded with condition ${candidate}`);
+          return {
+            success: true,
+            listingId: condText.match(/<ItemID>(\d+)<\/ItemID>/)?.[1],
+            usedCategoryId: categoryId,
+            categoryName: row.category || categoryId,
+          };
+        }
+        // Only keep walking the chain while the failure is still condition-related.
+        if (!/21916883/.test(condText)) break;
+      }
+    }
+
+    // Consolidate item-specific complaints. eBay reports these one aspect per
+    // error block, which is what made fixing them a repeated push-fix-push loop.
+    // Collect every aspect it named (plus any we already knew were required but
+    // unfilled) and return them as a single actionable list.
+    const aspectErrorCodes = new Set(["21919303", "21916564", "21917182"]);
+    const namedAspects = new Set<string>();
+    for (const b of realErrors) {
+      if (!aspectErrorCodes.has(extract(b, "ErrorCode"))) continue;
+      const text = `${extract(b, "ShortMessage")} ${extract(b, "LongMessage")}`;
+      // eBay phrases these as: missing/invalid item specific "Brand" (quoted or after a colon)
+      for (const m of text.matchAll(/["“]([^"”]{2,40})["”]/g)) namedAspects.add(m[1].trim());
+      for (const m of text.matchAll(/item specific(?:s)?[:\s]+([A-Z][\w &/-]{1,38})/g)) namedAspects.add(m[1].trim());
+    }
+    if (namedAspects.size > 0) {
+      const unfilled = requiredAspects.filter(a => !effectiveSpecifics[a]);
+      const all = [...new Set([...namedAspects, ...unfilled])];
+      console.error(`[ebay-publish] LOT-${row.lot_number}: eBay rejected ${all.length} item specific(s): ${all.join(", ")}`);
+      return {
+        success: false,
+        error: `Lot ${row.lot_number} (cat:${categoryId}): eBay needs these item specifics — ${all.join(", ")}. Fill all of them, then push again.`,
+      };
     }
 
     const errorSummary = realErrors.length > 0
@@ -745,7 +1027,10 @@ async function applyPromotedListings(
     }
 
     if (!campaignId) {
-      const today = new Date().toISOString().split("T")[0];
+      // eBay requires a full ISO-8601 timestamp here (yyyy-MM-ddThh:mm:ss.sssZ).
+      // A bare yyyy-MM-dd is rejected (error 35028) and the campaign is never
+      // created, so promotions silently never apply.
+      const today = new Date().toISOString();
       const createRes = await fetch(`${apiBase}/sell/marketing/v1/ad_campaign`, {
         method: "POST",
         headers: { Authorization: `Bearer ${marketingToken}`, "Content-Type": "application/json" },
@@ -798,14 +1083,26 @@ async function getOrCreateMerchantLocation(accessToken: string, inventoryApiBase
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Accept-Language": "en-US" },
   });
 
+  let listInfo = `GET /location → ${listRes.status}`;
   if (listRes.ok) {
     const listData = await listRes.json();
-    const locations = listData.locations ?? [];
-    if (locations.length > 0) {
-      const jsgLoc = locations.find((l: any) => l.merchantLocationKey === LOCATION_KEY);
-      return jsgLoc ? LOCATION_KEY : locations[0].merchantLocationKey;
+    const locations: any[] = listData.locations ?? [];
+    const enabledLocations = locations.filter((l: any) => l.merchantLocationStatus === "ENABLED");
+    const allKeys = locations.map((l: any) => `${l.merchantLocationKey}(${l.merchantLocationStatus})`).join(", ");
+    listInfo += ` found ${locations.length} location(s) [${allKeys}]`;
+    if (enabledLocations.length > 0) {
+      const jsgLoc = enabledLocations.find((l: any) => l.merchantLocationKey === LOCATION_KEY);
+      const key = jsgLoc ? LOCATION_KEY : enabledLocations[0].merchantLocationKey;
+      console.log(`[ebay-publish] ${listInfo} → using ENABLED location "${key}"`);
+      return key;
     }
+    listInfo += ` — no ENABLED locations`;
+  } else {
+    const errText = await listRes.text();
+    listInfo += ` error: ${errText.substring(0, 200)}`;
   }
+
+  console.log(`[ebay-publish] ${listInfo} — attempting to create location "${LOCATION_KEY}"...`);
 
   const createRes = await fetch(`${inventoryApiBase}/location/${LOCATION_KEY}`, {
     method: "POST",
@@ -827,9 +1124,10 @@ async function getOrCreateMerchantLocation(accessToken: string, inventoryApiBase
 
   if (!createRes.ok) {
     const err = await createRes.text();
-    console.warn(`[ebay-publish] Failed to create merchant location (non-fatal): ${err}`);
+    throw new Error(`eBay merchant location setup failed. ${listInfo} | POST /location/${LOCATION_KEY} → ${createRes.status}: ${err.substring(0, 400)}`);
   }
 
+  console.log(`[ebay-publish] Created merchant location "${LOCATION_KEY}" successfully`);
   return LOCATION_KEY;
 }
 
@@ -958,12 +1256,18 @@ async function publishRowAsDraft(
       ? { ...row, item_specifics: { ...(row.item_specifics || {}), ...qa.filledSpecifics } }
       : row;
 
-    const effectiveSpecifics = buildEffectiveSpecifics(categoryId, { ...qaRow, category: categoryId });
+    const { specifics: effectiveSpecifics, clamped } = clampSpecifics(
+      buildEffectiveSpecifics(categoryId, { ...qaRow, category: categoryId }),
+      await getAspectMaxLengths(categoryId, userCreds),
+    );
+    if (clamped.length > 0) {
+      console.log(`[ebay-publish/draft] LOT-${row.lot_number}: trimmed over-long item specifics — ${clamped.join(", ")}`);
+    }
     const stillMissing = requiredAspects.filter(a => !effectiveSpecifics[a]);
     if (stillMissing.length > 0) {
       return {
         success: false,
-        error: `Lot ${row.lot_number}: Missing required item specifics: ${stillMissing.join(", ")}. Add these before pushing.`,
+        error: `Lot ${row.lot_number}: Missing required item specifics (${stillMissing.length}): ${stillMissing.join(", ")}. Add all of these before pushing.`,
       };
     }
 
@@ -1028,6 +1332,7 @@ Deno.serve(async (req: Request) => {
       console.log(`Creating drafts via Inventory API — ${inventoryAuth.environment}`);
 
       const merchantLocationKey = await getOrCreateMerchantLocation(inventoryAuth.accessToken, inventoryAuth.inventoryApiBase);
+      console.log(`[ebay-publish/draft] merchantLocationKey="${merchantLocationKey}" env=${inventoryAuth.environment}`);
 
       const draftResults = [];
       for (const row of rows) {
@@ -1051,6 +1356,7 @@ Deno.serve(async (req: Request) => {
           succeeded,
           failed,
           results: draftResults,
+          debug: { merchantLocationKey, environment: inventoryAuth.environment },
           promotionMessage: succeeded > 0 ? "Promotion applied at publish time — open Seller Hub to review and publish drafts." : undefined,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
