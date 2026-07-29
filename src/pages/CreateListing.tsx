@@ -52,6 +52,7 @@ import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
 import { CrossPostPanel } from "@/components/crosspost/CrossPostPanel";
 import { EbayItemSpecificsEditor } from "@/components/ebay/EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "@/components/ebay/EbayShippingSettings";
+import { captureCorrection, diffCorrection } from "@/lib/hermes/captureCorrection";
 import { 
   normalizeAndValidateBatch, 
   generateLiveAuctioneersCSV, 
@@ -895,6 +896,27 @@ export default function CreateListing() {
         }
       }
 
+      // Hermes Stage 1 — capture the accepted verify correction so generation
+      // learns from it. Without this the loop never sees corrections made here.
+      const verifyDiff = diffCorrection(
+        { title: generatedListing.title, specifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics },
+        { title: refined.title, specifics: refined.itemSpecifics },
+      );
+      if (verifyDiff) {
+        captureCorrection({
+          source: "ai_verify",
+          category: lastEbayRow?.category ?? null,
+          wrongTitle: generatedListing.title,
+          correctedTitle: refined.title ? String(refined.title) : generatedListing.title,
+          wrongSpecifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics || null,
+          correctedSpecifics: refined.itemSpecifics || generatedListing.itemSpecifics || null,
+          imageUrls: lastEbayRow?.image_urls || images.map(i => i.url).filter(Boolean),
+          rowId: lastEbayRow?.id ?? null,
+          injectedCorrectionIds: (lastEbayRow as any)?.injected_correction_ids ?? null,
+          correctedField: verifyDiff.correctedField,
+        });
+      }
+
       toast({
         title: data.passed ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
         description: data.report || (data.passed ? "AI confirmed the identification is correct" : "Listing updated with corrections"),
@@ -981,6 +1003,29 @@ export default function CreateListing() {
             setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
           }
         }
+      }
+
+      // Hermes Stage 1 — capture the human-driven correction. The typed prompt is
+      // the strongest signal we get (it states the intent), so it is stored as the
+      // correction note even when only one field ends up changing.
+      const refineDiff = diffCorrection(
+        { title: generatedListing.title, specifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics },
+        { title: refined.title, specifics: refined.itemSpecifics },
+      );
+      if (refineDiff) {
+        captureCorrection({
+          source: "refine",
+          category: lastEbayRow?.category ?? null,
+          wrongTitle: generatedListing.title,
+          correctedTitle: refined.title ? String(refined.title) : generatedListing.title,
+          wrongSpecifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics || null,
+          correctedSpecifics: refined.itemSpecifics || generatedListing.itemSpecifics || null,
+          correctionNote: ebayRefinePrompt.trim(),
+          imageUrls: lastEbayRow?.image_urls || images.map(i => i.url).filter(Boolean),
+          rowId: lastEbayRow?.id ?? null,
+          injectedCorrectionIds: (lastEbayRow as any)?.injected_correction_ids ?? null,
+          correctedField: refineDiff.correctedField,
+        });
       }
 
       setEbayRefinePrompt("");

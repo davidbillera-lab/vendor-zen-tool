@@ -4,6 +4,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ShieldCheck, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
+import { captureCorrection } from "@/lib/hermes/captureCorrection";
 
 interface AIGuardrailPromptProps {
   projectId: string;
@@ -76,8 +77,18 @@ export function AIGuardrailPrompt({ projectId, masterPrompt, onMasterPromptChang
                 if (error) {
                   toast({ title: "Failed to save", variant: "destructive" });
                 } else {
+                  // Hermes Stage 1 — a guardrail is a standing operator instruction,
+                  // so feed it to the learning loop the same way AI Verify and
+                  // Ask-AI corrections are. Only on a real change: re-saving the
+                  // same text must not flood the loop with duplicates.
+                  if (draft.trim() !== (masterPrompt ?? "").trim()) {
+                    captureCorrection({
+                      source: "guardrail",
+                      correctionNote: draft.trim(),
+                    });
+                  }
                   onMasterPromptChange(draft.trim());
-                  toast({ title: "Guardrail prompt saved", description: "All AI calls for this project will use this prompt" });
+                  toast({ title: "Guardrail prompt saved", description: "All AI calls for this project will use this prompt — and the AI will remember it going forward" });
                 }
               }}
               disabled={saving || !draft.trim()}
