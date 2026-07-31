@@ -64,8 +64,22 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
 
   async function handleRotate(dir: 'left' | 'right') {
     const degrees = dir === 'right' ? 90 : -90;
-    const rotated = await rotateSrc(currentEdit.src, degrees);
-    updateEdit(currentIndex, { src: rotated, rotation: (currentEdit.rotation + degrees + 360) % 360 });
+    // A background-removed image is still transparent until a colour is chosen.
+    // Exporting that as JPEG would render every transparent pixel black.
+    const preserveAlpha = currentEdit.bgRemoved && !currentEdit.bgColor;
+    const rotated = await rotateSrc(currentEdit.src, degrees, preserveAlpha);
+    const patch: Partial<ImageEdit> = {
+      src: rotated,
+      rotation: (currentEdit.rotation + degrees + 360) % 360,
+    };
+    // Keep the transparent master in step, otherwise picking a background colour
+    // later re-fills the OLD un-rotated image and silently discards this rotate.
+    if (currentEdit.bgRemoved && currentEdit.transparentSrc) {
+      patch.transparentSrc = preserveAlpha
+        ? rotated
+        : await rotateSrc(currentEdit.transparentSrc, degrees, true);
+    }
+    updateEdit(currentIndex, patch);
   }
 
   function handleCropRatio(key: string) {
@@ -84,8 +98,13 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
     const pixelCrop: PixelCrop = crop.unit === '%'
       ? convertToPixelCrop(crop, img.width, img.height)
       : (crop as PixelCrop);
-    const cropped = await getCroppedImg(img, pixelCrop);
-    updateEdit(currentIndex, { src: cropped, crop: pixelCrop });
+    const preserveAlpha = currentEdit.bgRemoved && !currentEdit.bgColor;
+    const cropped = await getCroppedImg(img, pixelCrop, preserveAlpha);
+    const patch: Partial<ImageEdit> = { src: cropped, crop: pixelCrop };
+    // When the crop IS the transparent version, it becomes the new master so a
+    // later background-colour change fills the cropped image, not the original.
+    if (preserveAlpha) patch.transparentSrc = cropped;
+    updateEdit(currentIndex, patch);
     setCrop(undefined);
     setActiveCropRatio('free');
   }
@@ -442,7 +461,30 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
 
 // ── Canvas helpers ────────────────────────────────────────────────────────────
 
-async function rotateSrc(src: string, degrees: number): Promise<string> {
+/**
+ * Exports a canvas without letting transparency turn black.
+ *
+ * JPEG has no alpha channel: any transparent pixel encodes as BLACK. That is why
+ * a background-removed image saved black after a rotate or crop. Either keep the
+ * alpha (PNG), or composite the pixels onto white before encoding JPEG so
+ * transparency can never reach the encoder unprotected.
+ */
+function exportCanvas(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  preserveAlpha: boolean,
+): string {
+  if (preserveAlpha) return canvas.toDataURL('image/png');
+  // destination-over paints white BEHIND what is already drawn, so the image is
+  // untouched and only the transparent areas become white instead of black.
+  ctx.globalCompositeOperation = 'destination-over';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.globalCompositeOperation = 'source-over';
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
+
+async function rotateSrc(src: string, degrees: number, preserveAlpha = false): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -460,14 +502,18 @@ async function rotateSrc(src: string, degrees: number): Promise<string> {
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate((degrees * Math.PI) / 180);
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
-      resolve(canvas.toDataURL('image/jpeg', 0.92));
+      resolve(exportCanvas(canvas, ctx, preserveAlpha));
     };
     img.onerror = () => reject(new Error('Failed to load image for rotation'));
     img.src = src;
   });
 }
 
-async function getCroppedImg(img: HTMLImageElement, crop: PixelCrop): Promise<string> {
+async function getCroppedImg(
+  img: HTMLImageElement,
+  crop: PixelCrop,
+  preserveAlpha = false,
+): Promise<string> {
   const canvas = document.createElement('canvas');
   const scaleX = img.naturalWidth / img.width;
   const scaleY = img.naturalHeight / img.height;
@@ -481,7 +527,7 @@ async function getCroppedImg(img: HTMLImageElement, crop: PixelCrop): Promise<st
     0, 0,
     canvas.width, canvas.height
   );
-  return canvas.toDataURL('image/jpeg', 0.92);
+  return exportCanvas(canvas, ctx, preserveAlpha);
 }
 
 async function fillBackground(src: string, color: string | null): Promise<string> {
