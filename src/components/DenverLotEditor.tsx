@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { X, Check, Loader2, Sparkles, Send, Trash2, ImagePlus } from "lucide-react";
+import { X, Check, Loader2, Sparkles, Send, Trash2, ImagePlus, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,6 +7,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { DraggableImageGrid } from "./DraggableImageGrid";
 import { AIGenerateButton } from "./AIGenerateButton";
+import { captureCorrection } from "@/lib/hermes/captureCorrection";
+import { diffCorrection } from "@/lib/hermes/diffCorrection";
 
 interface DenverLotEditorProps {
   lot: {
@@ -32,6 +34,8 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
   const [saving, setSaving] = useState(false);
   const [correctionPrompt, setCorrectionPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<{ passed: boolean; report: string } | null>(null);
   const correctionInputRef = useRef<HTMLInputElement>(null);
 
   const handleChange = (field: string, value: string | number) => {
@@ -83,6 +87,91 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
     } catch (error) {
       console.error('Error deleting lot:', error);
       toast({ title: "Delete Failed", variant: "destructive" });
+    }
+  };
+
+  /**
+   * AI Verify for DOA lots — audits identification, damage disclosure, and the
+   * opening bid, then applies any corrections. Runs in verify mode so learned
+   * lessons ARE injected (unlike refine, which is directive by design), and the
+   * accepted result feeds the shared Hermes lesson pool.
+   */
+  const verifyListing = async () => {
+    setIsVerifying(true);
+    setVerifyResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const before = { title: formData.title, description: formData.description };
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          currentListing: {
+            title: formData.title,
+            description: formData.description,
+            startingBid: formData.starting_bid,
+          },
+          correctionPrompt: '',
+          imageUrls: imageUrls,
+          platform: 'denver',
+          mode: 'verify',
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `Verify failed (${response.status})`);
+      }
+
+      const data = await response.json();
+      const corrected = data.correctedListing ?? {};
+
+      const nextTitle = (corrected.title || formData.title).substring(0, 100);
+      const nextDescription = corrected.description || formData.description;
+      setFormData(prev => ({
+        ...prev,
+        title: nextTitle,
+        description: nextDescription,
+        starting_bid: corrected.startingBid ?? prev.starting_bid,
+      }));
+      setVerifyResult({ passed: !!data.passed, report: data.report || '' });
+
+      // Hermes Stage 1 — capture only when the audit actually changed something.
+      const diff = diffCorrection(
+        { title: before.title, specifics: null },
+        { title: nextTitle, specifics: null },
+      );
+      if (diff || nextDescription !== before.description) {
+        captureCorrection({
+          source: "ai_verify",
+          platform: "denver",
+          wrongTitle: before.title,
+          correctedTitle: nextTitle,
+          imageUrls: imageUrls,
+          rowId: lot.id,
+          correctedField: "title",
+        });
+      }
+
+      toast({
+        title: data.passed ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
+        description: data.report || (data.passed ? "AI confirmed the lot looks correct" : "Lot updated with corrections"),
+      });
+    } catch (error) {
+      console.error("Verify error:", error);
+      toast({
+        title: "Verification Failed",
+        description: error instanceof Error ? error.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -214,6 +303,45 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
               onChange={(e) => handleChange('starting_bid', parseFloat(e.target.value) || 5)}
             />
           </div>
+        </div>
+
+        {/* AI Verify — audits identification, damage disclosure, and opening bid */}
+        <div className="p-4 border-t border-border">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-primary shrink-0" />
+                <span className="text-sm font-medium">AI Verify</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Checks the ID, flags damage the photos show, and sanity-checks the opening bid.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={verifyListing}
+              disabled={isVerifying}
+              className="gap-2 shrink-0"
+            >
+              {isVerifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              {isVerifying ? "Verifying…" : "Verify"}
+            </Button>
+          </div>
+          {verifyResult && (
+            <div
+              className={`mt-3 rounded-md border p-2.5 text-xs ${
+                verifyResult.passed
+                  ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+                  : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+              }`}
+            >
+              <span className="font-medium">
+                {verifyResult.passed ? "Looks correct" : "Corrections applied"}
+              </span>
+              {verifyResult.report && <span className="block mt-1 opacity-90">{verifyResult.report}</span>}
+            </div>
+          )}
         </div>
 
         {/* AI Chat Bar */}
