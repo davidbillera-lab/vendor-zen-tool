@@ -53,6 +53,8 @@ import { CrossPostPanel } from "@/components/crosspost/CrossPostPanel";
 import { EbayItemSpecificsEditor } from "@/components/ebay/EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "@/components/ebay/EbayShippingSettings";
 import { captureCorrection, diffCorrection } from "@/lib/hermes/captureCorrection";
+import { verifyDoaLot, changedFields, type DoaVerifyResult } from "@/lib/doa/verifyLot";
+import { DoaVerifyDialog } from "@/components/DoaVerifyDialog";
 import { 
   normalizeAndValidateBatch, 
   generateLiveAuctioneersCSV, 
@@ -160,6 +162,9 @@ export default function CreateListing() {
   const [denverLotNumber, setDenverLotNumber] = useState(1);
   const [denverLots, setDenverLots] = useState<any[]>([]);
   const [editingDenverLot, setEditingDenverLot] = useState<any | null>(null);
+  // AI Verify straight from the lot card — no save-then-reopen round trip.
+  const [denverVerifyingId, setDenverVerifyingId] = useState<string | null>(null);
+  const [denverVerify, setDenverVerify] = useState<{ lot: any; result: DoaVerifyResult } | null>(null);
   const [loadingDenver, setLoadingDenver] = useState(false);
   const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
 
@@ -930,6 +935,82 @@ export default function CreateListing() {
     } finally {
       setEbayVerifying(false);
     }
+  };
+
+  /** DOA AI Verify from the lot card. Fetches the audit; nothing changes until accepted. */
+  const handleDenverVerify = async (lot: any) => {
+    setDenverVerifyingId(lot.id);
+    try {
+      const result = await verifyDoaLot(
+        {
+          title: lot.title || '',
+          description: lot.description || '',
+          starting_bid: lot.starting_bid ?? 5,
+          image_urls: lot.image_urls || [],
+        },
+        masterPrompt,
+      );
+      setDenverVerify({ lot, result });
+    } catch (error) {
+      toast({
+        title: "Verification Failed",
+        description: error instanceof Error ? error.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      setDenverVerifyingId(null);
+    }
+  };
+
+  /** Persists accepted corrections to the lot and feeds the Hermes loop. */
+  const handleDenverVerifyAccept = async () => {
+    if (!denverVerify) return;
+    const { lot, result } = denverVerify;
+    const before = {
+      title: lot.title || '',
+      description: lot.description || '',
+      starting_bid: lot.starting_bid ?? 5,
+    };
+    const changed = changedFields(before, result.corrected);
+    setDenverVerify(null);
+
+    if (changed.length === 0) {
+      toast({ title: "No changes needed", description: "AI confirmed the lot looks correct." });
+      return;
+    }
+
+    const updates: Record<string, any> = {};
+    if (result.corrected.title !== undefined) updates.title = result.corrected.title;
+    if (result.corrected.description !== undefined) updates.description = result.corrected.description;
+    if (result.corrected.starting_bid !== undefined) updates.starting_bid = result.corrected.starting_bid;
+
+    const { data, error } = await supabase
+      .from('denver_batch_rows')
+      .update(updates)
+      .eq('id', lot.id)
+      .select()
+      .single();
+
+    if (error) {
+      toast({ title: "Could not save corrections", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    setDenverLots(prev => prev.map(r => r.id === lot.id ? { ...r, ...data } : r));
+
+    // Hermes Stage 1 — only accepted corrections teach the loop.
+    captureCorrection({
+      source: "ai_verify",
+      platform: "denver",
+      wrongTitle: before.title,
+      correctedTitle: result.corrected.title ?? before.title,
+      correctionNote: result.report || undefined,
+      imageUrls: lot.image_urls || [],
+      rowId: lot.id,
+      correctedField: "title",
+    });
+
+    toast({ title: "Corrections saved", description: `Updated: ${changed.join(", ")}` });
   };
 
   // eBay: Refine listing with prompt
@@ -1861,6 +1942,19 @@ export default function CreateListing() {
                               variant="outline"
                               size="sm"
                               className="h-6 text-xs gap-1"
+                              onClick={() => handleDenverVerify(lot)}
+                              disabled={denverVerifyingId === lot.id}
+                              title="Check the ID, damage disclosure, and opening bid"
+                            >
+                              {denverVerifyingId === lot.id
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <ShieldCheck className="h-3 w-3" />}
+                              Verify
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-xs gap-1"
                               onClick={() => setEditingDenverLot(lot)}
                             >
                               <Edit className="h-3 w-3" />
@@ -2272,6 +2366,13 @@ export default function CreateListing() {
           masterPrompt={masterPrompt}
         />
       )}
+
+      <DoaVerifyDialog
+        result={denverVerify?.result ?? null}
+        lotLabel={denverVerify ? `Lot #${denverVerify.lot.lot_number}` : ""}
+        onAccept={handleDenverVerifyAccept}
+        onReject={() => setDenverVerify(null)}
+      />
 
       {imageEditorOpen && (
         <ImageEditor

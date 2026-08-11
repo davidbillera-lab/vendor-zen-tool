@@ -8,7 +8,8 @@ import { toast } from "@/hooks/use-toast";
 import { DraggableImageGrid } from "./DraggableImageGrid";
 import { AIGenerateButton } from "./AIGenerateButton";
 import { captureCorrection } from "@/lib/hermes/captureCorrection";
-import { diffCorrection } from "@/lib/hermes/diffCorrection";
+import { verifyDoaLot, changedFields, type DoaVerifyResult } from "@/lib/doa/verifyLot";
+import { DoaVerifyDialog } from "./DoaVerifyDialog";
 
 interface DenverLotEditorProps {
   lot: {
@@ -22,9 +23,11 @@ interface DenverLotEditorProps {
   onClose: () => void;
   onUpdate: (updatedLot: any) => void;
   onDelete: (lotId: string) => void;
+  /** Project guardrail, passed through to AI Verify so it respects the same rules. */
+  masterPrompt?: string;
 }
 
-export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotEditorProps) {
+export function DenverLotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt }: DenverLotEditorProps) {
   const [formData, setFormData] = useState({
     title: lot.title || '',
     description: lot.description || '',
@@ -35,7 +38,7 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
   const [correctionPrompt, setCorrectionPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [verifyResult, setVerifyResult] = useState<{ passed: boolean; report: string } | null>(null);
+  const [verifyResult, setVerifyResult] = useState<DoaVerifyResult | null>(null);
   const correctionInputRef = useRef<HTMLInputElement>(null);
 
   const handleChange = (field: string, value: string | number) => {
@@ -91,78 +94,19 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
   };
 
   /**
-   * AI Verify for DOA lots — audits identification, damage disclosure, and the
-   * opening bid, then applies any corrections. Runs in verify mode so learned
-   * lessons ARE injected (unlike refine, which is directive by design), and the
-   * accepted result feeds the shared Hermes lesson pool.
+   * AI Verify — fetches the audit only. Corrections are applied when the operator
+   * accepts them, matching the eBay flow. Showing the report in a dialog (rather
+   * than inline) also keeps the editor's Save/Cancel reachable on mobile, where an
+   * inline panel pushed them off screen.
    */
   const verifyListing = async () => {
     setIsVerifying(true);
-    setVerifyResult(null);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated");
-
-      const before = { title: formData.title, description: formData.description };
-
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/refine-listing`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          currentListing: {
-            title: formData.title,
-            description: formData.description,
-            startingBid: formData.starting_bid,
-          },
-          correctionPrompt: '',
-          imageUrls: imageUrls,
-          platform: 'denver',
-          mode: 'verify',
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.error || `Verify failed (${response.status})`);
-      }
-
-      const data = await response.json();
-      const corrected = data.correctedListing ?? {};
-
-      const nextTitle = (corrected.title || formData.title).substring(0, 100);
-      const nextDescription = corrected.description || formData.description;
-      setFormData(prev => ({
-        ...prev,
-        title: nextTitle,
-        description: nextDescription,
-        starting_bid: corrected.startingBid ?? prev.starting_bid,
-      }));
-      setVerifyResult({ passed: !!data.passed, report: data.report || '' });
-
-      // Hermes Stage 1 — capture only when the audit actually changed something.
-      const diff = diffCorrection(
-        { title: before.title, specifics: null },
-        { title: nextTitle, specifics: null },
+      const result = await verifyDoaLot(
+        { title: formData.title, description: formData.description, starting_bid: formData.starting_bid, image_urls: imageUrls },
+        masterPrompt,
       );
-      if (diff || nextDescription !== before.description) {
-        captureCorrection({
-          source: "ai_verify",
-          platform: "denver",
-          wrongTitle: before.title,
-          correctedTitle: nextTitle,
-          imageUrls: imageUrls,
-          rowId: lot.id,
-          correctedField: "title",
-        });
-      }
-
-      toast({
-        title: data.passed ? "✅ Verification Confirmed" : "🔄 Corrections Applied",
-        description: data.report || (data.passed ? "AI confirmed the lot looks correct" : "Lot updated with corrections"),
-      });
+      setVerifyResult(result);
     } catch (error) {
       console.error("Verify error:", error);
       toast({
@@ -173,6 +117,36 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
     } finally {
       setIsVerifying(false);
     }
+  };
+
+  /** Applies the audit's corrections and captures them for the Hermes loop. */
+  const acceptVerify = () => {
+    if (!verifyResult) return;
+    const before = { title: formData.title, description: formData.description, starting_bid: formData.starting_bid };
+    const changed = changedFields(before, verifyResult.corrected);
+
+    if (changed.length > 0) {
+      setFormData(prev => ({ ...prev, ...verifyResult.corrected }));
+      // Hermes Stage 1 — only accepted corrections teach the loop.
+      captureCorrection({
+        source: "ai_verify",
+        platform: "denver",
+        wrongTitle: before.title,
+        correctedTitle: verifyResult.corrected.title ?? before.title,
+        correctionNote: verifyResult.report || undefined,
+        imageUrls: imageUrls,
+        rowId: lot.id,
+        correctedField: "title",
+      });
+    }
+
+    setVerifyResult(null);
+    toast({
+      title: changed.length > 0 ? "Corrections applied" : "No changes needed",
+      description: changed.length > 0
+        ? `Updated: ${changed.join(", ")}. Remember to Save.`
+        : "AI confirmed the lot looks correct.",
+    });
   };
 
   const refineListing = async () => {
@@ -328,20 +302,6 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
               {isVerifying ? "Verifying…" : "Verify"}
             </Button>
           </div>
-          {verifyResult && (
-            <div
-              className={`mt-3 rounded-md border p-2.5 text-xs ${
-                verifyResult.passed
-                  ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
-                  : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
-              }`}
-            >
-              <span className="font-medium">
-                {verifyResult.passed ? "Looks correct" : "Corrections applied"}
-              </span>
-              {verifyResult.report && <span className="block mt-1 opacity-90">{verifyResult.report}</span>}
-            </div>
-          )}
         </div>
 
         {/* AI Chat Bar */}
@@ -392,6 +352,13 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete }: DenverLotE
           </div>
         </div>
       </div>
+
+      <DoaVerifyDialog
+        result={verifyResult}
+        lotLabel={`Lot #${lot.lot_number}`}
+        onAccept={acceptVerify}
+        onReject={() => setVerifyResult(null)}
+      />
     </div>
   );
 }
