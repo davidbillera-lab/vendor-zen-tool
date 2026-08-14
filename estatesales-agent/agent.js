@@ -1323,12 +1323,42 @@ async function run() {
     // The persistent local profile can still hold a live DOA session from a
     // prior run, in which case /Account/Login redirects straight past the
     // form — only fill it when it actually renders.
-    // #MainContent_Email avoids the newsletter popup email input
-    const doaFormPresent = await page.locator('#MainContent_Email')
-      .waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
-    if (doaFormPresent) {
-      await page.fill('#MainContent_Email', DOA_EMAIL);
-      await page.fill('#MainContent_Password', DOA_PASSWORD);
+    // DOA moved to the "Xpert Online Auctions" platform in July 2026 and renamed
+    // the login controls: #MainContent_Email → #username (type="text", labeled
+    // "Email or Username"), #MainContent_Password → #Password. Confirmed live
+    // 2026-07-17. This agent kept the pre-July selector and so never found the
+    // form — it reported "session already active", walked on, then failed the
+    // verification below with a contradictory "still on login page".
+    //
+    // Ordered chain via findFirst, NOT a comma-joined selector: comma-joined
+    // + .first() resolves in DOM order, and DOA's login page carries two
+    // newsletter signup boxes with name="email" / type="email" that sit earlier
+    // in the DOM. That is why no generic email selector appears here.
+    //
+    // These mirror SELECTORS.loginEmail / loginPassword in
+    // doa-listing-agent/doaAgent.js. Both agents log into DOA independently —
+    // if DOA's form drifts again, BOTH need updating.
+    const DOA_LOGIN_USERNAME = [
+      '#username',                                  // confirmed 2026-07-17 (Xpert platform)
+      'input[name="ctl00$MainContent$username"]',   // ASP.NET control name
+      'input[name$="$username"]',                   // scoped fallback (login form only)
+      '#MainContent_Email',                         // legacy pre-2026-07 DOA form
+      'input[name="Email"]',
+    ];
+    const DOA_LOGIN_PASSWORD = [
+      '#Password',                                  // confirmed 2026-07-17 (Xpert platform)
+      'input[name="ctl00$MainContent$Password"]',   // ASP.NET control name
+      'input[name$="$Password"]',                   // scoped fallback (login form only)
+      '#MainContent_Password',                      // legacy pre-2026-07 DOA form
+      'input[type="password"]',                     // safe: one password input on the login page
+    ];
+
+    const doaUserEl = await findFirst(page, DOA_LOGIN_USERNAME, 2_000);
+    if (doaUserEl) {
+      const doaPassEl = await findFirst(page, DOA_LOGIN_PASSWORD, 2_000);
+      if (!doaPassEl) throw new Error('[agent] Found the DOA username field but no password field — DOA login form changed.');
+      await doaUserEl.fill(DOA_EMAIL);
+      await doaPassEl.fill(DOA_PASSWORD);
       // ASP.NET WebForms login — submit is an <input>, not a <button>
       const doaSubmit = await findFirst(page, [
         '#MainContent_LoginButton',
@@ -1341,7 +1371,12 @@ async function run() {
       await doaSubmit.click();
       await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
     } else {
-      console.log('[agent] DOA session already active (login form not shown) — continuing.');
+      // Genuinely ambiguous: either a live session, or DOA renamed the fields
+      // again. Say so, so the failure below is self-explaining rather than
+      // contradictory.
+      console.log('[agent] No DOA login form found — assuming an active session.');
+      console.log('[agent]   If login verification fails next, DOA likely changed its form again:');
+      console.log('[agent]   re-probe the live page for the username/password field IDs.');
     }
     await screenshot(page, 'doa-after-login');
 
