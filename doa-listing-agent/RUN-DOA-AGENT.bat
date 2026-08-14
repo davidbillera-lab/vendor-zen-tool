@@ -53,7 +53,8 @@ for %%f in ("%DROP_DIR%\*.zip") do (
 set START_URL=
 set URL_PATH=%DROP_DIR%\START-URL.txt
 if exist "%URL_PATH%" (
-    for /f "usebackq tokens=* delims=" %%L in ("%URL_PATH%") do (
+    rem tokens=* with default delims strips leading spaces/tabs from a pasted URL
+    for /f "usebackq tokens=*" %%L in ("%URL_PATH%") do (
         set LINE=%%L
         if "!LINE:~0,4!"=="http" set START_URL=!LINE!
     )
@@ -64,8 +65,8 @@ if "%CSV_FILE%"=="" (
     echo  ERROR: No CSV file found in DROP-HERE.
     echo  Drop your CSV into: %DROP_DIR%
     echo.
-    explorer "%DROP_DIR%"
     pause
+    explorer "%DROP_DIR%"
     exit /b 1
 )
 
@@ -73,8 +74,8 @@ if "%ZIP_FILE%"=="" (
     echo  ERROR: No ZIP file found in DROP-HERE.
     echo  Drop your image ZIP into: %DROP_DIR%
     echo.
-    explorer "%DROP_DIR%"
     pause
+    explorer "%DROP_DIR%"
     exit /b 1
 )
 
@@ -82,8 +83,8 @@ if "%START_URL%"=="" (
     echo  ERROR: No start URL found in START-URL.txt.
     echo  Open START-URL.txt in DROP-HERE and paste the first lot URL.
     echo.
-    explorer "%DROP_DIR%"
     pause
+    explorer "%DROP_DIR%"
     exit /b 1
 )
 
@@ -109,7 +110,8 @@ if exist "%DESC_ONLY_FILE%" (
 :: -- Show what we found ------------------------------------
 echo  Found CSV:  %CSV_FILE%
 echo  Found ZIP:  %ZIP_FILE%
-echo  Start URL:  %START_URL%
+rem !START_URL! not %START_URL% -- the & in the URL would split the echo command
+echo  Start URL:  !START_URL!
 if not "%DESC_ONLY_FLAG%"=="" (
     echo  Mode:       DESCRIPTIONS-ONLY  ^(patching descriptions only^)
 ) else (
@@ -159,21 +161,22 @@ if %AGENT_EXIT% EQU 0 (
     echo  Moving files to archive...
 
     for /f "delims=" %%T in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmm"') do set TIMESTAMP=%%T
-    set ARCHIVE_SUBDIR=%ARCHIVE_DIR%\%TIMESTAMP%
-    mkdir "%ARCHIVE_SUBDIR%" >nul 2>&1
+    set ARCHIVE_SUBDIR=%ARCHIVE_DIR%\!TIMESTAMP!
+    mkdir "!ARCHIVE_SUBDIR!" >nul 2>&1
 
-    move /Y "%CSV_PATH%"  "%ARCHIVE_SUBDIR%\" >nul
-    move /Y "%ZIP_PATH%"  "%ARCHIVE_SUBDIR%\" >nul
-    if exist "%PROGRESS_PATH%" move /Y "%PROGRESS_PATH%" "%ARCHIVE_SUBDIR%\" >nul
+    move /Y "%CSV_PATH%"  "!ARCHIVE_SUBDIR!\" >nul
+    move /Y "%ZIP_PATH%"  "!ARCHIVE_SUBDIR!\" >nul
+    if exist "%PROGRESS_PATH%" move /Y "%PROGRESS_PATH%" "!ARCHIVE_SUBDIR!\" >nul
 
-    :: Remove DESCRIPTIONS-ONLY flag file if present
+    rem Remove DESCRIPTIONS-ONLY flag file if present
     if exist "%DESC_ONLY_FILE%" del /f /q "%DESC_ONLY_FILE%" >nul 2>&1
 
-    :: Reset START-URL.txt
+    rem Reset START-URL.txt -- instruction only, no placeholder URL.
+    rem A placeholder starting with "http" passes validation and would
+    rem drive the agent to a nonexistent auction on the next run.
     (echo PASTE YOUR FIRST LOT URL BELOW THIS LINE -- DELETE THIS LINE FIRST) > "%URL_PATH%"
-    (echo https://denveronlineauctions.com/sub-admin/EditAuction?id=XXXXXXX^&PartyId=115) >> "%URL_PATH%"
 
-    echo  Archived to: archive\%TIMESTAMP%\
+    echo  Archived to: archive\!TIMESTAMP!\
     echo.
     echo  DROP-HERE is reset and ready for the next batch.
 ) else (
