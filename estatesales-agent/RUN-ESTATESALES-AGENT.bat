@@ -122,19 +122,22 @@ if "!ESTATESALES_URL!"=="" (
 )
 
 echo.
-echo  How many lots should the agent upload?
-echo    2  = quick smoke test  ^(recommended for a first run^)
-echo    0  = ALL lots in the sale
+echo  The agent takes ONE photo per lot from the grid, so photos = lots.
+echo.
+echo  How many photos should it upload?
+echo    ENTER = ALL photos on the grid  ^(normal run^)
+echo    or a number, e.g. 2, to cap it for a quick test
 echo.
 set "MAX_LOTS="
-set /p "MAX_LOTS=Number of lots [2]: "
-if "!MAX_LOTS!"=="" set "MAX_LOTS=2"
+set /p "MAX_LOTS=Photos to upload [ALL]: "
+if /i "!MAX_LOTS!"=="ALL" set "MAX_LOTS=0"
+if "!MAX_LOTS!"=="" set "MAX_LOTS=0"
 
 rem Reject typos -- a stray letter would parse to 0 and silently upload EVERY lot
 echo !MAX_LOTS!| findstr /r "^[0-9][0-9]*$" >nul
 if errorlevel 1 (
     echo.
-    echo  ERROR: "!MAX_LOTS!" is not a number. Enter 2, 0, or a lot count.
+    echo  ERROR: "!MAX_LOTS!" is not a number. Press ENTER for ALL, or type a count.
     echo.
     pause
     exit /b 1
@@ -145,9 +148,9 @@ rem !VAR! not %VAR% -- the ampersands in these URLs would split the echo command
 echo  DOA auction:  !DOA_URL!
 echo  ES listing:   !ESTATESALES_URL!
 if "!MAX_LOTS!"=="0" (
-    echo  Lots:         ALL
+    echo  Photos:       ALL on the grid
 ) else (
-    echo  Lots:         !MAX_LOTS!
+    echo  Photos:       !MAX_LOTS!  ^(capped test run^)
 )
 echo.
 echo  NOTE: local runs have the dedup ledger DISABLED. Photos upload
