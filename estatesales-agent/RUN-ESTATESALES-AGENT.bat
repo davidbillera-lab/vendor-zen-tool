@@ -65,15 +65,47 @@ if not exist "%AGENT_DIR%node_modules" (
     exit /b 1
 )
 
+echo  DOA URL must be the FIRST LOT'S ADMIN page, the same kind of link
+echo  the DOA listing agent uses:
+echo    https://denveronlineauctions.com/sub-admin/EditAuction?id=NNNNNNN^&PartyId=115
+echo.
+echo  NOT the public catalog page ^(/auction/...^). The agent walks lots by
+echo  clicking "Save ^& Edit Next", which only exists on the admin form.
+echo.
+
 set "DOA_URL="
 set "ESTATESALES_URL="
-set /p "DOA_URL=Paste DOA auction URL: "
+set /p "DOA_URL=Paste DOA first-lot admin URL: "
 echo.
 set /p "ESTATESALES_URL=Paste estatesales.net listing editor URL: "
 echo.
 
 if "!DOA_URL!"=="" (
     echo  ERROR: No DOA auction URL entered.
+    echo.
+    pause
+    exit /b 1
+)
+
+rem Reject the public catalog URL. On that page nothing matches, so the agent
+rem burns ~90 seconds of silent selector timeouts (looks like a hang), then
+rem scrapes ONE bogus lot holding every thumbnail on the catalog and uploads
+rem that to the live listing. Fail here instead.
+rem Substring test, NOT `echo !VAR! | findstr`: piping spawns a child cmd that
+rem re-parses the line, and the & in a DOA URL splits it there.
+set "URL_CHECK=!DOA_URL!"
+if "!URL_CHECK!"=="!URL_CHECK:EditAuction=!" if "!URL_CHECK!"=="!URL_CHECK:editauction=!" (
+    echo  ERROR: That is not a DOA lot admin URL.
+    echo.
+    echo  You pasted:
+    echo    !DOA_URL!
+    echo.
+    echo  It must contain "EditAuction" -- open the auction in DOA's admin,
+    echo  click into the FIRST lot, and copy the URL from the address bar:
+    echo    https://denveronlineauctions.com/sub-admin/EditAuction?id=NNNNNNN^&PartyId=115
+    echo.
+    echo  A public /auction/ link has no lot form to read, and the agent
+    echo  would upload garbage images to your live listing.
     echo.
     pause
     exit /b 1
