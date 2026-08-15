@@ -65,12 +65,11 @@ if not exist "%AGENT_DIR%node_modules" (
     exit /b 1
 )
 
-echo  DOA URL must be the FIRST LOT'S ADMIN page, the same kind of link
-echo  the DOA listing agent uses:
-echo    https://denveronlineauctions.com/sub-admin/EditAuction?id=NNNNNNN^&PartyId=115
+echo  DOA URL must be the PUBLIC auction page - the grid of lots:
+echo    https://denveronlineauctions.com/auction/^<auction-slug^>
 echo.
-echo  NOT the public catalog page ^(/auction/...^). The agent walks lots by
-echo  clicking "Save ^& Edit Next", which only exists on the admin form.
+echo  NOT an admin sub-admin/EditAuction link. The agent reads the public
+echo  grid, needs no DOA login, and never writes to DOA.
 echo.
 
 set "DOA_URL="
@@ -87,29 +86,33 @@ if "!DOA_URL!"=="" (
     exit /b 1
 )
 
-rem Reject the public catalog URL. On that page nothing matches, so the agent
-rem burns ~90 seconds of silent selector timeouts (looks like a hang), then
-rem scrapes ONE bogus lot holding every thumbnail on the catalog and uploads
-rem that to the live listing. Fail here instead.
+rem Reject an admin EditAuction link. The agent reads the public grid; an admin
+rem URL has no grid to read and would scrape nothing.
 rem Substring test, NOT `echo !VAR! | findstr`: piping spawns a child cmd that
 rem re-parses the line, and the & in a DOA URL splits it there.
 set "URL_CHECK=!DOA_URL!"
-if "!URL_CHECK!"=="!URL_CHECK:EditAuction=!" if "!URL_CHECK!"=="!URL_CHECK:editauction=!" (
-    echo  ERROR: That is not a DOA lot admin URL.
-    echo.
-    echo  You pasted:
-    echo    !DOA_URL!
-    echo.
-    echo  It must contain "EditAuction" -- open the auction in DOA's admin,
-    echo  click into the FIRST lot, and copy the URL from the address bar:
-    echo    https://denveronlineauctions.com/sub-admin/EditAuction?id=NNNNNNN^&PartyId=115
-    echo.
-    echo  A public /auction/ link has no lot form to read, and the agent
-    echo  would upload garbage images to your live listing.
-    echo.
-    pause
-    exit /b 1
-)
+if not "!URL_CHECK!"=="!URL_CHECK:EditAuction=!" goto :bad_url
+if not "!URL_CHECK!"=="!URL_CHECK:editauction=!" goto :bad_url
+if "!URL_CHECK!"=="!URL_CHECK:/auction/=!" goto :bad_url
+goto :url_ok
+
+:bad_url
+echo  ERROR: That is not the public DOA auction page.
+echo.
+echo  You pasted:
+echo    !DOA_URL!
+echo.
+echo  Open the auction on denveronlineauctions.com as a normal visitor --
+echo  the page showing the grid of all lots -- and copy the address bar:
+echo    https://denveronlineauctions.com/auction/^<auction-slug^>
+echo.
+echo  An admin sub-admin/EditAuction link is a single lot's edit form. It
+echo  has no grid, so the agent would find nothing to upload.
+echo.
+pause
+exit /b 1
+
+:url_ok
 
 if "!ESTATESALES_URL!"=="" (
     echo  ERROR: No estatesales.net listing URL entered.

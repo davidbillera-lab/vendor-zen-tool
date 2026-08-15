@@ -3,10 +3,11 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * EstateSales.net Upload Agent
  *
- * Phase 1 — DOA Scrape:
- *   Log into Denver Online Auctions → navigate to the auction admin page
- *   (DOA_URL = EditAuction?id=...) → collect every lot link → visit each lot's
- *   edit page and read: title, description, starting bid, and image URLs.
+ * Phase 1 — DOA Scrape (public pages, no login):
+ *   Load the public auction grid (DOA_URL = /auction/<slug>) and read one lot
+ *   per card: the title from the image alt text, and the card's thumbnail URL
+ *   rewritten to its full-size original. Requires no DOA account and never
+ *   writes to DOA. One photo per lot by design.
  *
  * Phase 2 — EstateSales Upload:
  *   Log into EstateSales.net → navigate to the sale management page (ES_URL)
@@ -449,191 +450,104 @@ async function downloadImage(url, destPath, redirectsLeft = 5) {
   });
 }
 
-/**
- * Read the TinyMCE editor content from a page.
- * Returns a plain-text/HTML string or '' if not found.
- */
-async function readTinyMceContent(page) {
-  try {
-    const content = await page.evaluate(() => {
-      // Strategy 1: tinymce.get()
-      if (window.tinymce) {
-        const eds = window.tinymce.editors || window.tinymce.get();
-        const ed = Array.isArray(eds) ? eds[0] : eds;
-        if (ed && ed.getContent) return ed.getContent({ format: 'text' });
-      }
-      // Strategy 2: read from the iframe body directly
-      const iframe = document.querySelector(
-        'iframe[id*="EditorDescription"], iframe[id*="editor_description" i], .tox-edit-area iframe, iframe[id*="tinymce"]'
-      );
-      if (iframe) {
-        try {
-          return iframe.contentDocument?.body?.innerText || '';
-        } catch { /* cross-origin — skip */ }
-      }
-      // Strategy 3: hidden textarea that TinyMCE syncs to
-      const ta = document.querySelector(
-        'textarea[name*="description" i], textarea[id*="description" i], textarea[id*="EditorDescription" i]'
-      );
-      if (ta && ta.value) return ta.value;
-      return '';
-    });
-    return (content || '').trim();
-  } catch {
-    return '';
-  }
-}
-
 // ── Phase 1: DOA Scrape ───────────────────────────────────────────────────────
 
 /**
  * scrapeLots(page)
  *
- * Starts at DOA_URL (the first lot's admin edit page, EditAuction?id=NNN),
- * reads each lot's data, then clicks "Save & Edit Next" (#lnkProcess) to
- * advance sequentially until the button is gone (last lot).
+ * Reads the PUBLIC DOA auction grid at DOA_URL (/auction/<slug>) and returns one
+ * lot per grid card: the lot's title and its primary photo at full resolution.
  *
- * Returns: Array of { lot_number, title, description, price, imageUrls[] }
+ * Why the public grid rather than the admin form:
+ *   - No DOA account needed. The old admin walk required a login whose field IDs
+ *     DOA renames periodically; that broke this agent twice (see git b21f3b8).
+ *   - The admin walk advanced by clicking "Save & Edit Next", which re-saved
+ *     every lot of a live auction just to read it. This path never writes to DOA.
+ *   - One page load instead of one per lot.
+ *
+ * Image URLs: the grid serves 300x300 thumbnails named "<id>_thumbnail.jpg".
+ * Dropping the "_thumbnail" suffix returns the 1080x1080 original from the same
+ * CDN path (verified live 2026-08-15). We always upload the original.
+ *
+ * Cards are located by the CDN thumbnail URL shape, not by class name: DOA's
+ * markup churns, but the xpert.b-cdn.net URL pattern has been stable.
+ *
+ * Returns: Array of { lot_number, title, description, price, imageUrls[], source_url }
+ *   description is '' and price is 0 -- the grid does not carry them, and Phase 2
+ *   consumes only title, imageUrls, lot_number and source_url.
  */
 async function scrapeLots(page) {
-  // DOA_URL is the first lot's admin edit page (EditAuction?id=NNN).
-  // We traverse sequentially by clicking "Save & Edit Next" (#lnkProcess)
-  // after reading each lot — mirroring the local DOA agent's workflow exactly.
-  console.log('[agent] Navigating to first DOA lot...');
+  if (/EditAuction/i.test(DOA_URL || '')) {
+    throw new Error(
+      '[agent] DOA_URL is an admin EditAuction link, but this agent reads the public auction grid.\n' +
+      '  Paste the public auction page instead, e.g.\n' +
+      '    https://denveronlineauctions.com/auction/<auction-slug>'
+    );
+  }
+
+  console.log('[agent] Loading DOA auction grid...');
   await page.goto(DOA_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-  await screenshot(page, 'doa-first-lot');
+  // Thumbnails render client-side; wait for at least one before reading the DOM.
+  await page.waitForSelector('img[src*="xpert.b-cdn.net"]', { state: 'attached', timeout: WAIT_TIMEOUT })
+    .catch(() => {});
+  await screenshot(page, 'doa-grid');
+
+  const cards = await page.evaluate(() => {
+    const out = [];
+    for (const img of Array.from(document.querySelectorAll('img[src*="xpert.b-cdn.net"]'))) {
+      const src = img.src || '';
+      // Lot thumbnails only. Also excludes /logos/ art and banner images.
+      if (!/_thumbnail\.[a-z]+(\?|$)/i.test(src)) continue;
+      // Climb to the nearest ancestor that also carries the lot permalink.
+      let el = img, href = '';
+      for (let i = 0; i < 8 && el; i++) {
+        el = el.parentElement;
+        const a = el && el.querySelector('a[href*="/lot-"]');
+        if (a) { href = a.getAttribute('href') || ''; break; }
+      }
+      out.push({ alt: (img.alt || '').trim(), src, href });
+    }
+    return out;
+  });
+
+  console.log(`[agent] Grid returned ${cards.length} lot card(s).`);
 
   const lots = [];
-  let lotIndex = 0;
+  const seen = new Set();
 
-  while (true) {
-    lotIndex++;
-    const currentUrl = page.url();
-    console.log(`[agent]   Scraping lot ${lotIndex}: ${currentUrl}`);
+  for (const card of cards) {
+    const title = card.alt;
+    if (!title) continue;                       // no title -> not a lot card
 
-    try {
-      // Wait for the title field — confirms we're on a lot edit page
-      await page.waitForSelector('#txtTitle, input[name*="Title" i]', {
-        state: 'visible',
-        timeout: WAIT_TIMEOUT,
-      }).catch(() => {});
+    // "<id>_thumbnail.jpg" -> "<id>.jpg" (the full-size original)
+    const fullSize = card.src.replace(/_thumbnail(?=\.[a-z]+(\?|$))/i, '');
 
-      // Title
-      const titleEl = await findFirst(page, [
-        '#txtTitle',
-        'input[name="ctl00$MainContent$txtTitle"]',
-        'input[id*="Title" i][type="text"]',
-        'input[placeholder*="title" i]',
-      ]);
-      const title = titleEl ? (await titleEl.inputValue().catch(() => '')).trim() : '';
+    let sourceUrl = card.href;
+    try { sourceUrl = new URL(card.href, page.url()).href; } catch { /* keep as-is */ }
 
-      // Starting bid / price
-      const bidEl = await findFirst(page, [
-        '#txtStartingBid',
-        'input[id*="StartingBid" i]',
-        'input[id*="starting" i]',
-        'input[name*="starting_bid" i]',
-        'input[name*="startingBid" i]',
-        'input[name*="bid" i]',
-        'input[placeholder*="bid" i]',
-      ]);
-      const bidRaw = bidEl ? (await bidEl.inputValue().catch(() => '0')).trim() : '0';
-      const price = parseFloat(bidRaw.replace(/[^0-9.]/g, '')) || 0;
+    // Dedup on the ledger key so a repeated card can never double-upload.
+    const key = sourceUrl || fullSize;
+    if (seen.has(key)) continue;
+    seen.add(key);
 
-      // Description — from TinyMCE
-      const description = await readTinyMceContent(page);
+    const lotNum =
+      title.match(/lot\s*#?\s*(\d+)/i)?.[1] ??
+      card.href.match(/\/lot-(\d+)/i)?.[1] ??
+      String(lots.length + 1);
 
-      // Images — collect src of any uploaded/preview thumbnails on the edit page
-      const imageUrls = await page.evaluate(() => {
-        const imgs = Array.from(document.querySelectorAll(
-          '.uploaded-image img, .image-thumb img, [class*="uploaded"] img, ' +
-          '[class*="thumb"] img, .image-preview img, ' +
-          '.lot-images img, #images img, [id*="image"] img'
-        ));
-        const srcs = [];
-        const seen = new Set();
-        for (const img of imgs) {
-          const src = img.src || img.getAttribute('src') || '';
-          if (src && !src.includes('data:') && !seen.has(src)) {
-            seen.add(src);
-            srcs.push(src);
-          }
-        }
-        return srcs;
-      });
+    lots.push({
+      lot_number:  lotNum,
+      title,
+      description: '',
+      price:       0,
+      imageUrls:   [fullSize],
+      source_url:  sourceUrl || `${page.url()}#lot-${lotNum}`,
+    });
 
-      let allImageUrls = imageUrls;
-      if (allImageUrls.length === 0) {
-        allImageUrls = await page.evaluate(() => {
-          const imgs = Array.from(document.querySelectorAll('img[src]'));
-          return imgs
-            .map(img => img.src)
-            .filter(src =>
-              src &&
-              !src.includes('data:') &&
-              !src.includes('logo') &&
-              !src.includes('icon') &&
-              !src.includes('button') &&
-              src.match(/\.(jpg|jpeg|png|gif|webp)/i)
-            );
-        });
-      }
+    console.log(`[agent]   lot ${lotNum}: "${title.slice(0, 60)}"`);
 
-      // Derive lot number: try title prefix first ("Lot 3 -"), then URL id param
-      const titleLotMatch = title.match(/^(?:lot\s*#?\s*)?(\d+)/i);
-      const urlIdMatch = currentUrl.match(/[?&](?:id|LotID|lotId|auctionItemId)=(\d+)/i);
-      const derivedLotNum = titleLotMatch?.[1] || urlIdMatch?.[1] || String(lotIndex);
-
-      console.log(`[agent]     lot_number=${derivedLotNum} title="${title.slice(0, 60)}" bid=$${price} images=${allImageUrls.length}`);
-
-      lots.push({
-        lot_number:  derivedLotNum,
-        title:       title || `Lot ${derivedLotNum}`,
-        description,
-        price,
-        imageUrls:   allImageUrls,
-        source_url:  currentUrl,
-      });
-    } catch (err) {
-      await screenshot(page, `doa-lot-${lotIndex}-error`);
-      console.error(`[agent]   ERROR scraping lot ${lotIndex}: ${err.message} — skipping`);
-    }
-
-    // Smoke-test cap: stop scraping once we've collected MAX_LOTS lots.
     if (MAX_LOTS > 0 && lots.length >= MAX_LOTS) {
-      console.log(`[agent] MAX_LOTS=${MAX_LOTS} reached — stopping scrape early (smoke-test mode).`);
-      break;
-    }
-
-    // Advance to the next lot via "Save & Edit Next" (#lnkProcess).
-    // Clicking it in read-only mode is safe — no fields were modified,
-    // so the server re-saves the same data (no-op for DOA).
-    const saveNextEl = await findFirst(page, [
-      '#lnkProcess',
-      'a[id*="Process" i]',
-      'a:has-text("Save & Edit Next")',
-      'button:has-text("Save & Edit Next")',
-      'input[value*="Save & Edit Next" i]',
-    ]);
-
-    if (!saveNextEl) {
-      console.log(`[agent] No "Save & Edit Next" button — reached end after ${lotIndex} lot(s).`);
-      break;
-    }
-
-    try {
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }),
-        saveNextEl.click(),
-      ]);
-    } catch (navErr) {
-      console.log(`[agent] Navigation after lot ${lotIndex} timed out (${navErr.message}) — assuming last lot.`);
-      break;
-    }
-
-    const newUrl = page.url();
-    if (newUrl === currentUrl) {
-      console.log(`[agent] URL unchanged after "Save & Edit Next" — reached last lot after ${lotIndex} lot(s).`);
+      console.log(`[agent] MAX_LOTS=${MAX_LOTS} reached — stopping at ${lots.length} lot(s) (smoke test).`);
       break;
     }
   }
@@ -1317,7 +1231,18 @@ async function run() {
     // ── Phase 1: DOA login + scrape ──────────────────────────────────────────
     console.log('\n[agent] ── Phase 1: DOA Scrape ──────────────────────────────');
 
-    console.log('[agent] Logging into DOA...');
+    // Phase 1 reads the PUBLIC auction grid (/auction/<slug>). DOA serves lot
+    // titles and full-size photos there with no account at all, so this agent
+    // no longer logs into DOA on the normal path. That deletes the failure mode
+    // which broke it twice: DOA renames its login controls periodically, and
+    // this file carried its own independently-drifting copy of that login.
+    // The block below now runs ONLY for a legacy admin (EditAuction) URL.
+    const DOA_NEEDS_LOGIN = /EditAuction/i.test(DOA_URL || '');
+
+    if (!DOA_NEEDS_LOGIN) {
+      console.log('[agent] Public auction grid — no DOA login required.');
+    } else {
+    console.log('[agent] Legacy admin URL — logging into DOA...');
     await page.goto('https://denveronlineauctions.com/Account/Login', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
 
     // The persistent local profile can still hold a live DOA session from a
@@ -1392,6 +1317,7 @@ async function run() {
       );
     }
     console.log('[agent] Logged into DOA successfully.');
+    }
 
     lots = await scrapeLots(page);
     console.log(`\n[agent] Phase 1 complete — scraped ${lots.length} lot(s).`);
