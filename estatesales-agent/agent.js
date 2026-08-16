@@ -81,6 +81,10 @@ const MAX_LOTS           = parseInt(process.env.MAX_LOTS, 10) || 0;
 // this. 0/unset = start at the first lot.
 const START_LOT          = parseInt(process.env.START_LOT, 10) || 0;
 
+// Diagnostic: run Phase 1 only and upload nothing. For checking what the DOA
+// scrape actually returns without spending an EstateSales sign-in attempt.
+const SCRAPE_ONLY        = process.env.SCRAPE_ONLY === 'true';
+
 // Stale reservation threshold: a 'reserved' row older than this is LIKELY a dead
 // run rather than a live concurrent one. This is used ONLY to label the skip log
 // for manual reconciliation — we never auto-reclaim a stale reservation (see
@@ -502,6 +506,11 @@ async function scrapeLots(page) {
   // Thumbnails render client-side; wait for at least one before reading the DOM.
   await page.waitForSelector('img[src*="xpert.b-cdn.net"]', { state: 'attached', timeout: WAIT_TIMEOUT })
     .catch(() => {});
+  // Wait for the lot ANCHORS too, not just the images. Each lot's dedup key is
+  // its permalink; reading while the links are still attaching yields cards with
+  // no href, which all collapse to the same key and drop the auction to one lot.
+  await page.waitForSelector('a[href*="/lot-"]', { state: 'attached', timeout: WAIT_TIMEOUT })
+    .catch(() => {});
   await screenshot(page, 'doa-grid');
 
   const { cards, noPhoto } = await page.evaluate(() => {
@@ -547,6 +556,7 @@ async function scrapeLots(page) {
   const lots = [];
   const seen = new Set();
   let skippedBelowStart = 0;
+  let cardsWithoutPermalink = 0;
 
   if (START_LOT > 0) {
     console.log(`[agent] START_LOT=${START_LOT} — skipping lots below #${START_LOT} (top-up run).`);
@@ -559,10 +569,19 @@ async function scrapeLots(page) {
     // "<id>_thumbnail.jpg" -> "<id>.jpg" (the full-size original)
     const fullSize = card.src.replace(/_thumbnail(?=\.[a-z]+(\?|$))/i, '');
 
-    let sourceUrl = card.href;
-    try { sourceUrl = new URL(card.href, page.url()).href; } catch { /* keep as-is */ }
+    // Resolve a permalink ONLY from a non-empty href. new URL('', base) returns
+    // the base -- i.e. the grid page URL -- which is identical for every card.
+    // Feeding that to the dedup below collapsed an entire 176-lot auction to a
+    // single lot, because every card after the first looked like a duplicate.
+    let sourceUrl = '';
+    if (card.href) {
+      try { sourceUrl = new URL(card.href, page.url()).href; } catch { sourceUrl = card.href; }
+    } else {
+      cardsWithoutPermalink++;
+    }
 
-    // Dedup on the ledger key so a repeated card can never double-upload.
+    // Dedup on the lot permalink when there is one, else on the lot's image URL.
+    // Both are unique per lot; never key on anything that can repeat.
     const key = sourceUrl || fullSize;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -602,6 +621,19 @@ async function scrapeLots(page) {
 
   if (skippedBelowStart > 0) {
     console.log(`[agent] Skipped ${skippedBelowStart} lot(s) below #${START_LOT} (already uploaded in an earlier run).`);
+  }
+  if (cardsWithoutPermalink > 0) {
+    console.log(`[agent] ${cardsWithoutPermalink} card(s) had no lot permalink — keyed on image URL instead.`);
+  }
+
+  // A large drop between cards seen and lots kept means the dedup key is
+  // colliding. Say so loudly rather than silently uploading a fraction.
+  const expected = cards.length - skippedBelowStart;
+  if (MAX_LOTS === 0 && lots.length < expected) {
+    console.warn(
+      `[agent] WARNING: ${expected} lot card(s) available but only ${lots.length} kept — ` +
+      `${expected - lots.length} were treated as duplicates. Check the dedup key.`
+    );
   }
 
   return lots;
@@ -1378,9 +1410,23 @@ async function run() {
     if (lots.length === 0) {
       throw new Error(
         '[agent] No lots were scraped from DOA.\n' +
-        '  Verify the DOA_URL is the auction admin page (EditAuction?id=...).\n' +
+        '  Verify DOA_URL is the PUBLIC auction page (/auction/<slug>).\n' +
         '  Check screenshots for the actual page structure.'
       );
+    }
+
+    // Diagnostic switch: stop after the scrape and upload nothing. Lets the
+    // DOA side be re-run and inspected without another EstateSales sign-in --
+    // repeated failed logins there risk locking the account, and ES rejects
+    // automated sign-ins via reCAPTCHA v3 rather than by password.
+    if (SCRAPE_ONLY) {
+      console.log(`\n[agent] SCRAPE_ONLY — stopping after Phase 1. Nothing uploaded.`);
+      console.log(`[agent] ${lots.length} lot(s) scraped:`);
+      for (const l of lots.slice(0, 15)) {
+        console.log(`[agent]   #${l.lot_number}  ${l.imageUrls.length} photo(s)  "${l.title.slice(0, 50)}"`);
+      }
+      if (lots.length > 15) console.log(`[agent]   ... and ${lots.length - 15} more`);
+      return;
     }
 
     // ── Phase 2: EstateSales upload ──────────────────────────────────────────
