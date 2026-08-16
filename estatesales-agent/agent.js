@@ -868,11 +868,55 @@ async function uploadLots(page, lots) {
   // means EITHER a wrong password OR a low bot score — surface both hypotheses.
   if (await rejectionBanner.isVisible().catch(() => false)) {
     await screenshot(page, 'es-login-rejected');
-    throw new Error(
-      '[agent] EstateSales.net rejected the sign-in ("Email Address and/or Password was incorrect"). ' +
-      'If these credentials work in a normal browser, this is reCAPTCHA v3 scoring the automated ' +
-      'browser as a bot — not a wrong password.'
-    );
+
+    // Hand the keyboard to the operator instead of dying.
+    //
+    // The browser is already open on the sign-in form with a human sitting in
+    // front of it. Throwing here wastes that: the run ends, and signing in
+    // afterwards accomplishes nothing because the process is gone. Waiting lets
+    // a stale stored password be worked around on the spot, and with "Remember
+    // Me" ticked the resulting cookie persists, so this is a one-time detour
+    // rather than a permanent manual step.
+    //
+    // Headless CI has nobody to ask, so it still fails immediately.
+    if (!IS_CI) {
+      console.log('');
+      console.log('  ============================================================');
+      console.log('   EstateSales rejected the stored password.');
+      console.log('');
+      console.log('   Sign in yourself in the Chrome window that is already open.');
+      console.log('   "Remember Me" is ticked, so this should only be needed once.');
+      console.log('   The agent will carry on by itself the moment you are in.');
+      console.log('');
+      console.log('   Waiting up to 3 minutes...');
+      console.log('  ============================================================');
+      console.log('');
+
+      const deadline = Date.now() + 3 * 60_000;
+      let rescued = false;
+      while (Date.now() < deadline) {
+        await page.waitForTimeout(2000);
+        if (!(await onSignInWall(page).catch(() => true))) { rescued = true; break; }
+      }
+
+      if (rescued) {
+        console.log('[agent] Signed in — continuing.');
+        // Fix the stored password so the next run needs no human at all.
+        console.log('[agent] Update ESTATESALES_PASSWORD in .estatesales-test.env to match.');
+      } else {
+        throw new Error(
+          '[agent] EstateSales.net rejected the sign-in and no manual sign-in completed within 3 minutes.\n' +
+          '  The stored ESTATESALES_PASSWORD likely does not match your real password.\n' +
+          '  Update it in estatesales-agent/.estatesales-test.env, or run SIGN-IN-ONCE.bat.'
+        );
+      }
+    } else {
+      throw new Error(
+        '[agent] EstateSales.net rejected the sign-in ("Email Address and/or Password was incorrect"). ' +
+        'If these credentials work in a normal browser, this is reCAPTCHA v3 scoring the automated ' +
+        'browser as a bot — not a wrong password.'
+      );
+    }
   }
 
   // Verify login succeeded via DOM — EstateSales.net is an Angular SPA that can
