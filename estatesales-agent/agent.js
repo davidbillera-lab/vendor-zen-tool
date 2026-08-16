@@ -504,12 +504,25 @@ async function scrapeLots(page) {
     .catch(() => {});
   await screenshot(page, 'doa-grid');
 
-  const cards = await page.evaluate(() => {
+  const { cards, noPhoto } = await page.evaluate(() => {
     const out = [];
-    for (const img of Array.from(document.querySelectorAll('img[src*="xpert.b-cdn.net"]'))) {
+    const noPhoto = [];
+    for (const img of Array.from(document.querySelectorAll('img'))) {
       const src = img.src || '';
-      // Lot thumbnails only. Also excludes /logos/ art and banner images.
-      if (!/_thumbnail\.[a-z]+(\?|$)/i.test(src)) continue;
+      const alt = (img.alt || '').trim();
+      // A real lot photo: DOA's CDN, thumbnail variant. Excludes /logos/ art.
+      const isLotPhoto = /xpert\.b-cdn\.net/i.test(src) && /_thumbnail\.[a-z]+(\?|$)/i.test(src);
+
+      if (!isLotPhoto) {
+        // A lot card whose image is DOA's grey placeholder (/images/300x300.svg)
+        // has no photo uploaded yet. Record it so the skip is visible, then
+        // leave it out — posting a placeholder to a live listing is worse than
+        // posting nothing.
+        const lotMatch = alt.match(/lot\s*#?\s*(\d+)/i);
+        if (lotMatch) noPhoto.push(parseInt(lotMatch[1], 10));
+        continue;
+      }
+
       // Climb to the nearest ancestor that also carries the lot permalink.
       let el = img, href = '';
       for (let i = 0; i < 8 && el; i++) {
@@ -517,12 +530,19 @@ async function scrapeLots(page) {
         const a = el && el.querySelector('a[href*="/lot-"]');
         if (a) { href = a.getAttribute('href') || ''; break; }
       }
-      out.push({ alt: (img.alt || '').trim(), src, href });
+      out.push({ alt, src, href });
     }
-    return out;
+    return { cards: out, noPhoto };
   });
 
-  console.log(`[agent] Grid returned ${cards.length} lot card(s).`);
+  console.log(`[agent] Grid: ${cards.length} lot(s) with photos, ${noPhoto.length} without.`);
+  if (noPhoto.length) {
+    const nums = [...new Set(noPhoto)].sort((a, b) => a - b);
+    const contiguous = nums.length > 1 && nums[nums.length - 1] - nums[0] === nums.length - 1;
+    const listed = contiguous ? `#${nums[0]}-#${nums[nums.length - 1]}` : nums.map(n => `#${n}`).join(', ');
+    console.log(`[agent]   No photo on DOA yet, skipped: ${listed}`);
+    console.log(`[agent]   Re-run once those lots have photos to add them.`);
+  }
 
   const lots = [];
   const seen = new Set();

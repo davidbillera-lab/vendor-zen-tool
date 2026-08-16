@@ -74,7 +74,7 @@ echo.
 
 set "DOA_URL="
 set "ESTATESALES_URL="
-set /p "DOA_URL=Paste DOA first-lot admin URL: "
+set /p "DOA_URL=Paste DOA public auction URL: "
 echo.
 set /p "ESTATESALES_URL=Paste estatesales.net listing editor URL: "
 echo.
