@@ -714,7 +714,24 @@ async function uploadLots(page, lots) {
     return { succeeded: 0, failed: 0, failedLots: [], skipped: alreadyUploadedCount, blocked: 0 };
   }
 
-  console.log('[agent] Logging into EstateSales.net...');
+  // Sign in ONCE, then ride the cookie. The persistent Chrome profile already
+  // stores EstateSales' session cookie; nothing used to read it, so the agent
+  // re-submitted the sign-in form on every run. That form is behind reCAPTCHA
+  // v3, which masks a low bot score as "Email Address and/or Password was
+  // incorrect" — so a perfectly valid password fails and looks like bad
+  // credentials. Landing on the target page first and only authenticating when
+  // actually walled means a warm profile never touches the form at all.
+  console.log('[agent] Checking EstateSales.net session...');
+  await page.goto(ES_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  // The wizard is client-rendered — checking auth before the SPA settles races
+  // the render and always reads as "not walled".
+  await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+  await page.waitForTimeout(1500);
+
+  if (!(await onSignInWall(page))) {
+    console.log('[agent] Existing EstateSales.net session — no sign-in needed.');
+  } else {
+  console.log('[agent] No active session — signing into EstateSales.net...');
   // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
   await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
   await screenshot(page, 'es-login-page');
@@ -798,6 +815,7 @@ async function uploadLots(page, lots) {
     );
   }
   console.log('[agent] Logged into EstateSales.net successfully.');
+  }
 
   // Navigate to the sale management page
   console.log('[agent] Navigating to EstateSales.net sale page...');
