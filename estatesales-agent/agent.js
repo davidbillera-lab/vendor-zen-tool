@@ -813,6 +813,35 @@ async function uploadLots(page, lots) {
   await passEl.pressSequentially(ES_PASSWORD, { delay: 65 + Math.floor(Math.random() * 45) });
   await page.waitForTimeout(600);
 
+  // Tick "Remember Me" before submitting.
+  //
+  // Without it EstateSales issues a SESSION cookie, which the browser discards
+  // on close — and every agent run launches a fresh browser and closes it. So a
+  // sign-in that succeeded was gone by the next run, sending the agent back
+  // through the reCAPTCHA-guarded form every single time and making a valid
+  // password look like a bad one. Persisting the cookie is what makes "sign in
+  // once" actually mean once.
+  const rememberEl = await findFirst(page, [
+    'mat-checkbox:has-text("Remember")',
+    'label:has-text("Remember Me")',
+    'input[type="checkbox"][name*="remember" i]',
+    'input[type="checkbox"][id*="remember" i]',
+    'input[type="checkbox"]',
+  ], 3_000);
+  if (rememberEl) {
+    const alreadyChecked = await rememberEl.evaluate((el) => {
+      const cb = el.matches?.('input[type="checkbox"]') ? el : el.querySelector('input[type="checkbox"]');
+      return cb ? cb.checked : false;
+    }).catch(() => false);
+    if (!alreadyChecked) {
+      await rememberEl.click().catch(() => {});
+      await page.waitForTimeout(200);
+    }
+    console.log('[agent] "Remember Me" enabled — the session will survive browser restarts.');
+  } else {
+    console.warn('[agent] Could not find "Remember Me" — the session may not outlive this run.');
+  }
+
   // The page has several stray type="submit" buttons (Back, clear) — match the
   // visible Sign In button by text before falling back to generic selectors.
   const submitEl = await findFirst(page, [

@@ -64,6 +64,27 @@ const context = await chromium.launchPersistentContext(PROFILE, {
 const page = context.pages()[0] ?? await context.newPage();
 await page.goto(SIGN_IN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
 
+// Tick "Remember Me" FOR the operator. Left unchecked, EstateSales hands back a
+// session cookie that dies when this window closes — so the sign-in they just
+// completed would be worthless to the agent, which launches its own browser.
+// Ticking it here is the difference between signing in once and signing in
+// before every run.
+await page.waitForTimeout(1500);
+try {
+  const remember = page.locator(
+    'mat-checkbox:has-text("Remember"), label:has-text("Remember Me"), input[type="checkbox"]'
+  ).first();
+  if (await remember.isVisible({ timeout: 5000 }).catch(() => false)) {
+    const checked = await remember.evaluate((el) => {
+      const cb = el.matches?.('input[type="checkbox"]') ? el : el.querySelector('input[type="checkbox"]');
+      return cb ? cb.checked : false;
+    }).catch(() => false);
+    if (!checked) await remember.click().catch(() => {});
+    console.log('  "Remember Me" ticked for you — keeps you signed in between runs.');
+    console.log('');
+  }
+} catch { /* not fatal: the operator can tick it themselves */ }
+
 const started = Date.now();
 let signedIn = false;
 
