@@ -69,6 +69,18 @@ const WAIT_TIMEOUT       = 15_000;
 // EstateSales (Phase 2) path without grinding all ~169 lots. 0/unset = no cap.
 const MAX_LOTS           = parseInt(process.env.MAX_LOTS, 10) || 0;
 
+// Optional starting lot number, for topping up a sale that was already uploaded.
+// When lots are added to a DOA auction after an earlier run, set START_LOT to the
+// first NEW lot number and everything below it is skipped, so the photos already
+// on EstateSales are not uploaded a second time.
+//
+// This is the duplicate guard for LOCAL runs specifically: test-local.js sets
+// AGENT_TEST_MODE=true, which disables the estatesales_uploaded_lots ledger, so
+// nothing else remembers what a previous run uploaded. A ledger-backed run
+// (real JOB_ID via runAgent.js) skips duplicates on its own and does not need
+// this. 0/unset = start at the first lot.
+const START_LOT          = parseInt(process.env.START_LOT, 10) || 0;
+
 // Stale reservation threshold: a 'reserved' row older than this is LIKELY a dead
 // run rather than a live concurrent one. This is used ONLY to label the skip log
 // for manual reconciliation — we never auto-reclaim a stale reservation (see
@@ -514,6 +526,11 @@ async function scrapeLots(page) {
 
   const lots = [];
   const seen = new Set();
+  let skippedBelowStart = 0;
+
+  if (START_LOT > 0) {
+    console.log(`[agent] START_LOT=${START_LOT} — skipping lots below #${START_LOT} (top-up run).`);
+  }
 
   for (const card of cards) {
     const title = card.alt;
@@ -535,6 +552,17 @@ async function scrapeLots(page) {
       card.href.match(/\/lot-(\d+)/i)?.[1] ??
       String(lots.length + 1);
 
+    // Incremental top-up: skip lots below START_LOT so a second run adds only
+    // the new items. A lot whose number cannot be parsed is NEVER skipped --
+    // silently dropping an item is worse than uploading one twice.
+    if (START_LOT > 0) {
+      const n = parseInt(lotNum, 10);
+      if (Number.isFinite(n) && n < START_LOT) { skippedBelowStart++; continue; }
+      if (!Number.isFinite(n)) {
+        console.warn(`[agent]   "${title.slice(0, 45)}" has no readable lot number — including it despite START_LOT.`);
+      }
+    }
+
     lots.push({
       lot_number:  lotNum,
       title,
@@ -550,6 +578,10 @@ async function scrapeLots(page) {
       console.log(`[agent] MAX_LOTS=${MAX_LOTS} reached — stopping at ${lots.length} lot(s) (smoke test).`);
       break;
     }
+  }
+
+  if (skippedBelowStart > 0) {
+    console.log(`[agent] Skipped ${skippedBelowStart} lot(s) below #${START_LOT} (already uploaded in an earlier run).`);
   }
 
   return lots;
@@ -1350,6 +1382,21 @@ async function run() {
       lots_uploaded: confirmedUploaded,
       lots_skipped:  skipped,
     });
+
+    // Tell the operator where to resume. Local runs have no ledger, so the only
+    // thing standing between a top-up run and duplicate photos is starting above
+    // the highest lot already uploaded. Printing it removes the guesswork.
+    const highestLot = lots
+      .map(l => parseInt(l.lot_number, 10))
+      .filter(Number.isFinite)
+      .reduce((a, b) => Math.max(a, b), 0);
+    if (highestLot > 0 && confirmedUploaded > 0) {
+      console.log(
+        `\n[agent] Highest lot uploaded: #${highestLot}\n` +
+        `[agent]   When this auction gains more lots, run again and enter ${highestLot + 1}\n` +
+        `[agent]   at the "Start at lot #" prompt to add only the new ones.`
+      );
+    }
     const problems = failed + blocked;
     if (problems > 0) {
       const failSummary = failedLots.map(l => `Lot ${l.index ?? '?'}: ${l.error}`).join('; ');

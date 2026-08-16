@@ -122,6 +122,26 @@ if "!ESTATESALES_URL!"=="" (
 )
 
 echo.
+echo  Start at lot #  -- for topping up a sale you already uploaded.
+echo    ENTER = start at the first lot ^(a fresh sale^)
+echo    or the first NEW lot number, e.g. 167, to skip what is already
+echo    on EstateSales. The agent prints the number to use next time.
+echo.
+set "START_LOT="
+set /p "START_LOT=Start at lot # [1]: "
+if "!START_LOT!"=="" set "START_LOT=0"
+
+echo !START_LOT!| findstr /r "^[0-9][0-9]*$" >nul
+if errorlevel 1 (
+    echo.
+    echo  ERROR: "!START_LOT!" is not a lot number. Press ENTER to start at
+    echo  the beginning, or type the first new lot number.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo.
 echo  The agent takes ONE photo per lot from the grid, so photos = lots.
 echo.
 echo  How many photos should it upload?
@@ -151,6 +171,11 @@ if "!MAX_LOTS!"=="0" (
     echo  Photos:       ALL on the grid
 ) else (
     echo  Photos:       !MAX_LOTS!  ^(capped test run^)
+)
+if "!START_LOT!"=="0" (
+    echo  Starting at:  lot #1  ^(whole sale^)
+) else (
+    echo  Starting at:  lot #!START_LOT!  ^(top-up -- earlier lots skipped^)
 )
 echo.
 echo  NOTE: local runs have the dedup ledger DISABLED. Photos upload
