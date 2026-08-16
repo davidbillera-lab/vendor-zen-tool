@@ -48,10 +48,17 @@ console.log('  A Chrome window is opening on the EstateSales sign-in page.');
 console.log('  Sign in normally. This window closes itself when you are in.');
 console.log('');
 
+// Nothing is automated in this window -- the operator types the credentials --
+// so drop the flags that advertise automation. Playwright adds
+// --enable-automation and sets navigator.webdriver, both of which reCAPTCHA v3
+// reads. Removing them here is not evasion: a human really is driving. Keeping
+// them would depress the score of a genuine hand-typed sign-in.
 const context = await chromium.launchPersistentContext(PROFILE, {
   headless: false,
   channel: 'chrome',
   viewport: { width: 1280, height: 900 },
+  ignoreDefaultArgs: ['--enable-automation'],
+  args: ['--disable-blink-features=AutomationControlled'],
 });
 
 const page = context.pages()[0] ?? await context.newPage();
