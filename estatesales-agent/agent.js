@@ -85,6 +85,12 @@ const START_LOT          = parseInt(process.env.START_LOT, 10) || 0;
 // scrape actually returns without spending an EstateSales sign-in attempt.
 const SCRAPE_ONLY        = process.env.SCRAPE_ONLY === 'true';
 
+// Caption an upload that already happened: skip Step 1 entirely and only apply
+// descriptions to the pictures already on EstateSales. Local runs have the
+// dedup ledger disabled, so re-running a completed upload would duplicate every
+// photo — this is the way to fix missing captions without that.
+const CAPTION_ONLY       = process.env.CAPTION_ONLY === 'true';
+
 // Stale reservation threshold: a 'reserved' row older than this is LIKELY a dead
 // run rather than a live concurrent one. This is used ONLY to label the skip log
 // for manual reconciliation — we never auto-reclaim a stale reservation (see
@@ -904,7 +910,43 @@ async function uploadLots(page, lots) {
   const uploadedLotState = [];   // { lot, startIdx, count } — confirmed once captioned (not on save)
   let thumbCount = await countEsThumbnails(page);
 
-  for (let i = 0; i < pending.length; i++) {
+  // Resume instead of re-uploading.
+  //
+  // Local runs have the dedup ledger disabled, so a second pass over a sale
+  // whose photos are already up would upload every one of them AGAIN. Detect
+  // that case by counting the pictures EstateSales already shows: if the sale
+  // already holds at least as many as this scrape produced, the upload half is
+  // done and only the descriptions are outstanding. Skip Step 1 and pick up at
+  // the captions.
+  //
+  // Picture i maps to lot i because the grid scrape takes exactly one photo per
+  // lot and uploads in lot order.
+  const expectedPhotos = pending.reduce((n, l) => n + (l.imageUrls?.length || 0), 0);
+  const alreadyUploaded = expectedPhotos > 0 && thumbCount >= expectedPhotos;
+  const skipUpload = CAPTION_ONLY || alreadyUploaded;
+
+  if (skipUpload) {
+    for (const lot of pending) {
+      for (let k = 0; k < (lot.imageUrls?.length || 1); k++) imageTitles.push(lot.title);
+    }
+    if (CAPTION_ONLY) {
+      console.log(`[agent] CAPTION_ONLY — skipping upload. Captioning ${imageTitles.length} picture(s).`);
+    } else {
+      console.log(
+        `[agent] EstateSales already shows ${thumbCount} picture(s) for ${expectedPhotos} scraped photo(s).\n` +
+        `[agent]   Photos are already uploaded — skipping the upload and going straight to descriptions.\n` +
+        `[agent]   (Re-uploading would duplicate them: local runs have no dedup ledger.)`
+      );
+    }
+    if (thumbCount < imageTitles.length) {
+      console.warn(
+        `[agent] WARNING: ES shows ${thumbCount} picture(s) but ${imageTitles.length} lot photo(s) were scraped.\n` +
+        `[agent]   Descriptions are applied in order, so a mismatch will offset them.`
+      );
+    }
+  }
+
+  for (let i = 0; skipUpload ? false : i < pending.length; i++) {
     const lot = pending[i];
     console.log(`\n[agent] Lot ${i + 1}/${pending.length}: "${lot.title.slice(0, 60)}" — reserving + uploading images`);
 
@@ -1016,14 +1058,23 @@ async function uploadLots(page, lots) {
 async function countEsThumbnails(page) {
   try {
     return await page.evaluate(() => {
+      // The wizard states the count itself — "You have uploaded 176 pictures."
+      // Trust that over counting DOM nodes: this number decides whether the
+      // agent skips the upload, and a false 0 on a sale that already has photos
+      // would upload every one of them a second time.
+      const stated = (document.body.innerText || '')
+        .match(/you\s+have\s+uploaded\s+([\d,]+)\s+pictures?/i);
+      if (stated) return parseInt(stated[1].replace(/,/g, ''), 10) || 0;
+
       const selectors = [
+        'img.sale-picture--tile',        // confirmed live 2026-07-06
+        '[class*="sale-picture"] img',
         '.image-grid img',
         '[class*="image-list"] img',
         '[class*="picture-list"] img',
         '[class*="thumbnail"] img',
         '[class*="thumbnail"]',
         '[class*="image-card"]',
-        'img[src*="estatesales"]',
       ];
       for (const sel of selectors) {
         const n = document.querySelectorAll(sel).length;
@@ -1168,27 +1219,70 @@ async function captionEsImages(page, imageTitles) {
 
   // Open the first image's editor. David's flow is click the image, then click
   // the orange pencil icon — lead with pencil-specific selectors, then fall back.
-  const openEditor = await findFirst(page, [
+  // EstateSales states the interaction on the page itself: "Click an image and
+  // select 'Description' from the menu". Selecting a tile reveals a toolbar;
+  // its Description button opens the per-picture dialog ("Picture N", a
+  // Description field, PREV/NEXT). Selectors confirmed live 2026-07-06 by
+  // probe-editor-dialog.mjs.
+  //
+  // The previous chain led with .fa-pencil and generic [class*="edit"], which
+  // never matched: this wizard is Angular Material and carries no FontAwesome
+  // icons. It failed at the first step, so every upload landed uncaptioned.
+  const tile = await findFirst(page, [
+    'img.sale-picture--tile',
+    '[class*="sale-picture"] img',
+    '[class*="picture-tile"] img',
+  ], 15_000);
+  if (!tile) {
+    await screenshot(page, 'es-no-image-editor');
+    throw new Error('[agent] Could not find an uploaded picture tile on the Pictures step. Check screenshot "es-no-image-editor".');
+  }
+  await tile.click().catch(() => {});
+  await page.waitForTimeout(1_000);
+
+  // The toolbar pencil IS the Description control — it carries
+  // title="Description", which is how probe-editor-dialog.mjs found it. Title
+  // first (most precise), then pencil/edit icon shapes as fallbacks in case the
+  // tooltip text changes.
+  const descBtn = await findFirst(page, [
+    'button[title="Description"]',
+    '.toolbar-item[title="Description"]',
+    '[title="Description"]',
+    'button[aria-label*="description" i]',
+    'button:has-text("Description")',
+    'button[title*="edit" i]',
+    'button[aria-label*="edit" i]',
+    'button:has(mat-icon:text-is("edit"))',
+    'mat-icon:text-is("edit")',
     '.fa-pencil',
     'i[class*="pencil"]',
-    '[aria-label*="edit" i]',
-    'button[title*="edit" i]',
-    '[class*="image"] [class*="edit"]',
-    '.fa-edit',
-    '[class*="image-card"]',
-    '[class*="thumbnail"]',
-    '.image-grid img',
-  ], 5_000);
-  if (!openEditor) {
-    await screenshot(page, 'es-no-image-editor');
-    throw new Error('[agent] Could not open the image editor on the Pictures step. Check screenshot "es-no-image-editor".');
+    '[class*="toolbar"] [class*="pencil"]',
+  ], 10_000);
+  if (!descBtn) {
+    await screenshot(page, 'es-no-description-button');
+    throw new Error(
+      '[agent] Selected a picture but could not find the toolbar "Description" button.\n' +
+      '  Check screenshot "es-no-description-button".'
+    );
   }
-  await openEditor.click().catch(() => {});
+  await descBtn.click().catch(() => {});
   await page.waitForTimeout(1_500);
-  await screenshot(page, 'es-image-editor-first'); // refine selectors from this
+  await screenshot(page, 'es-image-editor-first');
+
+  let preserved = 0;
 
   for (let i = 0; i < total; i++) {
-    const ok = await fillEsImageDescription(page, imageTitles[i]);
+    // Never overwrite a description that is already there. It may be one the
+    // operator wrote by hand, and a lot title is a poor trade for that. An
+    // existing description still counts as captioned for ledger purposes.
+    const existing = (await readEsImageDescription(page)) || '';
+    let ok;
+    if (existing.trim()) {
+      preserved++;
+      ok = true;
+    } else {
+      ok = await fillEsImageDescription(page, imageTitles[i]);
+    }
     results[i] = ok;
     if (!ok) console.warn(`[agent]   WARNING: could not set description for image ${i + 1}/${total}`);
 
@@ -1200,6 +1294,9 @@ async function captionEsImages(page, imageTitles) {
       }
       await page.waitForTimeout(800);
     }
+  }
+  if (preserved > 0) {
+    console.log(`[agent]   Left ${preserved} existing description(s) untouched.`);
   }
   return results;
 }
@@ -1213,10 +1310,17 @@ async function captionEsImages(page, imageTitles) {
  */
 async function fillEsImageDescription(page, text) {
   const descEl = await findFirst(page, [
+    // The picture dialog renders inside Angular Material's overlay container.
+    // Scope there first so a stray textarea on the page BEHIND the dialog
+    // cannot win the match and swallow the caption.
+    '.cdk-overlay-container textarea',
+    '.cdk-overlay-container input.mat-input-element',
+    '.cdk-overlay-container input[type="text"]',
     'textarea[name*="description" i]',
     'textarea[id*="description" i]',
     'textarea[placeholder*="description" i]',
     'textarea[placeholder*="caption" i]',
+    'input[aria-label*="description" i]',
     'input[name*="description" i]',
     'textarea',
   ], 3_000);
@@ -1265,9 +1369,16 @@ async function fillEsImageDescription(page, text) {
  */
 async function readEsImageDescription(page) {
   return await page.evaluate(() => {
+    // Must match the same selector family fillEsImageDescription uses, and in
+    // the same order — clickEsNext compares this reading before and after to
+    // confirm it advanced. Reading a different element than the one written
+    // makes every advance look like a failure.
     const el = document.querySelector(
+      '.cdk-overlay-container textarea, .cdk-overlay-container input.mat-input-element, ' +
+      '.cdk-overlay-container input[type="text"], ' +
       'textarea[name*="description" i], textarea[id*="description" i], ' +
       'textarea[placeholder*="description" i], textarea[placeholder*="caption" i], ' +
+      'input[aria-label*="description" i], ' +
       'input[name*="description" i], [contenteditable="true"], textarea'
     );
     if (!el) return null;
