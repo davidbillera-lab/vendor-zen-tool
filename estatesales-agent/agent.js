@@ -387,6 +387,37 @@ async function findFirst(page, selectors, timeout = 5_000) {
 // field can sit revealed as type="text" (value visible in plaintext), which a
 // bare input[type="password"] check misses — that miss once turned a rejected
 // login into a false "success" that surfaced later as "+ UPLOAD not found".
+/**
+ * waitForEsAuth(page, ms)
+ *
+ * Decides whether the current EstateSales page is authenticated, patiently.
+ *
+ * A 1.5s look is not enough: the Angular shell renders the sign-in wall FIRST
+ * and restores the stored session a beat later. Checking too early reports a
+ * live session as walled, which then sends the agent to /sign-in — and visiting
+ * /sign-in while holding a session is how a site offering account-switching
+ * logs you out. The impatient check destroyed the very cookie it should reuse.
+ *
+ * Positive markers only ("+ UPLOAD", the account nav). Absence of a wall is not
+ * proof of a session, because a still-rendering shell has no wall either.
+ * A hard redirect onto /sign-in is treated as definitive: no session.
+ */
+async function waitForEsAuth(page, ms = 20_000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const authed =
+      await page.getByText(/\+\s*UPLOAD/i).first().isVisible().catch(() => false) ||
+      await page.getByText(/account home/i).first().isVisible().catch(() => false);
+    if (authed) return true;
+
+    // The app bounced us onto the sign-in route — settled, and not signed in.
+    if (/\/sign-in/i.test(page.url()) && await onSignInWall(page)) return false;
+
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
 async function onSignInWall(page) {
   const candidates = page.locator(
     '#password-input, #password, input[name="password"], input[type="password"], input[placeholder*="password" i]'
@@ -726,14 +757,18 @@ async function uploadLots(page, lots) {
   // The wizard is client-rendered — checking auth before the SPA settles races
   // the render and always reads as "not walled".
   await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
-  await page.waitForTimeout(1500);
 
-  if (!(await onSignInWall(page))) {
+  if (await waitForEsAuth(page)) {
     console.log('[agent] Existing EstateSales.net session — no sign-in needed.');
   } else {
   console.log('[agent] No active session — signing into EstateSales.net...');
-  // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
-  await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  // Only navigate if the app has not already parked us on the sign-in route.
+  // A redundant /sign-in visit is what can drop a session that was merely slow
+  // to restore, and it discards the ?redirect= target the app set for us.
+  if (!/\/sign-in/i.test(page.url())) {
+    // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
+    await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  }
   await screenshot(page, 'es-login-page');
 
   // EstateSales.net login form
