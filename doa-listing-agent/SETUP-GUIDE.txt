@@ -1,0 +1,93 @@
+===============================================================
+  DOA Listing Agent -- Colleague Setup Guide
+===============================================================
+
+WHAT THIS DOES
+--------------
+Fills the lots of a Denver Online Auctions (DOA) auction for you:
+title, description and photos for every lot, one after another,
+in a Chrome window you can watch. You give it three things:
+a CSV of your lots, a ZIP of the photos, and the link to the
+first lot to fill. It does the typing.
+
+It runs on YOUR computer with YOUR DOA login. Nothing is shared.
+
+
+YOU NEED
+--------
+  - A Windows PC and an internet connection
+  - Node.js (free) -- https://nodejs.org  (pick the LTS version)
+  - Your own DOA sub-admin login (the one you use to edit lots)
+  - The auction already created in DOA with its lots added
+    (empty lots are fine -- the agent fills them)
+  - For each auction: a CSV of the lots + a ZIP of the photos
+    (from VZT: "Generate Denver CSV" + the image ZIP.
+     sample-lots.csv shows the format. Photos in the ZIP are
+     named  LOT_NUMBER.jpg  e.g. 101_01.jpg, 101_02.jpg)
+
+
+ONE-TIME SETUP  (about 5 minutes)
+---------------------------------
+  1. Unzip the folder David sent you somewhere permanent,
+     e.g.  C:\doa-listing-agent
+  2. Double-click  SETUP.bat  and let it finish.
+  3. When Notepad opens your .env file, type your DOA email
+     after DOA_EMAIL=  and your DOA password after DOA_PASSWORD=
+     Save, close Notepad. Leave the rest of the file alone.
+
+That's it. You never do this again unless you get a new PC.
+
+
+EVERY AUCTION
+-------------
+  1. Put the CSV and the photo ZIP into the  DROP-HERE  folder.
+  2. In DOA, open the FIRST lot you want filled and copy the
+     address bar. It looks like:
+       https://denveronlineauctions.com/sub-admin/EditAuction?id=...
+  3. Open  DROP-HERE\START-URL.txt , delete the instruction line,
+     paste the link, save.
+  4. Double-click  RUN-DOA-AGENT.bat .  Chrome opens and works
+     through the lots. Do not click inside that Chrome window.
+  5. When it says "All lots completed", your files are moved to
+     the  archive  folder and DROP-HERE is reset for next time.
+
+
+THE RULES  (read these twice)
+-----------------------------
+  * The START URL is where filling BEGINS. The agent fills lots
+    in order from that lot onward -- it does not read lot numbers
+    off the page. If a run stops early and you run again, paste
+    the link of the FIRST LOT THAT STILL NEEDS FILLING, not the
+    original first lot. Wrong link = your data lands on the wrong
+    lots. When in doubt, check DOA before re-running.
+  * One auction at a time. Empty DROP-HERE before the next one.
+  * Don't touch the Chrome window while the agent is running.
+  * Never send anyone your .env file. It has your password.
+    (MAKE-DISTRIBUTION-ZIP.bat exists so David can't either.)
+
+
+PATCHING DESCRIPTIONS ONLY
+--------------------------
+If a run finished but some descriptions are missing: put the SAME
+CSV and ZIP back in DROP-HERE, paste the START URL again, and
+create an empty file in DROP-HERE called  DESCRIPTIONS-ONLY.txt .
+Run as normal -- only descriptions are rewritten.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+  - The black window tells you what happened. Read it before
+    closing it.
+  - Screenshots of the moment it failed are in  logs\screenshots .
+  - "Could not find ... on DOA's login page" or "... form" usually
+    means DOA changed their website. Double-click  inspect-form.bat ,
+    then send David the window text + the newest screenshot.
+  - Login failed: check DOA_EMAIL / DOA_PASSWORD in .env
+    (log into DOA in a normal browser first to be sure).
+
+
+UPDATES
+-------
+When DOA changes something, David sends a new zip. Unzip it over
+your folder (say yes to replace), then double-click SETUP.bat once.
+Your .env and archive are kept.
