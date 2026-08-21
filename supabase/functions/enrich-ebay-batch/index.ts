@@ -54,10 +54,12 @@ FOR ELECTRONICS:
 
 FOR ART:
 - Subject, Medium, Artist (if identifiable), Signed/Unsigned
-- Size (dimensions)
+- Size: ONLY if dimensions are explicitly stated in the title/description — never estimate
 
 FOR HOME DECOR:
 - Room, Theme, Shape, Features
+
+MEASUREMENT RULE (HARD): Never guess measurement-type specifics (Item Length/Width/Height/Depth, Weight, dimensions, capacity). Only fill them from values explicitly present in the listing's title, description, or existing specifics — those are operator-verified. If not present, leave them out. Clothing/shoe/ring sizes read from a garment tag or marking are labels and are fine.
 
 ANALYZE the title and description to INFER specifics intelligently:
 - "Vintage 1960s Danish Teak Credenza" → Era: "1960s", Material: "Teak", Style: "Danish Modern", Country: "Denmark"

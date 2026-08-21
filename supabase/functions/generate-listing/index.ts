@@ -119,6 +119,16 @@ function formatCorrectionLines(
   return lines;
 }
 
+// Global guardrail, all platforms: the AI kept guessing measurements or misreading
+// tape-measure photos. Operator adds verified measurements manually after generation.
+const MEASUREMENT_GUARDRAIL = `=== MEASUREMENT GUARDRAIL (HARD RULE — NO EXCEPTIONS UNLESS DIRECTED) ===
+NEVER include measurements in the title or description — no dimensions, weight, length, width, height, depth, diameter, or capacity (inches, cm, ft, lbs, oz, qt, etc.).
+NEVER estimate or guess measurements from photos, and NEVER read numbers off a tape measure or ruler in a photo. The operator adds verified measurements manually.
+Only exceptions:
+- The operator's instructions explicitly provide a measurement or explicitly direct you to include one.
+- A size printed on the item itself and clearly legible in the photos (clothing tag size, shoe size, ring size, marked capacity like "1.5 QT") — that is a label read, not a measurement.
+=== END MEASUREMENT GUARDRAIL ===`;
+
 const PLATFORM_PROMPTS = {
   ebay: `You are an expert eBay seller and listing optimizer with deep knowledge of sold comps and category taxonomy. Your job is to generate listings that SELL QUICKLY by using accurate categories, realistic sold-comp pricing, and keyword-rich titles.
 
@@ -388,7 +398,7 @@ eBay's Cassini search engine ranks listings based on keyword relevance, buyer in
 2. **Use exact buyer search terms**: Think about what a buyer types into the search bar — use THOSE words
 3. **Include long-tail keywords**: Specific descriptors that match niche searches (e.g., "mid-century modern" not just "vintage")
 4. **Stack keyword density**: Every word must serve a search purpose — NO filler words (wow, look, nice, great, beautiful, stunning)
-5. **Include key attributes**: Brand + Item Type + Material/Feature + Size/Color + Condition keyword
+5. **Include key attributes**: Brand + Item Type + Material/Feature + Labeled Size (from tag only)/Color + Condition keyword
 6. **Use natural word order**: Cassini penalizes keyword stuffing — titles should read naturally while being keyword-dense
 7. **Capitalize strategically**: Title case for readability, which improves click-through rate (a Cassini signal)
 
@@ -560,7 +570,7 @@ RULES — NO EXCEPTIONS:
 3. **DO NOT invent**: attributions, dates, origins, or materials you cannot identify from photos or confirmed research.
 4. **Structure (4-6 sentences)**:
    - Sentence 1: Precise identification — what it is, material, maker/maker's mark if identified
-   - Sentence 2: Physical description — estimated size, colors, decorative elements, notable visual qualities
+   - Sentence 2: Physical description — colors, decorative elements, notable visual qualities (NO size estimates)
    - Sentences 3-4: Honest condition report — overall grade + specific observable wear, chips, cracks, completeness
    - Sentences 5-6 (optional): What's included; any research-confirmed provenance or notable details
 5. **Condition report is MANDATORY** and must be based on what you can actually see in the photos.
@@ -611,7 +621,7 @@ CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanat
 - Front-load the most searchable keywords: Brand/Maker + Item Type + Material + Style/Era
 - Use exact terms buyers search for (e.g., "Mid Century Modern Teak Credenza" not "Nice Wood Cabinet")
 - Include GEO-relevant terms when applicable: regional makers, Colorado-relevant items, Western/Southwestern styles
-- Include differentiators: color, size, pattern name, model, origin, era dates
+- Include differentiators: color, pattern name, model, origin, era dates
 - NO filler words (beautiful, nice, great, amazing, wow, look, stunning, gorgeous)
 - Every single word must serve a search purpose — maximize keyword density naturally
 
@@ -629,7 +639,7 @@ RULES — NO EXCEPTIONS:
 3. **DO NOT invent**: maker attributions, dates, origins, or materials you cannot identify from photos or confirmed research.
 4. **Structure (3-5 sentences)**:
    - Sentence 1: What the item is + maker/brand if identified + material
-   - Sentence 2: Key physical characteristics (size estimate, colors, decorative elements, notable visual qualities)
+   - Sentence 2: Key physical characteristics (colors, decorative elements, notable visual qualities — NO size estimates)
    - Sentence 3: Honest condition assessment — what you can actually see (wear, chips, marks)
    - Sentence 4 (optional): Completeness and what's included
    - Sentence 5 (optional): One noteworthy research-confirmed or visible detail
@@ -813,6 +823,10 @@ serve(async (req) => {
     if (!systemPrompt) {
       throw new Error(`Unknown platform: ${platform}`);
     }
+
+    // Hardcoded for every platform; master prompt (below) stays highest priority
+    // so "unless directed otherwise" remains possible.
+    systemPrompt = `${MEASUREMENT_GUARDRAIL}\n\n${systemPrompt}`;
 
     // Inject master prompt as a guardrail if provided
     if (masterPrompt) {

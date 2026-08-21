@@ -313,3 +313,15 @@ A follow-up CodexQC pass flagged the original `select('*').limit(1)` + condition
 **Why:** the mousetrap is built and used daily; the only broken part was the cloud wrapper nobody uses. Rebuilding it, or the agents, adds risk to a Tier-1 tool for a workflow that is a desk task by nature (ES requires a manual "Save and Continue" review; ES sign-in is reCAPTCHA-scored and only passes from a warm local Chrome profile).
 
 **Known limitation shipped as-is (documented in SETUP-GUIDE.txt, not fixed by decision):** the DOA agent fills lots positionally from the START URL via "Save & Edit Next" and never verifies the on-page lot number; a re-run after a partial failure must use the URL of the first lot that still needs filling. Same as the 2026-07-18 parked contamination risk.
+
+---
+
+## 2026-08-21 — Global measurement guardrail hardcoded across every AI prompt surface
+
+**Context (David):** the AI kept putting measurements in titles/descriptions — misreading tape-measure photos or guessing outright when no measurement photo existed. The team's workflow is: photograph measurements, add them to the listing manually. Two prompt lines were literally instructing the model to include a "size estimate" (LiveAuctioneers and Denver prompts in generate-listing), and refine/enrich/crosspost prompts asked for "dimensions"/"measurements if available".
+
+**Decision:** measurements (dimensions, weight, capacity) are NEVER included in a title or description unless the operator explicitly directs it. Hardcoded server-side at every prompt assembly point: `generate-listing` (all 4 platforms, injected below the master prompt so master instructions can still override), `generate-denver-listing`, `refine-listing` (verify mode: don't add, don't flag missing, never strip operator-added; refine mode: only touch measurements the correction request names), `enrich-ebay-batch` (measurement-type item specifics only from values already in the listing text), `reformat-listing` (guardrail appended server-side so all six client formatPrompts inherit it), `ai-assistant`. Client-side `src/lib/crosspost/registry.ts` Poshmark/Etsy prompts no longer request measurements. One carve-out: sizes printed on the item and legible in photos (clothing tag, shoe size, ring size, marked capacity like "1.5 QT") are label reads, not measurements, and stay allowed — banning them would gut clothing listings.
+
+**Why polarity matters:** verify/refine/reformat must PRESERVE measurements already in a listing — those are the operator's hand-measured values; a naive "never include measurements" rule would have stripped them.
+
+Branch `feat/measurement-guardrail`. Takes effect on eBay/crosspost/assistant paths only after the six edge functions are redeployed.

@@ -36,6 +36,11 @@ serve(async (req) => {
 
     const { platform, listing, imageUrls, formatPrompt } = await req.json();
 
+    // Global measurement guardrail — hardcoded server-side so it applies no matter
+    // which client formatPrompt is used (eBay, LA, Denver, Mercari, Poshmark, Etsy).
+    const MEASUREMENT_GUARDRAIL = `
+MEASUREMENT RULE (HARD): Never ADD measurements to the title or description that are not present in the source listing — no dimensions, weight, or capacity. Never estimate measurements from photos. Measurements already in the source listing are operator-verified: carry them over unchanged, never alter or drop them.`;
+
     if (!platform || !listing || !formatPrompt) {
       return new Response(JSON.stringify({ error: 'Missing required fields: platform, listing, formatPrompt' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -77,7 +82,7 @@ serve(async (req) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 1500,
-        system: formatPrompt,
+        system: `${formatPrompt}\n${MEASUREMENT_GUARDRAIL}`,
         messages: [
           { role: 'user', content },
         ],

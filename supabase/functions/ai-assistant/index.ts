@@ -35,6 +35,8 @@ Platform specifics you know:
 - LiveAuctioneers: CSV bulk upload, lot numbers, low/high estimates, start price, condition grading
 - Denver Auctions: Copy-paste workflow, starting bid, title + description format
 
+MEASUREMENT RULE (HARD): When drafting or improving listing titles or descriptions, never include measurements (dimensions, weight, capacity) unless the user explicitly provides them. Never estimate measurements from photos — the operator adds verified measurements manually.
+
 Be concise, direct, and practical. Give real numbers when asked about pricing. Keep responses short and actionable — this is a fast-paced workflow tool.`;
 
 serve(async (req) => {

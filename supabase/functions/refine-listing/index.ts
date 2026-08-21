@@ -107,6 +107,14 @@ serve(async (req) => {
       // advice (it flags healthy opening bids as underpriced and invents fields).
       const isAuction = platform === 'denver' || platform === 'liveauctioneers';
 
+      // Global measurement guardrail (all platforms): the operator adds verified
+      // measurements manually — the auditor must neither add nor remove them.
+      const measurementRule = `
+MEASUREMENT RULE (HARD):
+- Do NOT add measurements (dimensions, weight, capacity) to the title or description, and do NOT flag missing measurements as a defect — the operator adds verified measurements manually.
+- NEVER remove or "correct" measurements already present in the listing: they are operator-verified from real measuring, not photo estimates.
+`;
+
       const verifySystemPrompt = isAuction
         ? `${lessonsSection}You are an expert auction catalog quality auditor with deep knowledge of estate and collectible values.${masterPromptSection}
 
@@ -125,7 +133,7 @@ STARTING BID VERIFICATION (CRITICAL — auction, not fixed price):
 - Cite a realistic sold-value range for the item and explain how the opening bid relates to it.
 
 DO NOT invent or require eBay-only fields: no item specifics, no category IDs, no shipping details.
-
+${measurementRule}
 Return a JSON object with exactly these fields:
 {
   "passed": true/false,
@@ -150,7 +158,7 @@ PRICING VERIFICATION (CRITICAL):
 - If the listed price is more than 50% above median sold price, flag as OVERPRICED.
 - State the specific median sold comp price you found and your reasoning.
 - A price that would sell within minutes indicates underpricing — treat suspiciously low prices as a red flag.
-
+${measurementRule}
 Return a JSON object with exactly these fields:
 {
   "passed": true/false,
@@ -226,7 +234,7 @@ No markdown fences. Return only the JSON object.`;
     const titleLimit = platform === 'ebay' ? 80 : 100;
     const platformRules = platform === 'ebay'
       ? `5. eBay title limit is ${titleLimit} characters — never exceed it
-6. For description, use clear HTML-friendly formatting; include model, brand, dimensions, and condition details
+6. For description, use clear HTML-friendly formatting; include model, brand, and condition details
 7. For condition: use eBay standard values (New, Used, For Parts or Not Working, etc.)
 8. Keep itemSpecifics keys/values accurate for eBay catalog`
       : `5. If the user asks about the title, keep it under ${titleLimit} characters
@@ -242,6 +250,8 @@ IMPORTANT RULES:
 3. Maintain the same JSON structure
 4. If the user asks about pricing, adjust those fields appropriately
 ${platformRules}
+
+MEASUREMENT RULE (HARD): Never ADD measurements (dimensions, weight, capacity) to the title or description unless the user's correction request explicitly provides or asks for them. Never estimate measurements from photos. Preserve measurements already present — they are operator-verified — unless the user asks to change them.
 
 ALWAYS return valid JSON with the same structure as the input, no markdown, no explanation.`;
 

@@ -20,7 +20,7 @@ CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanat
 - MUST be 100 characters or fewer including spaces — COUNT CAREFULLY
 - Front-load the most searchable keywords: Brand/Maker + Item Type + Material + Style/Era
 - Use exact terms buyers search for (e.g., "Mid Century Modern Teak Credenza" not "Nice Wood Cabinet")
-- Include differentiators: color, size, pattern name, model, origin
+- Include differentiators: color, pattern name, model, origin
 - NO filler words (beautiful, nice, great, amazing, wow, look)
 - Every word must serve a search purpose
 
@@ -31,9 +31,17 @@ GOOD EXAMPLES:
 
 === DESCRIPTION (FULL, COMPLETE TEXT — NO TRUNCATION) ===
 - Write a complete description in natural language (2-4 sentences)
-- Include condition, notable features, materials, dimensions (if known), and any defects
+- Include condition, notable features, materials, and any defects
 - Do NOT cut off words or sentences
 - Keep it buyer-friendly and keyword-rich without sounding robotic
+
+=== MEASUREMENT GUARDRAIL (HARD RULE — NO EXCEPTIONS UNLESS DIRECTED) ===
+NEVER include measurements in the title or description — no dimensions, weight, length, width, height, depth, diameter, or capacity (inches, cm, ft, lbs, oz, qt, etc.).
+NEVER estimate or guess measurements from photos, and NEVER read numbers off a tape measure or ruler in a photo. The operator adds verified measurements manually.
+Only exceptions:
+- The operator's instructions explicitly provide a measurement or explicitly direct you to include one.
+- A size printed on the item itself and clearly legible in the photos (clothing tag size, shoe size, ring size, marked capacity like "1.5 QT") — that is a label read, not a measurement.
+=== END MEASUREMENT GUARDRAIL ===
 
 === STARTING BID ===
 - Suggest a conservative starting bid in dollars (integer, no decimals)

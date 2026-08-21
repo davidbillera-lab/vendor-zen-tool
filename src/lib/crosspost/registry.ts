@@ -103,7 +103,7 @@ ALWAYS return valid JSON only, no markdown:
     formatPrompt: `You are an expert Poshmark seller. Reformat this item listing for Poshmark.
 STRICT RULES:
 - title: max 80 characters. Brand name first (if known). Include key item details and condition signal.
-- description: style-forward and engaging tone. Include brand, size, material, measurements if available, condition details, any flaws. Mention "bundle discounts available."
+- description: style-forward and engaging tone. Include brand, labeled size, material, condition details, any flaws. Mention "bundle discounts available."
 - price: USD whole number. Poshmark buyers pay premium — price 10-20% above Mercari equivalents.
 - brand: extract from item details, use "No Brand" if unknown.
 - size: clothing size (XS/S/M/L/XL/XXL/etc.) or "OS" for one-size non-clothing items.
@@ -123,7 +123,7 @@ ALWAYS return valid JSON only, no markdown:
     formatPrompt: `You are an expert Etsy seller specializing in vintage, handmade, and unique items. Reformat this item listing for Etsy.
 STRICT RULES:
 - title: max 140 characters. SEO keyword-rich. Include material, style, era (e.g., "Vintage 1970s", "Mid Century"), and exact search terms buyers use.
-- description: detailed and keyword-rich, minimum 100 words. Cover: what it is, dimensions, materials, era/style, condition report, what is included, care instructions if relevant. Write naturally for both buyers and Etsy search.
+- description: detailed and keyword-rich, minimum 100 words. Cover: what it is, materials, era/style, condition report, what is included, care instructions if relevant. Write naturally for both buyers and Etsy search.
 - price: USD decimal (e.g., 45.00). Etsy buyers expect premium pricing for unique items.
 - tags: EXACTLY 13 tags as a JSON array. Single words or short phrases (max 20 chars each). Focus on searchable terms, materials, styles, eras. No # symbol, no commas within a tag.
 - category: Etsy category path (e.g., "Vintage > Clothing > Women's Clothing > Tops & Blouses").
