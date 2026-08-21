@@ -325,3 +325,13 @@ A follow-up CodexQC pass flagged the original `select('*').limit(1)` + condition
 **Why polarity matters:** verify/refine/reformat must PRESERVE measurements already in a listing — those are the operator's hand-measured values; a naive "never include measurements" rule would have stripped them.
 
 Branch `feat/measurement-guardrail`. Takes effect on eBay/crosspost/assistant paths only after the six edge functions are redeployed.
+
+---
+
+## 2026-08-21 — Descriptions capped at ~6-7 sentences and stripped of "fancy words"; anti-hallucination language tightened in crosspost prompts
+
+**Context (David):** listing descriptions were too long/verbose, and misinformation in them was driving buyer returns. Auditing every description prompt found the real offenders were the crosspost reformat prompts in `registry.ts` (used by `reformat-listing`) — eBay demanded "150+ words," LiveAuctioneers "6-10+ sentences," Denver reformat "5-8+ sentences," Etsy "minimum 100 words" — and three of them explicitly asked for "historical context" and "expert observations," which is an open invitation to invent facts not visible in photos or confirmed by research. The primary `generate-listing` prompts (eBay 3-5, LiveAuctioneers 4-6, Denver 3-5 sentences) were already within range, but all three used gushing quality adjectives as an allowed concession ("fine glaze," "exceptional carving/glaze," "finely hand-painted," "rich patina," "crisp original graphics").
+
+**Decision:** every description prompt across VZT (generate-listing's 4 platforms, generate-denver-listing, and all 6 crosspost reformat prompts in registry.ts) is now capped at max 6-7 sentences, plain and factual. Removed word-count minimums, "opening hook"/"detailed catalog style"/"keyword-rich" padding instructions, and the "historical context, expert observations" language. Subjective praise adjectives (fine, exceptional, beautiful, stunning, rich, gorgeous) are banned from descriptions; only a plain, literal design/pattern/style name (e.g. "Art Deco design," "floral pattern") is allowed when actually visible — fancy language is fine in a title or when it names a real design element, never as embellishment. Facebook Marketplace's "why someone should buy" sales-pitch line was removed and capped at 5 sentences.
+
+**Why:** shorter + adjective-free descriptions are also the accuracy fix — most invented/wrong details were riding in on "historical context," "expert observations," and padding to hit a word minimum. Same branch as the measurement guardrail (`feat/measurement-guardrail`); not live until the edge functions redeploy.

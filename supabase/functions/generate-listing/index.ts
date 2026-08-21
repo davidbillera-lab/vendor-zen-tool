@@ -417,7 +417,7 @@ BAD EXAMPLES:
 Write a concise, accurate description. Accuracy over length — a wrong detail destroys buyer confidence more than a short description does.
 
 DESCRIPTION RULES — NO EXCEPTIONS:
-1. **Start from photos, extend with research.** Describe what you see. If you can read a model number or maker's mark, look it up — confirmed specs and maker details are fair to include. Visible beauty is fair to note plainly ("fine glaze," "exceptional carving").
+1. **Start from photos, extend with research.** Describe what you see. If you can read a model number or maker's mark, look it up — confirmed specs and maker details are fair to include. Only note design/pattern/style by name when visible (e.g., "Art Deco design," "floral pattern") — no subjective praise words (fine, exceptional, beautiful, stunning, rich, gorgeous).
 2. **DO NOT add**: company history, founder biographies, unrelated historical background, or marketing language ("great addition to your collection").
 3. **DO NOT invent**: brand names, dates, origins, materials, or details you cannot identify from photos or confirmed research.
 4. **Structure (3-5 sentences)**:
@@ -502,7 +502,7 @@ CRITICAL: You MUST ALWAYS respond with valid JSON only, no markdown, no explanat
 
 Requirements:
 - Title: Create a clear, engaging title (max 100 characters) that catches attention.
-- Description: Write a friendly, conversational description with key details. Include condition, features, and why someone should buy.
+- Description: Max 5 sentences, plain and factual. Condition and key features only — no sales pitch, no marketing language, no fancy/subjective adjectives.
 - Price: Suggest a competitive local market price.
 - Category: Suggest the most appropriate Facebook Marketplace category.
 - Condition: Assess condition (New, Like New, Good, Fair).
@@ -565,7 +565,7 @@ GOOD EXAMPLES:
 Write a concise, factual catalog entry. Accuracy is mandatory.
 
 RULES — NO EXCEPTIONS:
-1. **Start from photos, extend with research.** Describe what you see. If you can read a maker's mark, model number, or signature, confirm the maker and relevant details — that research belongs in the description. If the piece is visually striking, say so plainly ("exceptional glaze," "finely hand-painted").
+1. **Start from photos, extend with research.** Describe what you see. If you can read a maker's mark, model number, or signature, confirm the maker and relevant details — that research belongs in the description. Only note design/pattern/style by name when visible (e.g., "Art Deco design," "hand-painted floral motif") — no subjective praise words (fine, exceptional, beautiful, stunning, rich, gorgeous).
 2. **DO NOT add**: manufacturer biographies, founder histories, unrelated historical background, or marketing language.
 3. **DO NOT invent**: attributions, dates, origins, or materials you cannot identify from photos or confirmed research.
 4. **Structure (4-6 sentences)**:
@@ -634,7 +634,7 @@ GOOD EXAMPLES:
 Write a concise, factual lot description. Accuracy is mandatory.
 
 RULES — NO EXCEPTIONS:
-1. **Start from photos, extend with research.** Describe what you see. If you can read a maker's mark, model number, or label, confirm it — those details belong in the description. If the item is visually appealing, say so plainly ("rich patina," "crisp original graphics").
+1. **Start from photos, extend with research.** Describe what you see. If you can read a maker's mark, model number, or label, confirm it — those details belong in the description. Only note design/pattern/style by name when visible (e.g., "Art Deco design," "original graphics") — no subjective praise words (fine, exceptional, beautiful, stunning, rich, gorgeous).
 2. **DO NOT add**: company history, manufacturer biographies, unrelated historical context, or marketing language.
 3. **DO NOT invent**: maker attributions, dates, origins, or materials you cannot identify from photos or confirmed research.
 4. **Structure (3-5 sentences)**:
