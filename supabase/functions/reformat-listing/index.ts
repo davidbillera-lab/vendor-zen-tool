@@ -36,10 +36,12 @@ serve(async (req) => {
 
     const { platform, listing, imageUrls, formatPrompt } = await req.json();
 
-    // Global measurement guardrail — hardcoded server-side so it applies no matter
-    // which client formatPrompt is used (eBay, LA, Denver, Mercari, Poshmark, Etsy).
+    // Global measurement guardrail — hardcoded server-side, appended AFTER the
+    // client-supplied formatPrompt so it applies no matter which platform prompt
+    // is used (eBay, LA, Denver, Mercari, Poshmark, Etsy) and can't be bypassed
+    // by a stale/altered client prompt.
     const MEASUREMENT_GUARDRAIL = `
-MEASUREMENT RULE (HARD): Never ADD measurements to the title or description that are not present in the source listing — no dimensions, weight, or capacity. Never estimate measurements from photos. Measurements already in the source listing are operator-verified: carry them over unchanged, never alter or drop them.`;
+MEASUREMENT RULE (HARD — overrides the platform instructions above if they conflict): Never ADD measurements to the title or description that are not present in the source listing — no dimensions, weight, or capacity. Never estimate measurements from photos. Measurements already in the source listing are operator-verified: keep them, in the description if the title's character limit above doesn't fit them — never drop them, but the character limit always wins over keeping a measurement in the title itself.`;
 
     if (!platform || !listing || !formatPrompt) {
       return new Response(JSON.stringify({ error: 'Missing required fields: platform, listing, formatPrompt' }), {

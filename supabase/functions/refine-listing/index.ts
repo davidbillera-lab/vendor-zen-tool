@@ -110,8 +110,8 @@ serve(async (req) => {
       // Global measurement guardrail (all platforms): the operator adds verified
       // measurements manually — the auditor must neither add nor remove them.
       const measurementRule = `
-MEASUREMENT RULE (HARD):
-- Do NOT add measurements (dimensions, weight, capacity) to the title or description, and do NOT flag missing measurements as a defect — the operator adds verified measurements manually.
+MEASUREMENT RULE (HARD — overrides BUSINESS CONTEXT above if it conflicts):
+- Do NOT add measurements (dimensions, weight, capacity) to the title or description, and do NOT flag missing measurements as a defect — the operator adds verified measurements manually. A generic saved business-context preference does not override this; only an explicit per-listing instruction can.
 - NEVER remove or "correct" measurements already present in the listing: they are operator-verified from real measuring, not photo estimates.
 `;
 
@@ -251,7 +251,7 @@ IMPORTANT RULES:
 4. If the user asks about pricing, adjust those fields appropriately
 ${platformRules}
 
-MEASUREMENT RULE (HARD): Never ADD measurements (dimensions, weight, capacity) to the title or description unless the user's correction request explicitly provides or asks for them. Never estimate measurements from photos. Preserve measurements already present — they are operator-verified — unless the user asks to change them.
+MEASUREMENT RULE (HARD): Never ADD measurements (dimensions, weight, capacity) to the title or description unless the user's correction request explicitly provides or asks for them — this overrides any conflicting standing preference. Never estimate measurements from photos. Preserve measurements already present — they are operator-verified — unless the user asks to change them.
 
 ALWAYS return valid JSON with the same structure as the input, no markdown, no explanation.`;
 

@@ -121,12 +121,13 @@ function formatCorrectionLines(
 
 // Global guardrail, all platforms: the AI kept guessing measurements or misreading
 // tape-measure photos. Operator adds verified measurements manually after generation.
-const MEASUREMENT_GUARDRAIL = `=== MEASUREMENT GUARDRAIL (HARD RULE — NO EXCEPTIONS UNLESS DIRECTED) ===
+const MEASUREMENT_GUARDRAIL = `=== MEASUREMENT GUARDRAIL (HARD RULE — OUTRANKS EVERYTHING ABOVE, INCLUDING MASTER INSTRUCTIONS) ===
+This rule overrides any generic instruction above — including saved business-context/master-prompt text — that asks for measurements, dimensions, or sizing to be included. It yields ONLY to an explicit, item-specific instruction given for THIS listing right now, never to a standing saved preference.
 NEVER include measurements in the title or description — no dimensions, weight, length, width, height, depth, diameter, or capacity (inches, cm, ft, lbs, oz, qt, etc.).
 NEVER estimate or guess measurements from photos, and NEVER read numbers off a tape measure or ruler in a photo. The operator adds verified measurements manually.
 Only exceptions:
-- The operator's instructions explicitly provide a measurement or explicitly direct you to include one.
-- A size printed on the item itself and clearly legible in the photos (clothing tag size, shoe size, ring size, marked capacity like "1.5 QT") — that is a label read, not a measurement.
+- An explicit, item-specific instruction for THIS listing provides a measurement or directs you to include one — a generic saved preference does not count.
+- A size printed on the item itself and clearly legible in the photos — clothing tag size, shoe size, ring size, a manufacturer-marked capacity like "1.5 QT" — is a label read, not a measurement, and is always allowed. Estimating or measuring capacity yourself is not.
 === END MEASUREMENT GUARDRAIL ===`;
 
 const PLATFORM_PROMPTS = {
@@ -824,14 +825,15 @@ serve(async (req) => {
       throw new Error(`Unknown platform: ${platform}`);
     }
 
-    // Hardcoded for every platform; master prompt (below) stays highest priority
-    // so "unless directed otherwise" remains possible.
-    systemPrompt = `${MEASUREMENT_GUARDRAIL}\n\n${systemPrompt}`;
-
-    // Inject master prompt as a guardrail if provided
+    // Inject master prompt (operator's saved business context) if provided
     if (masterPrompt) {
       systemPrompt = `=== MASTER INSTRUCTIONS (HIGHEST PRIORITY — OVERRIDE DEFAULTS) ===\n${masterPrompt}\n=== END MASTER INSTRUCTIONS ===\n\n${systemPrompt}`;
     }
+
+    // Measurement guardrail is appended LAST, after the master prompt, and its own
+    // text asserts precedence over it — a stale/generic saved master prompt can't
+    // silently reintroduce measurements; only an explicit per-listing instruction can.
+    systemPrompt = `${systemPrompt}\n\n${MEASUREMENT_GUARDRAIL}`;
 
     // Inject learned corrections (self-improving loop v2.2): retrieve the
     // caller's *most semantically-similar* past corrections and prepend them so
