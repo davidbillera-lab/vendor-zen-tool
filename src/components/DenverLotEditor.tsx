@@ -127,16 +127,29 @@ export function DenverLotEditor({ lot, onClose, onUpdate, onDelete, masterPrompt
 
     if (changed.length > 0) {
       setFormData(prev => ({ ...prev, ...verifyResult.corrected }));
-      // Hermes Stage 1 — only accepted corrections teach the loop.
+      const titleChanged = changed.includes("title");
+      const otherChanged = changed.includes("description") || changed.includes("starting_bid");
+      // Hermes Stage 1 — only accepted corrections teach the loop. Description/bid
+      // changes ride in wrong/correctedSpecifics (DOA's equivalent of eBay's item
+      // specifics slot) so they aren't silently dropped when title didn't change.
       captureCorrection({
         source: "ai_verify",
         platform: "denver",
         wrongTitle: before.title,
         correctedTitle: verifyResult.corrected.title ?? before.title,
+        wrongSpecifics: otherChanged
+          ? { description: before.description, starting_bid: String(before.starting_bid) }
+          : undefined,
+        correctedSpecifics: otherChanged
+          ? {
+              description: verifyResult.corrected.description ?? before.description,
+              starting_bid: String(verifyResult.corrected.starting_bid ?? before.starting_bid),
+            }
+          : undefined,
         correctionNote: verifyResult.report || undefined,
         imageUrls: imageUrls,
         rowId: lot.id,
-        correctedField: "title",
+        correctedField: titleChanged && otherChanged ? "both" : titleChanged ? "title" : "specifics",
       });
     }
 

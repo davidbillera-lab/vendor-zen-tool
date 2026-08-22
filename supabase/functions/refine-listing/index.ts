@@ -86,7 +86,16 @@ serve(async (req) => {
           console.warn('lesson fetch skipped:', lessonsErr.message);
         } else {
           lessons = data ?? [];
-          if (lessons.length > 0) console.log(`Injected ${lessons.length} distilled lesson(s)`);
+          if (lessons.length > 0) {
+            console.log(`Injected ${lessons.length} distilled lesson(s)`);
+            // Stage 3 audit trail — was missing here, so this (the busiest path:
+            // both DOA and eBay AI Verify) never showed up in correction_injections.
+            authedClient
+              .rpc('record_lesson_injections', { p_ids: lessons.map((l) => l.id) })
+              .then(({ error }) => {
+                if (error) console.warn('record_lesson_injections skipped (non-blocking):', error.message);
+              });
+          }
         }
       } catch (e) {
         console.warn('lesson fetch failed (non-blocking):', e);

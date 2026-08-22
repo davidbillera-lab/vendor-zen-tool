@@ -998,16 +998,29 @@ export default function CreateListing() {
 
     setDenverLots(prev => prev.map(r => r.id === lot.id ? { ...r, ...data } : r));
 
-    // Hermes Stage 1 — only accepted corrections teach the loop.
+    const titleChanged = changed.includes("title");
+    const otherChanged = changed.includes("description") || changed.includes("starting_bid");
+    // Hermes Stage 1 — only accepted corrections teach the loop. Description/bid
+    // changes ride in wrong/correctedSpecifics (DOA's equivalent of eBay's item
+    // specifics slot) so they aren't silently dropped when title didn't change.
     captureCorrection({
       source: "ai_verify",
       platform: "denver",
       wrongTitle: before.title,
       correctedTitle: result.corrected.title ?? before.title,
+      wrongSpecifics: otherChanged
+        ? { description: before.description, starting_bid: String(before.starting_bid) }
+        : undefined,
+      correctedSpecifics: otherChanged
+        ? {
+            description: result.corrected.description ?? before.description,
+            starting_bid: String(result.corrected.starting_bid ?? before.starting_bid),
+          }
+        : undefined,
       correctionNote: result.report || undefined,
       imageUrls: lot.image_urls || [],
       rowId: lot.id,
-      correctedField: "title",
+      correctedField: titleChanged && otherChanged ? "both" : titleChanged ? "title" : "specifics",
     });
 
     toast({ title: "Corrections saved", description: `Updated: ${changed.join(", ")}` });
