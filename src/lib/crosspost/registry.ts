@@ -27,7 +27,7 @@ export const PLATFORM_ADAPTERS: PlatformAdapter[] = [
     formatPrompt: `You are an expert eBay seller. Reformat this item listing for eBay.
 STRICT RULES:
 - title: EXACTLY 80 characters or fewer (count every character). Cassini keyword-optimized: Brand + Item Type + Key Attributes. No filler words.
-- description: 150+ words. Structured: opening hook, specifications, condition report, what is included, shipping note.
+- description: max 7 sentences, plain and factual. Cover: what it is, key specifics, condition report, what is included. No opening hook, no marketing language, no fancy/subjective adjectives. Only research-confirmed details — never invent specs or history.
 - price: USD decimal based on sold comps.
 - categoryId: eBay leaf category numeric ID (most specific possible, never a parent).
 - category: human-readable name matching categoryId.
@@ -47,7 +47,7 @@ ALWAYS return valid JSON only, no markdown:
     formatPrompt: `You are an expert auction catalog writer for LiveAuctioneers.
 STRICT RULES:
 - title: max 100 characters. SEO keyword-rich: Maker + Item Type + Material + Era/Style. Count every character.
-- description: 6-10+ sentences. Professional auction house style. Include: precise identification, physical details, historical context, expert observations, detailed condition report.
+- description: max 7 sentences, factual catalog style. Cover: precise identification, physical details, condition report. No historical context or expert commentary unless directly confirmed by research — never invent it. No fancy/subjective adjectives except a plain design/pattern name when visible.
 - lowEst: conservative auction estimate in USD (whole number).
 - highEst: optimistic estimate, typically 2-4x lowEst (whole number).
 - startPrice: always 5.
@@ -69,7 +69,7 @@ ALWAYS return valid JSON only, no markdown:
     formatPrompt: `You are an expert auction catalog writer for Denver Online Auctions.
 STRICT RULES:
 - title: max 100 characters. SEO + GEO optimized for Colorado market. Brand/Maker + Item Type + Material + Era. No filler words.
-- description: 5-8+ sentences. Professional catalog style. Include: precise ID, physical details, historical context, expert observations, detailed condition report.
+- description: max 7 sentences, factual catalog style. Cover: precise ID, physical details, condition report. No historical context or expert commentary unless directly confirmed by research — never invent it. No fancy/subjective adjectives except a plain design/pattern name when visible.
 - startingBid: conservative whole number USD ($5-$25 generates most bidding activity).
 ALWAYS return valid JSON only, no markdown:
 { "title": string, "description": string, "startingBid": number }`,
@@ -103,7 +103,7 @@ ALWAYS return valid JSON only, no markdown:
     formatPrompt: `You are an expert Poshmark seller. Reformat this item listing for Poshmark.
 STRICT RULES:
 - title: max 80 characters. Brand name first (if known). Include key item details and condition signal.
-- description: style-forward and engaging tone. Include brand, size, material, measurements if available, condition details, any flaws. Mention "bundle discounts available."
+- description: max 6 sentences, plain and factual — no fancy/subjective adjectives. Include brand, labeled size, material, condition details, any flaws. Mention "bundle discounts available."
 - price: USD whole number. Poshmark buyers pay premium — price 10-20% above Mercari equivalents.
 - brand: extract from item details, use "No Brand" if unknown.
 - size: clothing size (XS/S/M/L/XL/XXL/etc.) or "OS" for one-size non-clothing items.
@@ -123,7 +123,7 @@ ALWAYS return valid JSON only, no markdown:
     formatPrompt: `You are an expert Etsy seller specializing in vintage, handmade, and unique items. Reformat this item listing for Etsy.
 STRICT RULES:
 - title: max 140 characters. SEO keyword-rich. Include material, style, era (e.g., "Vintage 1970s", "Mid Century"), and exact search terms buyers use.
-- description: detailed and keyword-rich, minimum 100 words. Cover: what it is, dimensions, materials, era/style, condition report, what is included, care instructions if relevant. Write naturally for both buyers and Etsy search.
+- description: max 7 sentences, plain and factual — no fancy/subjective adjectives. Cover: what it is, materials, era/style, condition report, what is included, care instructions if relevant. Only research-confirmed details — never invent materials or history.
 - price: USD decimal (e.g., 45.00). Etsy buyers expect premium pricing for unique items.
 - tags: EXACTLY 13 tags as a JSON array. Single words or short phrases (max 20 chars each). Focus on searchable terms, materials, styles, eras. No # symbol, no commas within a tag.
 - category: Etsy category path (e.g., "Vintage > Clothing > Women's Clothing > Tops & Blouses").
