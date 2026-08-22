@@ -650,6 +650,32 @@ function clampSpecifics(
 
 /* ──────────── Pre-publish QA agent ──────────── */
 
+// Deterministic backstop matching enrich-ebay-batch's rule: a measurement-type
+// specific is only kept if it was already on the row or its value literally
+// appears in the title/description. Prompt-only controls can be ignored by the
+// model, so this is the last line of defense right before publish.
+const MEASUREMENT_KEY_PATTERN = /^(item\s*)?(length|width|height|depth|weight|capacity|dimensions?)$/i;
+
+function sanitizeMeasurementSpecifics(
+  specifics: Record<string, string>,
+  row: EbayRow
+): Record<string, string> {
+  const haystack = `${row.title || ""} ${row.description || ""}`.toLowerCase();
+  const existing = row.item_specifics ?? {};
+  const cleaned: Record<string, string> = {};
+  for (const [key, value] of Object.entries(specifics)) {
+    if (MEASUREMENT_KEY_PATTERN.test(key.trim())) {
+      const existingValue = existing[key];
+      const valueInText = !!value && haystack.includes(String(value).toLowerCase());
+      if (!existingValue && !valueInText) {
+        continue; // unverified measurement guess — drop it
+      }
+    }
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
 async function runPrePublishQA(
   row: EbayRow,
   categoryId: string,
@@ -685,6 +711,7 @@ Required Specifics Missing Values: ${missingAspects.length > 0 ? missingAspects.
 RULES:
 1. CATEGORY: eBay requires a LEAF (terminal) category — broad parent names like "Coins: US", "Stamps", "Electronics", "Clothing", "Jewelry" are NOT valid leaf categories and will cause a publish failure. If the category name sounds like a broad group (a grouping of types) rather than a specific item type, set categoryOk=false and describe the specific item in 4-6 words so the system can resolve the correct leaf category. Only set categoryOk=false if you are confident the category is wrong — a specific type name like "Half Dollars" or "Lamps & Shades" is fine.
 2. ITEM SPECIFICS: For missing required specifics, fill only values you can confidently determine from the title, description, or images. Omit anything uncertain.
+3. MEASUREMENT RULE (HARD): Never guess or estimate measurement-type specifics (Item Length/Width/Height/Depth, Weight, Capacity, Dimensions) from photos. Only fill them if an explicit value is already present in the title or description — otherwise omit them entirely. A garment/shoe/ring size read from a label is not a measurement and is fine.
 
 Return ONLY valid JSON, no markdown:
 {
@@ -732,13 +759,13 @@ Return ONLY valid JSON, no markdown:
       return {
         correctedCategoryId: corrected?.id,
         correctedCategoryName: corrected?.name,
-        filledSpecifics: qa.filledSpecifics ?? {},
+        filledSpecifics: sanitizeMeasurementSpecifics(qa.filledSpecifics ?? {}, row),
         qaLog: qa.reasoning ?? "Category overridden by QA agent",
       };
     }
 
     return {
-      filledSpecifics: qa.filledSpecifics ?? {},
+      filledSpecifics: sanitizeMeasurementSpecifics(qa.filledSpecifics ?? {}, row),
       qaLog: qa.reasoning ?? "QA passed",
     };
   } catch (e) {

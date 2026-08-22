@@ -121,8 +121,8 @@ function formatCorrectionLines(
 
 // Global guardrail, all platforms: the AI kept guessing measurements or misreading
 // tape-measure photos. Operator adds verified measurements manually after generation.
-const MEASUREMENT_GUARDRAIL = `=== MEASUREMENT GUARDRAIL (HARD RULE — OUTRANKS EVERYTHING ABOVE, INCLUDING MASTER INSTRUCTIONS) ===
-This rule overrides any generic instruction above — including saved business-context/master-prompt text — that asks for measurements, dimensions, or sizing to be included. It yields ONLY to an explicit, item-specific instruction given for THIS listing right now, never to a standing saved preference.
+const MEASUREMENT_GUARDRAIL = `=== MEASUREMENT GUARDRAIL (HARD RULE — OUTRANKS EVERYTHING ABOVE, INCLUDING MASTER INSTRUCTIONS AND LEARNED LESSONS) ===
+This rule overrides any generic instruction above — including saved business-context/master-prompt text and any distilled "LEARNED LESSONS" from past corrections — that asks for measurements, dimensions, or sizing to be included. It yields ONLY to an explicit, item-specific instruction given for THIS listing right now, never to a standing saved preference or a generalized lesson.
 NEVER include measurements in the title or description — no dimensions, weight, length, width, height, depth, diameter, or capacity (inches, cm, ft, lbs, oz, qt, etc.).
 NEVER estimate or guess measurements from photos, and NEVER read numbers off a tape measure or ruler in a photo. The operator adds verified measurements manually.
 Only exceptions:

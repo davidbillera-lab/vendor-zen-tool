@@ -110,8 +110,8 @@ serve(async (req) => {
       // Global measurement guardrail (all platforms): the operator adds verified
       // measurements manually — the auditor must neither add nor remove them.
       const measurementRule = `
-MEASUREMENT RULE (HARD — overrides BUSINESS CONTEXT above if it conflicts):
-- Do NOT add measurements (dimensions, weight, capacity) to the title or description, and do NOT flag missing measurements as a defect — the operator adds verified measurements manually. A generic saved business-context preference does not override this; only an explicit per-listing instruction can.
+MEASUREMENT RULE (HARD — overrides BUSINESS CONTEXT and LEARNED LESSONS above if either conflicts):
+- Do NOT add measurements (dimensions, weight, capacity) to the title or description, and do NOT flag missing measurements as a defect — the operator adds verified measurements manually. Neither a generic saved business-context preference nor a distilled lesson overrides this; only an explicit per-listing instruction can.
 - NEVER remove or "correct" measurements already present in the listing: they are operator-verified from real measuring, not photo estimates.
 `;
 
