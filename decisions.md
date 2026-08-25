@@ -376,3 +376,17 @@ Deployed directly to Supabase (no merge needed for edge functions, same as the r
 Verified: existing `captureCorrection.test.ts` and `verifyLot.test.ts` suites (14 tests) still pass; `npm run build` and `deno check` clean.
 
 **Deployment note:** `refine-listing` is deployed directly to Supabase (no merge needed, same as the rest of this session's edge function work). `DenverLotEditor.tsx` and `CreateListing.tsx` are frontend-only fixes on `feat/measurement-guardrail` — this file isn't cleanly isolatable onto `main` the way `registry.ts` was (it has ~99 lines of unrelated DOA-feature diff vs `main`, unlike registry.ts which was identical), so it ships wherever this branch is actually being run rather than through the same main-merge path used for the crosspost tightening.
+
+---
+
+## 2026-08-24 — Fixed the two ebay-reconcile findings from the first CodexQC pass — one was live-exploitable today, not just at multi-tenant scale
+
+**Context:** Follow-up on the open item flagged when closing out the measurement-guardrail session. Asked whether it could become critical at multi-tenant scale — checked the actual deployed config first rather than answering from memory.
+
+**Correction to the earlier framing:** the JWT issue is NOT a "becomes critical at scale" risk — it was already live-exploitable against JSG's own eBay account. Confirmed via `list_edge_functions`: `ebay-reconcile` is deployed with `verify_jwt: false`, meaning Supabase's platform gateway does zero signature checking — the function's own code was the *only* authentication, and it did `JSON.parse(atob(jwt.split('.')[1])).sub` with no signature verification at all. Anyone who found the function URL could construct a fake three-part token, set `sub` to any user id, and the function would hand back that user's real stored eBay `refresh_token`. Single-tenant today means the one account at risk was JSG's own — not a future problem.
+
+**Fixed:** `getUserRefreshToken()` now calls `supabase.auth.getUser(jwt)` against an anon client to verify the token's signature, matching the pattern already used correctly everywhere else in this codebase (ai-assistant, enrich-ebay-batch, generate-listing, etc.) — this function was the one place it had been skipped.
+
+**Second finding — genuinely scale-dependent, fixed anyway:** the `ebay_batch_rows` query/update trusted a caller-supplied `batch_id` with no ownership check, and had no scoping at all when `batch_id` was omitted (read/marked-published across ALL users' rows). Harmless with one tenant, would have let any authenticated user act on another tenant's rows once a second tenant existed. Fixed by scoping both the select and the update to `created_by = <verified user id>` (column already existed, no migration needed); `batch_id` is now an additional filter within the caller's own rows rather than a trusted lookup key.
+
+Type-checked clean, deployed directly to Supabase production (same pattern as the rest of this work — no merge to main needed for an edge function).

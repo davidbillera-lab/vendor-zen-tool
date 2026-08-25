@@ -40,20 +40,27 @@ function normalizeTitle(title: string): string {
 async function getUserRefreshToken(authHeader: string | null): Promise<{ userId: string; refreshToken: string } | null> {
   if (!authHeader?.startsWith("Bearer ")) return null;
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseUrl || !serviceRoleKey) return null;
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) return null;
   try {
     const jwt = authHeader.slice(7);
-    const userId = JSON.parse(atob(jwt.split(".")[1])).sub as string;
-    if (!userId) return null;
+    // Verify the token against Supabase Auth — this function is deployed with
+    // verify_jwt=false, so this call IS the authentication. An unverified atob()
+    // decode of the payload (the prior code) lets anyone forge a `sub` claim and
+    // pull back a stranger's stored eBay refresh token; getUser() checks the
+    // signature and rejects anything that isn't a real, live session.
+    const anon = createClient(supabaseUrl, anonKey);
+    const { data: { user }, error } = await anon.auth.getUser(jwt);
+    if (error || !user) return null;
     const sb = createClient(supabaseUrl, serviceRoleKey);
     const { data } = await sb
       .from("user_ebay_credentials")
       .select("refresh_token")
-      .eq("user_id", userId)
+      .eq("user_id", user.id)
       .maybeSingle();
     if (!data?.refresh_token) return null;
-    return { userId, refreshToken: data.refresh_token };
+    return { userId: user.id, refreshToken: data.refresh_token };
   } catch {
     return null;
   }
@@ -170,9 +177,14 @@ Deno.serve(async (req: Request) => {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const sb = createClient(supabaseUrl, serviceRoleKey);
 
+    // Scoped to the caller's own rows — batch_id is caller-supplied and must
+    // never be trusted as an ownership check on its own (single-tenant today,
+    // but this is exactly the query a second tenant would use to read or mark
+    // another tenant's rows "published").
     let query = sb
       .from("ebay_batch_rows")
       .select("id, batch_id, lot_number, title, status")
+      .eq("created_by", creds.userId)
       .neq("status", "published");
     if (batchId) query = query.eq("batch_id", batchId);
 
@@ -202,7 +214,10 @@ Deno.serve(async (req: Request) => {
       // Chunked so a large backlog doesn't exceed URL/statement limits.
       for (let i = 0; i < toMark.length; i += 100) {
         const ids = toMark.slice(i, i + 100).map(t => t.id);
-        const { error } = await sb.from("ebay_batch_rows").update({ status: "published" }).in("id", ids);
+        const { error } = await sb.from("ebay_batch_rows")
+          .update({ status: "published" })
+          .in("id", ids)
+          .eq("created_by", creds.userId); // defense in depth — ids already came from the scoped select above
         if (error) throw new Error(`Failed marking rows published: ${error.message}`);
         marked += ids.length;
       }
