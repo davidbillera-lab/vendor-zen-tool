@@ -1516,8 +1516,13 @@ async function clickEsNext(page) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function run() {
-  if (!DOA_EMAIL || !DOA_PASSWORD || !DOA_URL) {
-    throw new Error('DOA_EMAIL, DOA_PASSWORD, and DOA_URL are required');
+  if (!DOA_URL) {
+    throw new Error('DOA_URL is required');
+  }
+  // DOA login runs ONLY for a legacy admin (EditAuction) URL -- see Phase 1. The
+  // public grid needs no account, so don't demand a password nothing will use.
+  if (/EditAuction/i.test(DOA_URL) && (!DOA_EMAIL || !DOA_PASSWORD)) {
+    throw new Error('DOA_EMAIL and DOA_PASSWORD are required for a legacy admin (EditAuction) DOA_URL');
   }
   if (!ES_URL) {
     throw new Error('ESTATESALES_URL is required');

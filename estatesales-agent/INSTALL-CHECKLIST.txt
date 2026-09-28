@@ -1,0 +1,97 @@
+===============================================================
+  EstateSales Upload Agent -- Install Checklist (for David)
+===============================================================
+
+Use this when you install the agent on a colleague's PC.
+SETUP-GUIDE.txt is THEIR guide for everyday use. This one is YOURS.
+Plan on about 20 minutes per PC.
+
+
+BEFORE YOU GO  (on your own PC)
+-------------------------------
+[ ] 1. Build a fresh zip. In
+         C:\Users\david\vzt-es-dist\estatesales-agent
+       double-click MAKE-DISTRIBUTION-ZIP.bat. The zip lands on your
+       Desktop as estatesales-agent-YYYYMMDD.zip. It refuses to build
+       if your login file or Chrome profile would end up inside.
+[ ] 2. NEW zip only: test it on your own PC once before anyone else
+       gets it. Unzip to a scratch folder, run SETUP.bat, then
+       SIGN-IN-ONCE.bat, then do PROVE IT WORKS below. If it fails
+       on your PC it will fail on theirs.
+[ ] 3. Put the zip on a USB stick, or email it to them.
+[ ] 4. Know which estatesales.net account they will post sales under,
+       and make sure THEY can type its password. You shouldn't need it.
+
+
+AT THEIR PC
+-----------
+[ ] 1. Windows PC? (Mac is not supported.)
+[ ] 2. Google Chrome installed? If not: google.com/chrome
+       (Edge will not work -- the agent drives the real Chrome.)
+[ ] 3. Node.js installed? If not: nodejs.org -> the LTS button.
+       Click through with all the defaults.
+[ ] 4. Unzip to   C:\estatesales-agent
+       NOT Downloads, Desktop or Documents -- those are often synced
+       to OneDrive, and the agent's saved sign-in must not sync.
+[ ] 5. Double-click SETUP.bat.
+       - "Windows protected your PC"? Click More info -> Run anyway.
+         Windows says that about any .bat file that came in a zip.
+       - "Node.js is not installed" right after you installed it?
+         Restart the PC and run SETUP.bat again.
+       - Done when Node.js, Google Chrome and Dependencies all say [OK].
+[ ] 6. Notepad opens their login file. Have THEM type their
+       estatesales.net email and password on those two lines.
+       Leave the two DOA lines blank -- the agent reads the public
+       DOA page and never logs into DOA. Leave everything else alone.
+       Save, close Notepad.
+[ ] 7. Double-click SIGN-IN-ONCE.bat. Chrome opens on estatesales.net.
+       Have them sign in by hand and TICK "Remember Me" -- without it
+       they get signed out every run. The window closes by itself
+       once they're in.
+       "Password was incorrect" but you know it's right? That's the
+       site's bot check on a brand-new profile. Wait a minute, run
+       SIGN-IN-ONCE.bat again.
+[ ] 8. Desktop shortcuts. Right-click RUN-ESTATESALES-AGENT.bat ->
+       Show more options -> Send to -> Desktop (create shortcut).
+       Same for RUN-CAPTIONS-ONLY.bat.
+       Shortcuts, NOT copies -- a copied .bat can't find the agent.
+
+
+PROVE IT WORKS  (5 minutes -- do not skip)
+------------------------------------------
+[ ] 1. On estatesales.net, start a throwaway test sale and go to the
+       wizard's Pictures step. Copy the address bar.
+[ ] 2. Open any live DOA auction as a visitor -- the grid of lots.
+       Copy the address bar (denveronlineauctions.com/auction/...).
+[ ] 3. Double-click the RUN-ESTATESALES-AGENT shortcut. Paste both links.
+         Start at lot #:    press ENTER
+         Photos to upload:  type 2
+[ ] 4. Watch: Chrome opens, 2 photos upload, each gets its lot title as
+       the description, and the window ends with
+       "Agent finished successfully."
+[ ] 5. Delete the test sale on estatesales.net.
+
+If step 4 fails: photograph the black window, copy the newest file in
+the screenshots folder, and bring both back. Don't debug on their PC.
+
+
+BEFORE YOU LEAVE
+----------------
+[ ] Test run passed, and the test sale is deleted.
+[ ] Two shortcuts on their desktop.
+[ ] You did NOT copy your own login file or .chrome-profile folder onto
+    their PC. The zip can't contain them; a USB stick can.
+[ ] Walk them through THE RULES in SETUP-GUIDE.txt. The big three:
+      - ONE run per sale, into an EMPTY Pictures step.
+      - Never run the same auction into the same sale twice. More lots
+        added on DOA later? Run again with "Start at lot #".
+      - Photos up but descriptions missing? RUN-CAPTIONS-ONLY.
+[ ] They know: if it breaks, send you the window text + newest screenshot.
+
+
+UPDATING A PC LATER
+-------------------
+Build a new zip (BEFORE YOU GO, step 1) and test it on your PC (step 2).
+On their PC, unzip it over C:\estatesales-agent and say Yes to replace.
+Double-click SETUP.bat once. Their login file and saved sign-in are
+kept -- they don't sign in again.

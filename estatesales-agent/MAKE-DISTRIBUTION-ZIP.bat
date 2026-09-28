@@ -39,7 +39,8 @@ robocopy "%AGENT_DIR%" "%STAGE%" /E /NFL /NDL /NJH /NJS /NP ^
   /XF .estatesales-test.env .env es-session.json es-cookies.json ^
       *.log *.out *.zip *.lnk *.local ^
       LOGIN-DIAGNOSIS.md probe-editor-dom.mjs probe-editor-dialog.mjs ^
-      capture-session.js convert-cookies.js verify-session.js
+      capture-session.js convert-cookies.js verify-session.js ^
+      runAgent.js probe-doa-login.mjs
 if errorlevel 8 (
     echo  ERROR: copying files failed ^(robocopy exit %ERRORLEVEL%^).
     rmdir /s /q "%STAGE_ROOT%" >nul 2>&1

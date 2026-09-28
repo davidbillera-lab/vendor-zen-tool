@@ -70,7 +70,7 @@ if (!process.env.JOB_ID) {
 
 // SUPABASE_* are NOT required in test mode — the ledger is disabled, so the
 // agent never reads/writes Supabase (supabase client is null without them).
-const required = ['DOA_EMAIL', 'DOA_PASSWORD', 'DOA_URL', 'ESTATESALES_URL'];
+const required = ['DOA_URL', 'ESTATESALES_URL'];
 const missing  = required.filter((k) => !process.env[k]);
 if (missing.length) {
   console.error(`[test-local] ERROR: Missing required env vars: ${missing.join(', ')}`);
