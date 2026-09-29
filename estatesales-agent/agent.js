@@ -404,15 +404,24 @@ async function findFirst(page, selectors, timeout = 5_000) {
  * /sign-in while holding a session is how a site offering account-switching
  * logs you out. The impatient check destroyed the very cookie it should reuse.
  *
- * Positive markers only ("+ UPLOAD", the account nav). Absence of a wall is not
- * proof of a session, because a still-rendering shell has no wall either.
- * A hard redirect onto /sign-in is treated as definitive: no session.
+ * Positive markers only (the wizard's UPLOAD button, the account nav). Absence
+ * of a wall is not proof of a session, because a still-rendering shell has no
+ * wall either. A hard redirect onto /sign-in is treated as definitive: no session.
+ *
+ * The UPLOAD button was matched on literal text "+ UPLOAD" until 2026-08-25,
+ * when EstateSales.net swapped the leading "+" for an icon-font ligature
+ * ("add") — the button now renders as "add UPLOAD" with no "+" character at
+ * all, so the old check went silently, permanently false. A genuinely live
+ * session then took the redundant /sign-in detour below, which redirected
+ * straight to the dashboard (no login form to find) and the run died on
+ * "Could not find EstateSales.net email input." Match by accessible role +
+ * name instead of a hand-copied icon glyph, which is what actually broke.
  */
 async function waitForEsAuth(page, ms = 20_000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     const authed =
-      await page.getByText(/\+\s*UPLOAD/i).first().isVisible().catch(() => false) ||
+      await page.getByRole('button', { name: /upload/i }).first().isVisible().catch(() => false) ||
       await page.getByText(/account home/i).first().isVisible().catch(() => false);
     if (authed) return true;
 
