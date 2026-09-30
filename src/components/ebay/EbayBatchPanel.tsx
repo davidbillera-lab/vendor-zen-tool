@@ -37,6 +37,7 @@ import { DraggableImageGrid } from "../DraggableImageGrid";
 import { AIGenerateButton } from "../AIGenerateButton";
 import { EbayListingDrawer, type DrawerEbayRow } from "@/components/ebay/EbayListingDrawer";
 import { captureCorrection } from "@/lib/hermes/captureCorrection";
+import { parseMissingSpecifics, withBlankSpecifics } from "@/lib/ebay-missing-specifics";
 
 interface EbayRow {
   id: string;
@@ -1428,6 +1429,11 @@ export function EbayBatchPanel({
       }
 
       const { succeeded, failed, results } = data;
+      // Accumulate every local change and apply it once at the end: separate
+      // onRowsChange(rows.map(...)) calls all start from the same pre-push `rows`,
+      // so the failure update would silently revert rows just marked published —
+      // and the next Push would list them on eBay a second time.
+      let nextRows = rows;
       if (succeeded > 0) {
         const succeededIds = new Set<string>(results.filter((r: any) => r.success).map((r: any) => r.id));
         const publishedIds = [...succeededIds];
@@ -1449,7 +1455,7 @@ export function EbayBatchPanel({
           });
         }
 
-        onRowsChange(rows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r));
+        nextRows = nextRows.map(r => succeededIds.has(r.id) ? { ...r, status: "published" } : r);
         setHasPublished(true);
         setPublishedCount(succeeded);
         setShowRemovePublishedDialog(true);
@@ -1461,14 +1467,12 @@ export function EbayBatchPanel({
         const newErrors: Record<string, string> = {};
         for (const result of results.filter((r: any) => !r.success)) {
           const err = result.error || "";
-          const match = err.match(/item\s+specific[s]?\s+["']?([^"'.]+?)["']?\s+(is\s+missing|required)/i)
-                     || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
-          if (match && result.id) {
-            const missingSpec = match[1].trim();
-            onRowsChange(rows.map(r => r.id === result.id
-              ? { ...r, status: "error", item_specifics: { ...r.item_specifics, [missingSpec]: "" } }
+          const missing = parseMissingSpecifics(err);
+          if (missing.length > 0 && result.id) {
+            nextRows = nextRows.map(r => r.id === result.id
+              ? { ...r, status: "error", item_specifics: withBlankSpecifics(r.item_specifics, missing) }
               : r
-            ));
+            );
           }
           if (result.id) newErrors[result.id] = err;
         }
@@ -1481,6 +1485,7 @@ export function EbayBatchPanel({
       } else {
         toast({ title: "Pushed to eBay!", description: `${succeeded} listing(s) are now in your Seller Hub drafts.` });
       }
+      if (nextRows !== rows) onRowsChange(nextRows);
     } catch (e) {
       toast({ title: "Push failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
     } finally {
@@ -1525,11 +1530,9 @@ export function EbayBatchPanel({
         if (editingRow?.id === row.id) setEditingRow(null);
       } else {
         const err = results?.[0]?.error || "Unknown";
-        const match = err.match(/item\s+specific[s]?\s+["']?([^"'.]+?)["']?\s+(is\s+missing|required)/i)
-                   || err.match(/Required[:\s]+([A-Za-z][^.]+?)(?:\.|$)/i);
-        if (match) {
-          const missingSpec = match[1].trim();
-          const updated = { ...row, item_specifics: { ...row.item_specifics, [missingSpec]: "" } };
+        const missing = parseMissingSpecifics(err);
+        if (missing.length > 0) {
+          const updated = { ...row, item_specifics: withBlankSpecifics(row.item_specifics, missing) };
           onRowsChange(rows.map(r => r.id === row.id ? updated : r));
           if (editingRow?.id === row.id) setEditingRow(updated);
         }
@@ -2636,10 +2639,22 @@ export function EbayBatchPanel({
             .from("ebay_batch_rows")
             .update({ item_specifics: specifics })
             .eq("id", rowId);
+          // Without this the table (and any later bulk Push) keeps sending the old specifics.
+          onRowsChange(rows.map(r => r.id === rowId ? { ...r, item_specifics: specifics } : r));
         }}
         onPublish={async (rowId) => {
           const row = rows.find(r => r.id === rowId);
-          if (row) await handleRetrySingleRow(row);
+          if (!row) return;
+          // The drawer saves then publishes in the same tick, so `rows` is still the
+          // pre-save copy. Read the saved specifics back or the push sends stale ones.
+          const { data: saved } = await supabase
+            .from("ebay_batch_rows")
+            .select("item_specifics")
+            .eq("id", rowId)
+            .maybeSingle();
+          await handleRetrySingleRow(saved?.item_specifics
+            ? { ...row, item_specifics: saved.item_specifics as Record<string, string> }
+            : row);
         }}
       />
     </>
