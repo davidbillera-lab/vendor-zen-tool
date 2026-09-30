@@ -1410,7 +1410,7 @@ export function EbayBatchPanel({
     const skipNote = alreadyPublished > 0
       ? `\n\n${alreadyPublished} already-published listing(s) will be SKIPPED to avoid duplicates.`
       : "";
-    if (!confirm(`Push ${pushableRows.length} listing(s) as drafts to your eBay Seller Hub?${skipNote}`)) return;
+    if (!confirm(`Publish ${pushableRows.length} listing(s) LIVE on eBay? They go on sale immediately (these are not drafts).${skipNote}`)) return;
 
     setPublishing(true);
     try {
@@ -1483,7 +1483,7 @@ export function EbayBatchPanel({
           variant: "destructive",
         });
       } else {
-        toast({ title: "Pushed to eBay!", description: `${succeeded} listing(s) are now in your Seller Hub drafts.` });
+        toast({ title: "Pushed to eBay!", description: `${succeeded} listing(s) are now live on eBay.` });
       }
       if (nextRows !== rows) onRowsChange(nextRows);
     } catch (e) {
@@ -1526,7 +1526,7 @@ export function EbayBatchPanel({
         onRowsChange(rows.filter(r => r.id !== row.id));
         setRowErrors(prev => { const next = { ...prev }; delete next[row.id]; return next; });
         setSpecFixes(prev => { const next = { ...prev }; delete next[row.id]; return next; });
-        toast({ title: "Pushed!", description: "Listing is now in your Seller Hub drafts." });
+        toast({ title: "Pushed!", description: "Listing is now live on eBay." });
         if (editingRow?.id === row.id) setEditingRow(null);
       } else {
         const err = results?.[0]?.error || "Unknown";
@@ -2635,10 +2635,13 @@ export function EbayBatchPanel({
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
         onSaveSpecifics={async (rowId, specifics) => {
-          await supabase
+          const { error } = await supabase
             .from("ebay_batch_rows")
             .update({ item_specifics: specifics })
             .eq("id", rowId);
+          // Throwing makes the drawer abort the publish and show its error toast —
+          // specifics that did not save must never go to eBay.
+          if (error) throw error;
           // Without this the table (and any later bulk Push) keeps sending the old specifics.
           onRowsChange(rows.map(r => r.id === rowId ? { ...r, item_specifics: specifics } : r));
         }}
@@ -2647,14 +2650,14 @@ export function EbayBatchPanel({
           if (!row) return;
           // The drawer saves then publishes in the same tick, so `rows` is still the
           // pre-save copy. Read the saved specifics back or the push sends stale ones.
-          const { data: saved } = await supabase
+          const { data: saved, error } = await supabase
             .from("ebay_batch_rows")
             .select("item_specifics")
             .eq("id", rowId)
             .maybeSingle();
-          await handleRetrySingleRow(saved?.item_specifics
-            ? { ...row, item_specifics: saved.item_specifics as Record<string, string> }
-            : row);
+          // No silent fallback to the stale row: if the saved copy can't be read, don't publish.
+          if (error || !saved) throw error ?? new Error(`Lot ${row.lot_number}: could not read back the saved item specifics`);
+          await handleRetrySingleRow({ ...row, item_specifics: (saved.item_specifics ?? {}) as Record<string, string> });
         }}
       />
     </>
