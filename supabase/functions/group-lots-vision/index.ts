@@ -9,6 +9,9 @@ const corsHeaders = {
 // gemini-2.0-flash was shut down by Google on 2026-06-01. gemini-3.5-flash is GA
 // with no announced shutdown (the 2.5 family has an October 2026 cutover).
 const GEMINI_MODEL = 'gemini-3.5-flash';
+// Stay under the 150s edge-function limit so a slow Gemini reply comes back as a
+// retryable error the client can act on, not a gateway 504 with no body.
+const GEMINI_TIMEOUT_MS = 140_000;
 // Pricing per token (gemini-3.5-flash: $1.50/M input, $9.00/M output).
 const INPUT_COST_PER_TOKEN = 0.0000015;
 const OUTPUT_COST_PER_TOKEN = 0.000009;
@@ -84,6 +87,7 @@ serve(async (req) => {
       inlineData: { mimeType: 'image/jpeg', data: b64 },
     }));
 
+    const started = Date.now();
     const geminiBody = {
       contents: [{
         parts: [
@@ -106,6 +110,9 @@ serve(async (req) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(geminiBody),
+        // Gemini's latency swings from ~10s to past 150s on same-size batches
+        // (2026-09-29); without this the gateway kills the call silently.
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
       }
     );
 
@@ -134,6 +141,8 @@ serve(async (req) => {
       fallback = true;
     }
 
+    console.log(`[group-lots-vision] ${images.length} images -> ${lots.length} lots in ${Date.now() - started}ms${fallback ? ' (fallback)' : ''}`);
+
     // Fire-and-forget model_costs log (model column is NOT NULL — must be set)
     const inputTokens = geminiData?.usageMetadata?.promptTokenCount ?? images.length * 258;
     const outputTokens = geminiData?.usageMetadata?.candidatesTokenCount ?? 200;
@@ -160,6 +169,13 @@ serve(async (req) => {
     });
 
   } catch (err) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      console.error(`[group-lots-vision] Gemini did not answer within ${GEMINI_TIMEOUT_MS / 1000}s`);
+      return new Response(
+        JSON.stringify({ error: `Gemini took longer than ${GEMINI_TIMEOUT_MS / 1000}s to group these photos. Try again.`, retryable: true }),
+        { status: 504, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
     console.error('group-lots-vision error:', err);
     return new Response(
       JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),

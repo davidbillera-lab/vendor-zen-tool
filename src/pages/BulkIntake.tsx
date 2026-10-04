@@ -279,6 +279,26 @@ export default function BulkIntake() {
   const GROUP_CHUNK_SIZE = 60;
   const GROUP_CHUNK_OVERLAP = 6;
 
+  // Gemini's response time swings wildly on same-size chunks (2026-09-29: 60 photos
+  // in 10s, 31 photos in 82s, three chunks killed at the 150s limit), and a timed-out
+  // chunk usually goes through on retry. Retry the chunk instead of throwing away the
+  // whole intake. Client errors (4xx, e.g. auth or depleted credits) fail immediately.
+  const GROUP_CHUNK_ATTEMPTS = 3;
+  const groupChunkWithRetry = async (images: string[], chunk: number, chunks: number) => {
+    for (let attempt = 1; ; attempt++) {
+      const { data, error } = await supabase.functions.invoke('group-lots-vision', { body: { images } });
+      if (!error) return data;
+      const status = (error as { context?: { status?: number } }).context?.status;
+      const retryable = status === undefined || status >= 500;
+      if (!retryable || attempt >= GROUP_CHUNK_ATTEMPTS) throw error;
+      console.warn(`group-lots-vision chunk ${chunk}/${chunks} failed (attempt ${attempt}, HTTP ${status ?? 'n/a'}), retrying`);
+      toast({
+        title: `Photo grouping is slow, retrying (${attempt + 1} of ${GROUP_CHUNK_ATTEMPTS})`,
+        description: chunks > 1 ? `Chunk ${chunk} of ${chunks}` : undefined,
+      });
+    }
+  };
+
   const handleGroupLots = async () => {
     if (files.length === 0) return;
     setIsGrouping(true);
@@ -302,10 +322,7 @@ export default function BulkIntake() {
 
       for (let c = 0; c < ranges.length; c++) {
         const { start, end } = ranges[c];
-        const { data, error } = await supabase.functions.invoke('group-lots-vision', {
-          body: { images: base64Images.slice(start, end) },
-        });
-        if (error) throw error;
+        const data = await groupChunkWithRetry(base64Images.slice(start, end), c + 1, ranges.length);
         if (!data || !Array.isArray(data.lots)) {
           throw new Error(data?.error || 'Unexpected response from grouping service');
         }
