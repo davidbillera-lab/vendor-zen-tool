@@ -1041,6 +1041,9 @@ async function applyPromotedListings(
 
   for (const [rate, listingIds] of listingsByRate) {
     const campaignName = `JSG Auto-Promote ${rate}%`;
+    // eBay wants one decimal place (2.1 ok, 4.44 rejected) and needs the rate on
+    // EVERY ad, not just the campaign — see bulk_create_ads_by_listing_id below.
+    const bid = Number(rate).toFixed(1);
     let campaignId: string | null = null;
 
     // Find existing running campaign with this name
@@ -1067,7 +1070,7 @@ async function applyPromotedListings(
         headers: { Authorization: `Bearer ${marketingToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           campaignName,
-          fundingStrategy: { bidPercentage: rate, fundingModel: "COST_PER_SALE" },
+          fundingStrategy: { bidPercentage: bid, fundingModel: "COST_PER_SALE" },
           marketplaceId: "EBAY_US",
           startDate: today,
           campaignType: "PROMOTED_LISTINGS_STANDARD",
@@ -1089,7 +1092,9 @@ async function applyPromotedListings(
       {
         method: "POST",
         headers: { Authorization: `Bearer ${marketingToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ requests: listingIds.map(id => ({ listingId: id })) }),
+        // Without bidPercentage per ad eBay rejects every request (35007 "bidPercentage
+        // null"), so since 2026-05-06 no VZT listing was ever actually promoted.
+        body: JSON.stringify({ requests: listingIds.map(id => ({ listingId: id, bidPercentage: bid })) }),
       }
     );
     if (!bulkRes.ok) {
