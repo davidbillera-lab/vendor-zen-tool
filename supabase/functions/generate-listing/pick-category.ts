@@ -12,14 +12,17 @@ export interface CategorySuggestion {
 
 const STOP = new Set(["and", "other", "the", "for", "with", "all", "more", "accessories"]);
 
-const words = (s: string) =>
-  new Set(
-    s.toLowerCase()
-      .replace(/-/g, "") // "die-cast" and "diecast" are the same word
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length > 2 && !STOP.has(w))
-      .map((w) => (w.length > 3 ? w.replace(/s$/, "") : w)), // tanks == tank
-  );
+const words = (s: string) => {
+  const out = new Set<string>();
+  for (const raw of s.toLowerCase().split(/[^a-z0-9-]+/)) {
+    // Keep the joined form AND the parts: "die-cast" must match "diecast", and
+    // "button-down" must match "button down".
+    for (const w of [raw.replace(/-/g, ""), ...raw.split("-")]) {
+      if (w.length > 2 && !STOP.has(w)) out.add(w.length > 3 ? w.replace(/s$/, "") : w); // tanks == tank
+    }
+  }
+  return out;
+};
 
 export function pickCategorySuggestion(
   modelCategoryName: string | null | undefined,
