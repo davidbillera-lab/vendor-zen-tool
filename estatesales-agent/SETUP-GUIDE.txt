@@ -20,7 +20,7 @@ YOU NEED
   - A Windows PC and an internet connection
   - Node.js (free) -- https://nodejs.org  (pick the LTS version)
   - Google Chrome installed (the real one, not Edge)
-  - Your estatesales.net login and your DOA login
+  - Your estatesales.net login (no DOA login needed)
   - The DOA auction already published (visible to the public)
   - A NEW estatesales.net sale started, sitting on the Pictures
     step of the wizard, with NO pictures in it yet
@@ -34,7 +34,7 @@ ONE-TIME SETUP  (about 10 minutes)
   3. When Notepad opens your login file, fill in:
        ESTATESALES_EMAIL=  and  ESTATESALES_PASSWORD=
        DOA_EMAIL=          and  DOA_PASSWORD=
-     Leave every other line alone. Save, close Notepad.
+     Leave the DOA line blank and every other line alone. Save, close Notepad.
   4. Double-click  SIGN-IN-ONCE.bat . A Chrome window opens on
      the estatesales.net sign-in page. Sign in yourself, tick
      "Remember Me" if it isn't ticked. The window closes on its

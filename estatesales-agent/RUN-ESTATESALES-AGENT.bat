@@ -50,7 +50,7 @@ if not exist "%AGENT_DIR%%ENV_NAME%" (
     echo    %AGENT_DIR%%ENV_NAME%
     echo.
     echo  Copy .estatesales-test.env.example to %ENV_NAME%
-    echo  and fill in your DOA + EstateSales logins.
+    echo  and fill in your EstateSales login.
     echo.
     pause
     exit /b 1

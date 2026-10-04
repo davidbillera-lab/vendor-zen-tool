@@ -89,7 +89,7 @@ if exist "%AGENT_DIR%%ENV_NAME%" (
     echo  ACTION NEEDED: Notepad will open your login file.
     echo    - ESTATESALES_EMAIL=  and ESTATESALES_PASSWORD=  : your estatesales.net login
     echo    - DOA_EMAIL=  and DOA_PASSWORD=  : your DOA login ^(the launcher checks
-    echo      these are filled in, even though the agent reads the public DOA page^)
+    echo      nothing here -- leave them blank, the agent reads the public DOA page^)
     echo    - Leave DOA_URL, ESTATESALES_URL and the SUPABASE lines alone --
     echo      the launcher asks for the URLs each run and Supabase is not used locally
     echo    - Save and close Notepad
