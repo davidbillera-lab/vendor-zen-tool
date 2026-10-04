@@ -1040,10 +1040,17 @@ async function applyPromotedListings(
   const messages: string[] = [];
 
   for (const [rate, listingIds] of listingsByRate) {
-    const campaignName = `JSG Auto-Promote ${rate}%`;
-    // eBay wants one decimal place (2.1 ok, 4.44 rejected) and needs the rate on
-    // EVERY ad, not just the campaign — see bulk_create_ads_by_listing_id below.
-    const bid = Number(rate).toFixed(1);
+    // eBay wants one decimal place (2.1 ok, 4.44 rejected) between 2.0 and 100.0,
+    // on the campaign AND on every ad (bulk_create_ads_by_listing_id below).
+    // Normalize once so "2.10" and 2.1 share one campaign.
+    const bidNum = Number(rate);
+    if (!Number.isFinite(bidNum) || bidNum < 2 || bidNum > 100) {
+      console.error(`[ebay-publish] Skipping promotion: invalid ad rate "${rate}" (eBay allows 2.0–100.0)`);
+      messages.push(`Promotion skipped: invalid ad rate "${rate}"`);
+      continue;
+    }
+    const bid = bidNum.toFixed(1);
+    const campaignName = `JSG Auto-Promote ${bid}%`;
     let campaignId: string | null = null;
 
     // Find existing running campaign with this name
@@ -1092,8 +1099,8 @@ async function applyPromotedListings(
       {
         method: "POST",
         headers: { Authorization: `Bearer ${marketingToken}`, "Content-Type": "application/json" },
-        // Without bidPercentage per ad eBay rejects every request (35007 "bidPercentage
-        // null"), so since 2026-05-06 no VZT listing was ever actually promoted.
+        // eBay rejects an ad without its own bidPercentage (35007), even when the
+        // campaign already has one.
         body: JSON.stringify({ requests: listingIds.map(id => ({ listingId: id, bidPercentage: bid })) }),
       }
     );
