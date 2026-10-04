@@ -555,7 +555,7 @@ async function getRequiredAspectsForCategory(categoryId: string, userCreds?: { c
     const { access_token } = await tokenRes.json();
 
     const res = await fetch(
-      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_aspects_for_category?category_id=${categoryId}`,
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${categoryId}`,
       { headers: { Authorization: `Bearer ${access_token}` } }
     );
     if (!res.ok) return [];
@@ -601,7 +601,7 @@ async function getAspectMaxLengths(
     const { access_token } = await tokenRes.json();
 
     const res = await fetch(
-      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_aspects_for_category?category_id=${categoryId}`,
+      `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${categoryId}`,
       { headers: { Authorization: `Bearer ${access_token}` } },
     );
     if (!res.ok) return {};
@@ -798,9 +798,13 @@ async function publishRow(
     const requiredAspects = await getRequiredAspectsForCategory(categoryId, userCreds);
     const qa = await runPrePublishQA(row, categoryId, categoryName, requiredAspects, userCreds);
 
+    // Advisory only. The QA agent is shown the category NUMBER, never its name, so it
+    // cannot judge "too broad": it was moving valid leaves (Locomotives, diecast
+    // Contemporary Manufacture) into Decals, Coca-Cola/Shell advertising, etc.
+    // A genuinely invalid category is still caught by eBay's 87/107 errors and the
+    // Taxonomy retry below.
     if (qa.correctedCategoryId) {
-      console.log(`[ebay-publish] LOT-${row.lot_number}: QA OVERRIDE category ${categoryId} (${categoryName}) → ${qa.correctedCategoryId} (${qa.correctedCategoryName}). Reason: ${qa.qaLog}`);
-      categoryId = qa.correctedCategoryId;
+      console.log(`[ebay-publish] LOT-${row.lot_number}: QA suggested category ${qa.correctedCategoryId} (${qa.correctedCategoryName}) instead of ${categoryId} — NOT applied. Reason: ${qa.qaLog}`);
     } else {
       console.log(`[ebay-publish] LOT-${row.lot_number}: QA OK — ${qa.qaLog}`);
     }
@@ -1272,9 +1276,9 @@ async function publishRowAsDraft(
     const requiredAspects = await getRequiredAspectsForCategory(categoryId, userCreds);
     const qa = await runPrePublishQA(row, categoryId, categoryName, requiredAspects, userCreds);
 
+    // Advisory only — see publishRow for why the QA agent's category call is not trusted.
     if (qa.correctedCategoryId && qa.correctedCategoryId !== categoryId) {
-      console.log(`[ebay-publish/draft] LOT-${row.lot_number}: QA OVERRIDE category ${categoryId} → ${qa.correctedCategoryId}. Reason: ${qa.qaLog}`);
-      categoryId = qa.correctedCategoryId;
+      console.log(`[ebay-publish/draft] LOT-${row.lot_number}: QA suggested category ${qa.correctedCategoryId} instead of ${categoryId} — NOT applied. Reason: ${qa.qaLog}`);
     } else {
       console.log(`[ebay-publish/draft] LOT-${row.lot_number}: QA OK — ${qa.qaLog}`);
     }
