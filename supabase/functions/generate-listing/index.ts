@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { pickCategorySuggestion } from "./pick-category.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -1243,7 +1244,15 @@ serve(async (req) => {
 
                 if (suggestRes.ok) {
                   const suggestData = await suggestRes.json();
-                  const topSuggestion = suggestData.categorySuggestions?.[0];
+                  // Choose among eBay's ranked suggestions using the model's category
+                  // NAME (its numeric ID is often invented) — see pick-category.ts.
+                  const suggestions = suggestData.categorySuggestions ?? [];
+                  const topSuggestion = pickCategorySuggestion(anyListing['category'] as string | undefined, suggestions);
+                  if (topSuggestion && topSuggestion !== suggestions[0]) {
+                    console.log(
+                      `[generate-listing] Category pick: model said "${anyListing['category']}" → eBay suggestion #${suggestions.indexOf(topSuggestion) + 1} ${topSuggestion.category.categoryName} instead of #1 ${suggestions[0].category.categoryName}`
+                    );
+                  }
 
                   if (topSuggestion) {
                     const ebayId = parseInt(topSuggestion.category.categoryId, 10);
