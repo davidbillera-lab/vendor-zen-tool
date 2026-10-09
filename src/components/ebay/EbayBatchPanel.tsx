@@ -628,6 +628,7 @@ export function EbayBatchPanel({
         brand: editingRow.brand,
         mpn: editingRow.mpn,
         custom_sku: editingRow.custom_sku,
+        image_urls: editingRow.image_urls,
       })
       .eq('id', editingRow.id);
     
@@ -2636,6 +2637,17 @@ export function EbayBatchPanel({
             .from("ebay_batch_rows")
             .update({ item_specifics: specifics })
             .eq("id", rowId);
+        }}
+        onSaveImages={async (rowId, urls) => {
+          const { error } = await supabase
+            .from("ebay_batch_rows")
+            .update({ image_urls: urls })
+            .eq("id", rowId);
+          if (error) {
+            toast({ title: "Photo save failed", variant: "destructive" });
+            return;
+          }
+          onRowsChange(rows.map(r => r.id === rowId ? { ...r, image_urls: urls } : r));
         }}
         onPublish={async (rowId) => {
           const row = rows.find(r => r.id === rowId);

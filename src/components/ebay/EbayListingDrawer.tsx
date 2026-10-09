@@ -18,6 +18,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { AlertCircle, CheckCircle2, ExternalLink, Image as ImageIcon } from "lucide-react";
 import { toast } from "sonner";
+import { persistLocalImageUrls } from "@/lib/api/listings";
 
 import {
   Sheet,
@@ -91,7 +92,7 @@ export interface EbayListingDrawerProps {
   /** Called when operator saves edited specifics. Parent should persist to DB. */
   onSaveSpecifics?: (rowId: string, specifics: Record<string, string>) => Promise<void>;
   /** Called when operator reorders/removes images. Parent should persist to DB. */
-  onSaveImages?: (rowId: string, urls: string[]) => void;
+  onSaveImages?: (rowId: string, urls: string[]) => void | Promise<void>;
   /** Called when operator clicks Publish. Parent triggers existing publish flow. */
   onPublish?: (rowId: string) => Promise<void>;
 }
@@ -153,10 +154,17 @@ function PhotoStrip({
     setEditorOpen(true);
   }
 
-  function handleEditorSave(updated: string[]) {
-    setWorkingImages(updated);
-    onImagesUpdated(updated);
-    setEditorOpen(false);
+  async function handleEditorSave(updated: string[]) {
+    try {
+      const persisted = await persistLocalImageUrls(updated);
+      setWorkingImages(persisted);
+      onImagesUpdated(persisted);
+    } catch (e) {
+      console.error('Edited photo upload failed:', e);
+      toast.error('Photo edit not saved — upload failed, original photos kept.');
+    } finally {
+      setEditorOpen(false);
+    }
   }
 
   if (workingImages.length === 0) {
@@ -495,7 +503,7 @@ export function EbayListingDrawer({
       // SF3: persist image reordering/removals only when changed (avoid redundant saves)
       const origImages = row.image_urls ?? [];
       if (JSON.stringify(workingImages) !== JSON.stringify(origImages)) {
-        onSaveImages?.(row.id, workingImages);
+        await onSaveImages?.(row.id, workingImages);
       }
       onOpenChange(false);
     } catch (err) {
@@ -526,7 +534,7 @@ export function EbayListingDrawer({
         // SF3: persist image reordering/removals only when changed (avoid redundant saves)
         const origImages = row.image_urls ?? [];
         if (JSON.stringify(workingImages) !== JSON.stringify(origImages)) {
-          onSaveImages?.(row.id, workingImages);
+          await onSaveImages?.(row.id, workingImages);
         }
       }
       await onPublish(row.id);

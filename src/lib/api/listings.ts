@@ -104,6 +104,8 @@ async function compressImage(file: File, maxWidth = 1024, quality = 0.75): Promi
       
       canvas.width = width;
       canvas.height = height;
+      // JPEG has no alpha: without a fill, background-removed PNGs go black.
+      if (ctx) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height); }
       ctx?.drawImage(img, 0, 0, width, height);
       
       canvas.toBlob(
