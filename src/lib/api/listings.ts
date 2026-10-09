@@ -166,6 +166,20 @@ export async function uploadImage(file: File): Promise<string> {
   return data.publicUrl;
 }
 
+// Photo-editor output (crop / background removal) is a browser-only blob: or
+// data: URL. Anthropic and eBay can't download those (Anthropic 400 "Unable to
+// download the file", eBay 10122 "Invalid Picture URL"), so upload them first.
+export async function persistLocalImageUrls(
+  urls: string[],
+  upload: (file: File) => Promise<string> = uploadImage,
+): Promise<string[]> {
+  return Promise.all(urls.map(async (url, i) => {
+    if (!/^(blob|data):/.test(url)) return url;
+    const blob = await (await fetch(url)).blob();
+    return upload(new File([blob], `edited-${i + 1}.jpg`, { type: blob.type || 'image/jpeg' }));
+  }));
+}
+
 export async function saveListing(listing: {
   platform: Platform;
   status: 'draft' | 'pending' | 'posted' | 'exported';
