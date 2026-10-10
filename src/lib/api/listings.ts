@@ -104,6 +104,8 @@ async function compressImage(file: File, maxWidth = 1024, quality = 0.75): Promi
       
       canvas.width = width;
       canvas.height = height;
+      // JPEG has no alpha: without a fill, background-removed PNGs go black.
+      if (ctx) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height); }
       ctx?.drawImage(img, 0, 0, width, height);
       
       canvas.toBlob(
@@ -164,6 +166,20 @@ export async function uploadImage(file: File): Promise<string> {
     .getPublicUrl(filePath);
 
   return data.publicUrl;
+}
+
+// Photo-editor output (crop / background removal) is a browser-only blob: or
+// data: URL. Anthropic and eBay can't download those (Anthropic 400 "Unable to
+// download the file", eBay 10122 "Invalid Picture URL"), so upload them first.
+export async function persistLocalImageUrls(
+  urls: string[],
+  upload: (file: File) => Promise<string> = uploadImage,
+): Promise<string[]> {
+  return Promise.all(urls.map(async (url, i) => {
+    if (!/^(blob|data):/.test(url)) return url;
+    const blob = await (await fetch(url)).blob();
+    return upload(new File([blob], `edited-${i + 1}.jpg`, { type: blob.type || 'image/jpeg' }));
+  }));
 }
 
 export async function saveListing(listing: {

@@ -2,6 +2,8 @@ import { useState } from "react";
 import { GripVertical, X, Pencil } from "lucide-react";
 import { ImageEditor } from "./ImageEditor";
 import { cn } from "@/lib/utils";
+import { persistLocalImageUrls } from "@/lib/api/listings";
+import { toast } from "@/hooks/use-toast";
 
 interface DraggableImageGridProps {
   images: string[];
@@ -57,13 +59,26 @@ export function DraggableImageGrid({
     setDragOverIndex(null);
   };
 
-  const handleEditorSave = (updatedImages: string[]) => {
-    if (onEditPhoto && editorIndex !== null) {
-      onEditPhoto(editorIndex, updatedImages);
-    } else {
-      onReorder(updatedImages);
+  // Awaited by ImageEditor (its Apply spinner stays up), so the parent's
+  // onReorder closure can't go stale while the upload runs.
+  const handleEditorSave = async (updatedImages: string[]) => {
+    try {
+      const persisted = await persistLocalImageUrls(updatedImages);
+      if (onEditPhoto && editorIndex !== null) {
+        onEditPhoto(editorIndex, persisted);
+      } else {
+        onReorder(persisted);
+      }
+    } catch (e) {
+      console.error('Edited photo upload failed:', e);
+      toast({
+        title: 'Photo edit not saved',
+        description: e instanceof Error ? e.message : 'Upload failed — original photos kept.',
+        variant: 'destructive',
+      });
+    } finally {
+      setEditorIndex(null);
     }
-    setEditorIndex(null);
   };
 
   if (images.length === 0) return null;

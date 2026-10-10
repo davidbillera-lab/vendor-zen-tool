@@ -15,7 +15,7 @@ import { toast } from '@/hooks/use-toast';
 export interface ImageEditorProps {
   images: string[];
   initialIndex?: number;
-  onSave: (updatedImages: string[]) => void;
+  onSave: (updatedImages: string[]) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -134,7 +134,7 @@ export function ImageEditor({ images, initialIndex = 0, onSave, onCancel }: Imag
 
   async function handleApply() {
     setApplying(true);
-    onSave(edits.map(e => e.src));
+    await onSave(edits.map(e => e.src));
     setApplying(false);
     setIsOpen(false);
   }
