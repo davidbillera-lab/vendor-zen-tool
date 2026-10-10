@@ -1,3 +1,7 @@
+NOTE (2026-08): Colleagues start with SETUP-GUIDE.txt + SETUP.bat.
+The day-to-day flow is RUN-DOA-AGENT.bat with a CSV + photo ZIP in
+DROP-HERE. This file describes the older database (Supabase) mode.
+
 ═══════════════════════════════════════════════════════════════
   DOA Listing Agent — Plain English Guide
 ═══════════════════════════════════════════════════════════════

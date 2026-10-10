@@ -1,24 +1,17 @@
 /**
- * verify-session.js
+ * verify-session.js — DEPRECATED (no longer used).
  *
- * Sanity-checks es-session.json BEFORE you paste it into VZT Settings.
- * Loads the captured storageState into a headed browser, navigates to an
- * account-only EstateSales.net page, and reports whether the session is
- * authenticated (stayed on the account page) or dead (bounced to /sign-in).
- *
- * This mirrors the agent's own validity gate in agent.js (~line 689):
- *   if the sale page URL matches /sign-in|/log-in, the session is invalid.
- *
- * USAGE:
- *   node verify-session.js
- *   node verify-session.js https://www.estatesales.net/account/sale-wizard/pictures/4967160
- *
- * The default check URL is the generic account dashboard, which requires login.
+ * The EstateSales.net agent now logs in with native email + password on every
+ * run (set in VZT Settings). The Playwright cookie/storageState session machine
+ * this script supported has been retired. Kept for git history only.
  */
 
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { readFileSync, existsSync } from 'node:fs';
+
+console.error('[DEPRECATED] This script is retired. The EstateSales agent now logs in with email + password set in VZT Settings. No session capture/conversion is needed.');
+process.exit(1);
 
 chromium.use(StealthPlugin());
 

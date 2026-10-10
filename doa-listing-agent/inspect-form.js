@@ -61,17 +61,31 @@ const page    = await context.newPage();
 console.log('⏳  Logging in…');
 await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
 
-// Try each common email selector
+// ID-first, matching SELECTORS.loginEmail in doaAgent.js and the chain in
+// estatesales-agent/agent.js. All three log into DOA — keep them in sync.
+//
+// DO NOT reintroduce input[name="email"] / input[type="email"] here. DOA's
+// login page carries two VISIBLE newsletter signup boxes named "email"
+// (txtEmailNewsletterFooter, txtEmailNewsletter). Those generic selectors used
+// to win, so this script typed the DOA email into the newsletter box and
+// printed "Login submitted" without ever logging in — while being the very
+// tool used to debug broken logins. Confirmed live 2026-08-13 via
+// estatesales-agent/probe-doa-login.mjs.
 const emailField = await firstVisible(page, [
-  'input[name="email"]', 'input[type="email"]', 'input[name="username"]',
-  'input[id*="email"]', 'input[placeholder*="email" i]',
+  '#username',                                  // confirmed 2026-07-17 (Xpert platform)
+  'input[name="ctl00$MainContent$username"]',   // ASP.NET control name
+  'input[name$="$username"]',                   // scoped fallback (login form only)
+  '#MainContent_Email',                         // legacy pre-2026-07 DOA form
 ]);
 if (!emailField) { console.error('❌  Could not find email field on login page'); await browser.close(); process.exit(1); }
 await emailField.fill(DOA_EMAIL);
 
 const passwordField = await firstVisible(page, [
-  'input[name="password"]', 'input[type="password"]',
-  'input[id*="password"]', 'input[placeholder*="password" i]',
+  '#Password',                                  // confirmed 2026-07-17 (Xpert platform)
+  'input[name="ctl00$MainContent$Password"]',   // ASP.NET control name
+  'input[name$="$Password"]',                   // scoped fallback (login form only)
+  '#MainContent_Password',                      // legacy pre-2026-07 DOA form
+  'input[type="password"]',                     // safe: one password input on the login page
 ]);
 if (!passwordField) { console.error('❌  Could not find password field on login page'); await browser.close(); process.exit(1); }
 await passwordField.fill(DOA_PASSWORD);

@@ -3,10 +3,11 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * EstateSales.net Upload Agent
  *
- * Phase 1 — DOA Scrape:
- *   Log into Denver Online Auctions → navigate to the auction admin page
- *   (DOA_URL = EditAuction?id=...) → collect every lot link → visit each lot's
- *   edit page and read: title, description, starting bid, and image URLs.
+ * Phase 1 — DOA Scrape (public pages, no login):
+ *   Load the public auction grid (DOA_URL = /auction/<slug>) and read one lot
+ *   per card: the title from the image alt text, and the card's thumbnail URL
+ *   rewritten to its full-size original. Requires no DOA account and never
+ *   writes to DOA. One photo per lot by design.
  *
  * Phase 2 — EstateSales Upload:
  *   Log into EstateSales.net → navigate to the sale management page (ES_URL)
@@ -15,31 +16,21 @@
  *
  * All credentials and URLs are injected via process.env by runAgent.js.
  *
- * EstateSales.net login supports two modes:
- *   A) storageState (preferred for Google-SSO accounts): inject ES_STORAGE_STATE
- *      containing an exported Playwright session JSON string. The agent reuses
- *      the session without touching the login form.
- *   B) Email/password fallback: ES_EMAIL + ES_PASSWORD (may not work for
- *      Google-SSO-only accounts).
- *
- * One-time session capture (operator runs locally, never commit the output):
- *   node -e "const {chromium}=require('playwright'); (async()=>{const b=await chromium.launch({headless:false}); const c=await b.newContext(); const p=await c.newPage(); await p.goto('https://www.estatesales.net/sign-in'); console.log('Log in via Google in the window, then press Enter here'); process.stdin.once('data', async()=>{ const s=await c.storageState(); require('fs').writeFileSync('es-session.json', JSON.stringify(s)); await b.close(); process.exit(0); });})();"
- * Then paste es-session.json contents into VZT Settings
- * (user_estatesales_credentials.estatesales_storage_state).
- * NEVER commit es-session.json.
+ * EstateSales.net login: native email + password on every run.
+ *   Requires ESTATESALES_EMAIL + ESTATESALES_PASSWORD, injected by runAgent.js
+ *   from the encrypted credentials stored in VZT Settings.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import 'dotenv/config';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import fs from 'fs';
 import https from 'https';
 import http from 'http';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { createClient } from '@supabase/supabase-js';
-
-chromium.use(StealthPlugin());
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -50,11 +41,24 @@ const DOA_URL            = process.env.DOA_URL;
 const ES_EMAIL           = process.env.ESTATESALES_EMAIL;
 const ES_PASSWORD        = process.env.ESTATESALES_PASSWORD;
 const ES_URL             = process.env.ESTATESALES_URL;
-const ES_STORAGE_STATE   = process.env.ES_STORAGE_STATE;
 const SUPABASE_URL       = process.env.SUPABASE_URL;
 const SUPABASE_KEY       = process.env.SUPABASE_SERVICE_KEY;
 
 const IS_CI              = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+
+// The stealth plugin's spoofs (fake plugins, chrome.runtime mock) are a decade
+// of cat-and-mouse and are themselves detectable by modern anti-bot checks —
+// reCAPTCHA v3 on the ES sign-in form masked-rejects logins it scores as bots.
+// Only use stealth where it's load-bearing: headless CI. A headed local run on
+// real Chrome presents a genuine fingerprint that spoofs would only corrupt.
+if (IS_CI) chromium.use(StealthPlugin());
+
+// Persistent local browser profile (gitignored). reCAPTCHA v3 scores are
+// reputation-based — a cookie-less fresh context every run starts at the
+// bottom. Reusing one profile lets the score build across runs.
+// Anchored to this file, not the process CWD — launching from the repo root
+// would otherwise drop a cookie-bearing profile outside the .gitignore rule.
+const CHROME_PROFILE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '.chrome-profile');
 const SCREENSHOTS_DIR    = './screenshots';
 const IMAGES_DIR         = './downloaded-images';
 
@@ -64,6 +68,28 @@ const WAIT_TIMEOUT       = 15_000;
 // Optional cap on how many DOA lots to scrape. Set MAX_LOTS=2 to smoke-test the
 // EstateSales (Phase 2) path without grinding all ~169 lots. 0/unset = no cap.
 const MAX_LOTS           = parseInt(process.env.MAX_LOTS, 10) || 0;
+
+// Optional starting lot number, for topping up a sale that was already uploaded.
+// When lots are added to a DOA auction after an earlier run, set START_LOT to the
+// first NEW lot number and everything below it is skipped, so the photos already
+// on EstateSales are not uploaded a second time.
+//
+// This is the duplicate guard for LOCAL runs specifically: test-local.js sets
+// AGENT_TEST_MODE=true, which disables the estatesales_uploaded_lots ledger, so
+// nothing else remembers what a previous run uploaded. A ledger-backed run
+// (real JOB_ID via runAgent.js) skips duplicates on its own and does not need
+// this. 0/unset = start at the first lot.
+const START_LOT          = parseInt(process.env.START_LOT, 10) || 0;
+
+// Diagnostic: run Phase 1 only and upload nothing. For checking what the DOA
+// scrape actually returns without spending an EstateSales sign-in attempt.
+const SCRAPE_ONLY        = process.env.SCRAPE_ONLY === 'true';
+
+// Caption an upload that already happened: skip Step 1 entirely and only apply
+// descriptions to the pictures already on EstateSales. Local runs have the
+// dedup ledger disabled, so re-running a completed upload would duplicate every
+// photo — this is the way to fix missing captions without that.
+const CAPTION_ONLY       = process.env.CAPTION_ONLY === 'true';
 
 // Stale reservation threshold: a 'reserved' row older than this is LIKELY a dead
 // run rather than a live concurrent one. This is used ONLY to label the skip log
@@ -359,6 +385,66 @@ async function findFirst(page, selectors, timeout = 5_000) {
   return null;
 }
 
+// EstateSales.net is an Angular SPA: it renders the sign-in wall WITHOUT
+// changing the URL, so URL-based auth checks silently pass when unauthenticated.
+// Detect auth state by the DOM instead — a visible password field on a page that
+// should be authenticated means we are still walled.
+// NOTE: must match the same selector family the login fill uses. The password
+// field can sit revealed as type="text" (value visible in plaintext), which a
+// bare input[type="password"] check misses — that miss once turned a rejected
+// login into a false "success" that surfaced later as "+ UPLOAD not found".
+/**
+ * waitForEsAuth(page, ms)
+ *
+ * Decides whether the current EstateSales page is authenticated, patiently.
+ *
+ * A 1.5s look is not enough: the Angular shell renders the sign-in wall FIRST
+ * and restores the stored session a beat later. Checking too early reports a
+ * live session as walled, which then sends the agent to /sign-in — and visiting
+ * /sign-in while holding a session is how a site offering account-switching
+ * logs you out. The impatient check destroyed the very cookie it should reuse.
+ *
+ * Positive markers only (the wizard's UPLOAD button, the account nav). Absence
+ * of a wall is not proof of a session, because a still-rendering shell has no
+ * wall either. A hard redirect onto /sign-in is treated as definitive: no session.
+ *
+ * The UPLOAD button was matched on literal text "+ UPLOAD" until 2026-08-25,
+ * when EstateSales.net swapped the leading "+" for an icon-font ligature
+ * ("add") — the button now renders as "add UPLOAD" with no "+" character at
+ * all, so the old check went silently, permanently false. A genuinely live
+ * session then took the redundant /sign-in detour below, which redirected
+ * straight to the dashboard (no login form to find) and the run died on
+ * "Could not find EstateSales.net email input." Match by accessible role +
+ * name instead of a hand-copied icon glyph, which is what actually broke.
+ */
+async function waitForEsAuth(page, ms = 20_000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const authed =
+      await page.getByRole('button', { name: /upload/i }).first().isVisible().catch(() => false) ||
+      await page.getByText(/account home/i).first().isVisible().catch(() => false);
+    if (authed) return true;
+
+    // The app bounced us onto the sign-in route — settled, and not signed in.
+    if (/\/sign-in/i.test(page.url()) && await onSignInWall(page)) return false;
+
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
+async function onSignInWall(page) {
+  const candidates = page.locator(
+    '#password-input, #password, input[name="password"], input[type="password"], input[placeholder*="password" i]'
+  );
+  const count = await candidates.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    if (await candidates.nth(i).isVisible().catch(() => false)) return true;
+  }
+  // Fallback marker in case the form markup changes: the wall's heading.
+  return await page.getByText(/sign in to estatesales/i).first().isVisible().catch(() => false);
+}
+
 // Per-image download guards. A hung CDN socket or a runaway response would
 // otherwise stall the whole run (no timeout) or fill the disk (no size cap).
 const DOWNLOAD_TIMEOUT_MS = 30_000;          // abort a single image after 30s
@@ -426,193 +512,174 @@ async function downloadImage(url, destPath, redirectsLeft = 5) {
   });
 }
 
-/**
- * Read the TinyMCE editor content from a page.
- * Returns a plain-text/HTML string or '' if not found.
- */
-async function readTinyMceContent(page) {
-  try {
-    const content = await page.evaluate(() => {
-      // Strategy 1: tinymce.get()
-      if (window.tinymce) {
-        const eds = window.tinymce.editors || window.tinymce.get();
-        const ed = Array.isArray(eds) ? eds[0] : eds;
-        if (ed && ed.getContent) return ed.getContent({ format: 'text' });
-      }
-      // Strategy 2: read from the iframe body directly
-      const iframe = document.querySelector(
-        'iframe[id*="EditorDescription"], iframe[id*="editor_description" i], .tox-edit-area iframe, iframe[id*="tinymce"]'
-      );
-      if (iframe) {
-        try {
-          return iframe.contentDocument?.body?.innerText || '';
-        } catch { /* cross-origin — skip */ }
-      }
-      // Strategy 3: hidden textarea that TinyMCE syncs to
-      const ta = document.querySelector(
-        'textarea[name*="description" i], textarea[id*="description" i], textarea[id*="EditorDescription" i]'
-      );
-      if (ta && ta.value) return ta.value;
-      return '';
-    });
-    return (content || '').trim();
-  } catch {
-    return '';
-  }
-}
-
 // ── Phase 1: DOA Scrape ───────────────────────────────────────────────────────
 
 /**
  * scrapeLots(page)
  *
- * Starts at DOA_URL (the first lot's admin edit page, EditAuction?id=NNN),
- * reads each lot's data, then clicks "Save & Edit Next" (#lnkProcess) to
- * advance sequentially until the button is gone (last lot).
+ * Reads the PUBLIC DOA auction grid at DOA_URL (/auction/<slug>) and returns one
+ * lot per grid card: the lot's title and its primary photo at full resolution.
  *
- * Returns: Array of { lot_number, title, description, price, imageUrls[] }
+ * Why the public grid rather than the admin form:
+ *   - No DOA account needed. The old admin walk required a login whose field IDs
+ *     DOA renames periodically; that broke this agent twice (see git b21f3b8).
+ *   - The admin walk advanced by clicking "Save & Edit Next", which re-saved
+ *     every lot of a live auction just to read it. This path never writes to DOA.
+ *   - One page load instead of one per lot.
+ *
+ * Image URLs: the grid serves 300x300 thumbnails named "<id>_thumbnail.jpg".
+ * Dropping the "_thumbnail" suffix returns the 1080x1080 original from the same
+ * CDN path (verified live 2026-08-15). We always upload the original.
+ *
+ * Cards are located by the CDN thumbnail URL shape, not by class name: DOA's
+ * markup churns, but the xpert.b-cdn.net URL pattern has been stable.
+ *
+ * Returns: Array of { lot_number, title, description, price, imageUrls[], source_url }
+ *   description is '' and price is 0 -- the grid does not carry them, and Phase 2
+ *   consumes only title, imageUrls, lot_number and source_url.
  */
 async function scrapeLots(page) {
-  // DOA_URL is the first lot's admin edit page (EditAuction?id=NNN).
-  // We traverse sequentially by clicking "Save & Edit Next" (#lnkProcess)
-  // after reading each lot — mirroring the local DOA agent's workflow exactly.
-  console.log('[agent] Navigating to first DOA lot...');
+  if (/EditAuction/i.test(DOA_URL || '')) {
+    throw new Error(
+      '[agent] DOA_URL is an admin EditAuction link, but this agent reads the public auction grid.\n' +
+      '  Paste the public auction page instead, e.g.\n' +
+      '    https://denveronlineauctions.com/auction/<auction-slug>'
+    );
+  }
+
+  console.log('[agent] Loading DOA auction grid...');
   await page.goto(DOA_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-  await screenshot(page, 'doa-first-lot');
+  // Thumbnails render client-side; wait for at least one before reading the DOM.
+  await page.waitForSelector('img[src*="xpert.b-cdn.net"]', { state: 'attached', timeout: WAIT_TIMEOUT })
+    .catch(() => {});
+  // Wait for the lot ANCHORS too, not just the images. Each lot's dedup key is
+  // its permalink; reading while the links are still attaching yields cards with
+  // no href, which all collapse to the same key and drop the auction to one lot.
+  await page.waitForSelector('a[href*="/lot-"]', { state: 'attached', timeout: WAIT_TIMEOUT })
+    .catch(() => {});
+  await screenshot(page, 'doa-grid');
 
-  const lots = [];
-  let lotIndex = 0;
+  const { cards, noPhoto } = await page.evaluate(() => {
+    const out = [];
+    const noPhoto = [];
+    for (const img of Array.from(document.querySelectorAll('img'))) {
+      const src = img.src || '';
+      const alt = (img.alt || '').trim();
+      // A real lot photo: DOA's CDN, thumbnail variant. Excludes /logos/ art.
+      const isLotPhoto = /xpert\.b-cdn\.net/i.test(src) && /_thumbnail\.[a-z]+(\?|$)/i.test(src);
 
-  while (true) {
-    lotIndex++;
-    const currentUrl = page.url();
-    console.log(`[agent]   Scraping lot ${lotIndex}: ${currentUrl}`);
-
-    try {
-      // Wait for the title field — confirms we're on a lot edit page
-      await page.waitForSelector('#txtTitle, input[name*="Title" i]', {
-        state: 'visible',
-        timeout: WAIT_TIMEOUT,
-      }).catch(() => {});
-
-      // Title
-      const titleEl = await findFirst(page, [
-        '#txtTitle',
-        'input[name="ctl00$MainContent$txtTitle"]',
-        'input[id*="Title" i][type="text"]',
-        'input[placeholder*="title" i]',
-      ]);
-      const title = titleEl ? (await titleEl.inputValue().catch(() => '')).trim() : '';
-
-      // Starting bid / price
-      const bidEl = await findFirst(page, [
-        '#txtStartingBid',
-        'input[id*="StartingBid" i]',
-        'input[id*="starting" i]',
-        'input[name*="starting_bid" i]',
-        'input[name*="startingBid" i]',
-        'input[name*="bid" i]',
-        'input[placeholder*="bid" i]',
-      ]);
-      const bidRaw = bidEl ? (await bidEl.inputValue().catch(() => '0')).trim() : '0';
-      const price = parseFloat(bidRaw.replace(/[^0-9.]/g, '')) || 0;
-
-      // Description — from TinyMCE
-      const description = await readTinyMceContent(page);
-
-      // Images — collect src of any uploaded/preview thumbnails on the edit page
-      const imageUrls = await page.evaluate(() => {
-        const imgs = Array.from(document.querySelectorAll(
-          '.uploaded-image img, .image-thumb img, [class*="uploaded"] img, ' +
-          '[class*="thumb"] img, .image-preview img, ' +
-          '.lot-images img, #images img, [id*="image"] img'
-        ));
-        const srcs = [];
-        const seen = new Set();
-        for (const img of imgs) {
-          const src = img.src || img.getAttribute('src') || '';
-          if (src && !src.includes('data:') && !seen.has(src)) {
-            seen.add(src);
-            srcs.push(src);
-          }
-        }
-        return srcs;
-      });
-
-      let allImageUrls = imageUrls;
-      if (allImageUrls.length === 0) {
-        allImageUrls = await page.evaluate(() => {
-          const imgs = Array.from(document.querySelectorAll('img[src]'));
-          return imgs
-            .map(img => img.src)
-            .filter(src =>
-              src &&
-              !src.includes('data:') &&
-              !src.includes('logo') &&
-              !src.includes('icon') &&
-              !src.includes('button') &&
-              src.match(/\.(jpg|jpeg|png|gif|webp)/i)
-            );
-        });
+      if (!isLotPhoto) {
+        // A lot card whose image is DOA's grey placeholder (/images/300x300.svg)
+        // has no photo uploaded yet. Record it so the skip is visible, then
+        // leave it out — posting a placeholder to a live listing is worse than
+        // posting nothing.
+        const lotMatch = alt.match(/lot\s*#?\s*(\d+)/i);
+        if (lotMatch) noPhoto.push(parseInt(lotMatch[1], 10));
+        continue;
       }
 
-      // Derive lot number: try title prefix first ("Lot 3 -"), then URL id param
-      const titleLotMatch = title.match(/^(?:lot\s*#?\s*)?(\d+)/i);
-      const urlIdMatch = currentUrl.match(/[?&](?:id|LotID|lotId|auctionItemId)=(\d+)/i);
-      const derivedLotNum = titleLotMatch?.[1] || urlIdMatch?.[1] || String(lotIndex);
+      // Climb to the nearest ancestor that also carries the lot permalink.
+      let el = img, href = '';
+      for (let i = 0; i < 8 && el; i++) {
+        el = el.parentElement;
+        const a = el && el.querySelector('a[href*="/lot-"]');
+        if (a) { href = a.getAttribute('href') || ''; break; }
+      }
+      out.push({ alt, src, href });
+    }
+    return { cards: out, noPhoto };
+  });
 
-      console.log(`[agent]     lot_number=${derivedLotNum} title="${title.slice(0, 60)}" bid=$${price} images=${allImageUrls.length}`);
+  console.log(`[agent] Grid: ${cards.length} lot(s) with photos, ${noPhoto.length} without.`);
+  if (noPhoto.length) {
+    const nums = [...new Set(noPhoto)].sort((a, b) => a - b);
+    const contiguous = nums.length > 1 && nums[nums.length - 1] - nums[0] === nums.length - 1;
+    const listed = contiguous ? `#${nums[0]}-#${nums[nums.length - 1]}` : nums.map(n => `#${n}`).join(', ');
+    console.log(`[agent]   No photo on DOA yet, skipped: ${listed}`);
+    console.log(`[agent]   Re-run once those lots have photos to add them.`);
+  }
 
-      lots.push({
-        lot_number:  derivedLotNum,
-        title:       title || `Lot ${derivedLotNum}`,
-        description,
-        price,
-        imageUrls:   allImageUrls,
-        source_url:  currentUrl,
-      });
-    } catch (err) {
-      await screenshot(page, `doa-lot-${lotIndex}-error`);
-      console.error(`[agent]   ERROR scraping lot ${lotIndex}: ${err.message} — skipping`);
+  const lots = [];
+  const seen = new Set();
+  let skippedBelowStart = 0;
+  let cardsWithoutPermalink = 0;
+
+  if (START_LOT > 0) {
+    console.log(`[agent] START_LOT=${START_LOT} — skipping lots below #${START_LOT} (top-up run).`);
+  }
+
+  for (const card of cards) {
+    const title = card.alt;
+    if (!title) continue;                       // no title -> not a lot card
+
+    // "<id>_thumbnail.jpg" -> "<id>.jpg" (the full-size original)
+    const fullSize = card.src.replace(/_thumbnail(?=\.[a-z]+(\?|$))/i, '');
+
+    // Resolve a permalink ONLY from a non-empty href. new URL('', base) returns
+    // the base -- i.e. the grid page URL -- which is identical for every card.
+    // Feeding that to the dedup below collapsed an entire 176-lot auction to a
+    // single lot, because every card after the first looked like a duplicate.
+    let sourceUrl = '';
+    if (card.href) {
+      try { sourceUrl = new URL(card.href, page.url()).href; } catch { sourceUrl = card.href; }
+    } else {
+      cardsWithoutPermalink++;
     }
 
-    // Smoke-test cap: stop scraping once we've collected MAX_LOTS lots.
+    // Dedup on the lot permalink when there is one, else on the lot's image URL.
+    // Both are unique per lot; never key on anything that can repeat.
+    const key = sourceUrl || fullSize;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const lotNum =
+      title.match(/lot\s*#?\s*(\d+)/i)?.[1] ??
+      card.href.match(/\/lot-(\d+)/i)?.[1] ??
+      String(lots.length + 1);
+
+    // Incremental top-up: skip lots below START_LOT so a second run adds only
+    // the new items. A lot whose number cannot be parsed is NEVER skipped --
+    // silently dropping an item is worse than uploading one twice.
+    if (START_LOT > 0) {
+      const n = parseInt(lotNum, 10);
+      if (Number.isFinite(n) && n < START_LOT) { skippedBelowStart++; continue; }
+      if (!Number.isFinite(n)) {
+        console.warn(`[agent]   "${title.slice(0, 45)}" has no readable lot number — including it despite START_LOT.`);
+      }
+    }
+
+    lots.push({
+      lot_number:  lotNum,
+      title,
+      description: '',
+      price:       0,
+      imageUrls:   [fullSize],
+      source_url:  sourceUrl || `${page.url()}#lot-${lotNum}`,
+    });
+
+    console.log(`[agent]   lot ${lotNum}: "${title.slice(0, 60)}"`);
+
     if (MAX_LOTS > 0 && lots.length >= MAX_LOTS) {
-      console.log(`[agent] MAX_LOTS=${MAX_LOTS} reached — stopping scrape early (smoke-test mode).`);
+      console.log(`[agent] MAX_LOTS=${MAX_LOTS} reached — stopping at ${lots.length} lot(s) (smoke test).`);
       break;
     }
+  }
 
-    // Advance to the next lot via "Save & Edit Next" (#lnkProcess).
-    // Clicking it in read-only mode is safe — no fields were modified,
-    // so the server re-saves the same data (no-op for DOA).
-    const saveNextEl = await findFirst(page, [
-      '#lnkProcess',
-      'a[id*="Process" i]',
-      'a:has-text("Save & Edit Next")',
-      'button:has-text("Save & Edit Next")',
-      'input[value*="Save & Edit Next" i]',
-    ]);
+  if (skippedBelowStart > 0) {
+    console.log(`[agent] Skipped ${skippedBelowStart} lot(s) below #${START_LOT} (already uploaded in an earlier run).`);
+  }
+  if (cardsWithoutPermalink > 0) {
+    console.log(`[agent] ${cardsWithoutPermalink} card(s) had no lot permalink — keyed on image URL instead.`);
+  }
 
-    if (!saveNextEl) {
-      console.log(`[agent] No "Save & Edit Next" button — reached end after ${lotIndex} lot(s).`);
-      break;
-    }
-
-    try {
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }),
-        saveNextEl.click(),
-      ]);
-    } catch (navErr) {
-      console.log(`[agent] Navigation after lot ${lotIndex} timed out (${navErr.message}) — assuming last lot.`);
-      break;
-    }
-
-    const newUrl = page.url();
-    if (newUrl === currentUrl) {
-      console.log(`[agent] URL unchanged after "Save & Edit Next" — reached last lot after ${lotIndex} lot(s).`);
-      break;
-    }
+  // A large drop between cards seen and lots kept means the dedup key is
+  // colliding. Say so loudly rather than silently uploading a fraction.
+  const expected = cards.length - skippedBelowStart;
+  if (MAX_LOTS === 0 && lots.length < expected) {
+    console.warn(
+      `[agent] WARNING: ${expected} lot card(s) available but only ${lots.length} kept — ` +
+      `${expected - lots.length} were treated as duplicates. Check the dedup key.`
+    );
   }
 
   return lots;
@@ -693,82 +760,216 @@ async function uploadLots(page, lots) {
     return { succeeded: 0, failed: 0, failedLots: [], skipped: alreadyUploadedCount, blocked: 0 };
   }
 
-  if (!ES_STORAGE_STATE) {
-    console.log('[agent] Logging into EstateSales.net...');
+  // Sign in ONCE, then ride the cookie. The persistent Chrome profile already
+  // stores EstateSales' session cookie; nothing used to read it, so the agent
+  // re-submitted the sign-in form on every run. That form is behind reCAPTCHA
+  // v3, which masks a low bot score as "Email Address and/or Password was
+  // incorrect" — so a perfectly valid password fails and looks like bad
+  // credentials. Landing on the target page first and only authenticating when
+  // actually walled means a warm profile never touches the form at all.
+  console.log('[agent] Checking EstateSales.net session...');
+  await page.goto(ES_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  // The wizard is client-rendered — checking auth before the SPA settles races
+  // the render and always reads as "not walled".
+  await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+
+  if (await waitForEsAuth(page)) {
+    console.log('[agent] Existing EstateSales.net session — no sign-in needed.');
+  } else {
+  console.log('[agent] No active session — signing into EstateSales.net...');
+  // Only navigate if the app has not already parked us on the sign-in route.
+  // A redundant /sign-in visit is what can drop a session that was merely slow
+  // to restore, and it discards the ?redirect= target the app set for us.
+  if (!/\/sign-in/i.test(page.url())) {
     // Note: /login is a 404 on estatesales.net — the real sign-in route is /sign-in
     await page.goto('https://www.estatesales.net/sign-in', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-    await screenshot(page, 'es-login-page');
+  }
+  await screenshot(page, 'es-login-page');
 
-    // EstateSales.net login form
-    const emailEl = await findFirst(page, [
-      '#email',
-      'input[name="email"]',
-      'input[type="email"]',
-      'input[placeholder*="email" i]',
-    ]);
-    if (!emailEl) {
-      await screenshot(page, 'es-no-email-field');
-      throw new Error(
-        '[agent] Could not find EstateSales.net email input.\n' +
-        '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
-      );
+  // EstateSales.net login form
+  const emailEl = await findFirst(page, [
+    '#email',
+    'input[name="email"]',
+    'input[type="email"]',
+    'input[placeholder*="email" i]',
+  ]);
+  if (!emailEl) {
+    await screenshot(page, 'es-no-email-field');
+    throw new Error(
+      '[agent] Could not find EstateSales.net email input.\n' +
+      '  Check screenshot "es-no-email-field" and update selectors in Phase 2.'
+    );
+  }
+  // Type like a human — the page runs reCAPTCHA v3, which scores interaction
+  // behavior. Instant programmatic fills get the login masked-rejected as
+  // "Password was incorrect" even when the credentials are right.
+  // Clear first: the persistent profile can autofill/remember the field, and
+  // pressSequentially APPENDS at the cursor — it does not replace like fill().
+  await emailEl.click();
+  await emailEl.fill('');
+  await emailEl.pressSequentially(ES_EMAIL, { delay: 55 + Math.floor(Math.random() * 45) });
+
+  const passEl = await findFirst(page, [
+    '#password-input',
+    '#password',
+    'input[name="password"]',
+    'input[type="password"]',
+    'input[placeholder*="password" i]',
+  ]);
+  if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
+  await passEl.click();
+  await passEl.fill('');
+  await passEl.pressSequentially(ES_PASSWORD, { delay: 65 + Math.floor(Math.random() * 45) });
+  await page.waitForTimeout(600);
+
+  // Tick "Remember Me" before submitting.
+  //
+  // Without it EstateSales issues a SESSION cookie, which the browser discards
+  // on close — and every agent run launches a fresh browser and closes it. So a
+  // sign-in that succeeded was gone by the next run, sending the agent back
+  // through the reCAPTCHA-guarded form every single time and making a valid
+  // password look like a bad one. Persisting the cookie is what makes "sign in
+  // once" actually mean once.
+  const rememberEl = await findFirst(page, [
+    'mat-checkbox:has-text("Remember")',
+    'label:has-text("Remember Me")',
+    'input[type="checkbox"][name*="remember" i]',
+    'input[type="checkbox"][id*="remember" i]',
+    'input[type="checkbox"]',
+  ], 3_000);
+  if (rememberEl) {
+    const alreadyChecked = await rememberEl.evaluate((el) => {
+      const cb = el.matches?.('input[type="checkbox"]') ? el : el.querySelector('input[type="checkbox"]');
+      return cb ? cb.checked : false;
+    }).catch(() => false);
+    if (!alreadyChecked) {
+      await rememberEl.click().catch(() => {});
+      await page.waitForTimeout(200);
     }
-    await emailEl.fill(ES_EMAIL);
-
-    const passEl = await findFirst(page, [
-      '#password-input',
-      '#password',
-      'input[name="password"]',
-      'input[type="password"]',
-      'input[placeholder*="password" i]',
-    ]);
-    if (!passEl) throw new Error('[agent] Could not find EstateSales.net password input.');
-    await passEl.fill(ES_PASSWORD);
-
-    // The page has several stray type="submit" buttons (Back, clear) — match the
-    // visible Sign In button by text before falling back to generic selectors.
-    const submitEl = await findFirst(page, [
-      'button:has-text("Sign In")',
-      'button:has-text("Log In")',
-      'button:has-text("Login")',
-      'button[type="submit"]',
-      'input[type="submit"]',
-    ]);
-    if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
-    await submitEl.click();
-    // Angular SPA — redirect after login is client-side, not a full navigation
-    await page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }).catch(() => {});
-    await screenshot(page, 'es-after-login');
-
-    // Verify login succeeded — look for a sign we're authenticated
-    const currentUrl = page.url();
-    if (/\/(sign-?in|log-?in)/i.test(currentUrl)) {
-      await screenshot(page, 'es-login-failed');
-      throw new Error(
-        '[agent] EstateSales.net login appears to have failed — still on login page.\n' +
-        '  Check screenshot "es-login-failed". Verify credentials in VZT Settings.'
-      );
-    }
-    console.log('[agent] Logged into EstateSales.net successfully.');
+    console.log('[agent] "Remember Me" enabled — the session will survive browser restarts.');
   } else {
-    console.log('[agent] Using imported EstateSales.net session (storageState).');
+    console.warn('[agent] Could not find "Remember Me" — the session may not outlive this run.');
+  }
+
+  // The page has several stray type="submit" buttons (Back, clear) — match the
+  // visible Sign In button by text before falling back to generic selectors.
+  const submitEl = await findFirst(page, [
+    'button:has-text("Sign In")',
+    'button:has-text("Log In")',
+    'button:has-text("Login")',
+    'button[type="submit"]',
+    'input[type="submit"]',
+  ]);
+  if (!submitEl) throw new Error('[agent] Could not find EstateSales.net submit button.');
+  await submitEl.click();
+  // Angular SPA — redirect after login is client-side, not a full navigation.
+  // Wait for a definitive outcome: the rejection banner appearing, or leaving
+  // the /sign-in route.
+  const rejectionBanner = page.getByText(/password was incorrect/i).first();
+  await Promise.race([
+    rejectionBanner.waitFor({ state: 'visible', timeout: NAV_TIMEOUT }),
+    page.waitForURL((u) => !/sign-?in|log-?in/i.test(u.pathname), { timeout: NAV_TIMEOUT }),
+  ]).catch(() => {});
+  await page.waitForTimeout(2500);
+  await screenshot(page, 'es-after-login');
+
+  // ES masks reCAPTCHA v3 bot rejections as credential errors, so this banner
+  // means EITHER a wrong password OR a low bot score — surface both hypotheses.
+  if (await rejectionBanner.isVisible().catch(() => false)) {
+    await screenshot(page, 'es-login-rejected');
+
+    // Hand the keyboard to the operator instead of dying.
+    //
+    // The browser is already open on the sign-in form with a human sitting in
+    // front of it. Throwing here wastes that: the run ends, and signing in
+    // afterwards accomplishes nothing because the process is gone. Waiting lets
+    // a stale stored password be worked around on the spot, and with "Remember
+    // Me" ticked the resulting cookie persists, so this is a one-time detour
+    // rather than a permanent manual step.
+    //
+    // Headless CI has nobody to ask, so it still fails immediately.
+    if (!IS_CI) {
+      console.log('');
+      console.log('  ============================================================');
+      console.log('   EstateSales rejected the stored password.');
+      console.log('');
+      console.log('   Sign in yourself in the Chrome window that is already open.');
+      console.log('   "Remember Me" is ticked, so this should only be needed once.');
+      console.log('   The agent will carry on by itself the moment you are in.');
+      console.log('');
+      console.log('   Waiting up to 3 minutes...');
+      console.log('  ============================================================');
+      console.log('');
+
+      const deadline = Date.now() + 3 * 60_000;
+      let rescued = false;
+      while (Date.now() < deadline) {
+        await page.waitForTimeout(2000);
+        if (!(await onSignInWall(page).catch(() => true))) { rescued = true; break; }
+      }
+
+      if (rescued) {
+        console.log('[agent] Signed in — continuing.');
+        // Fix the stored password so the next run needs no human at all.
+        console.log('[agent] Update ESTATESALES_PASSWORD in .estatesales-test.env to match.');
+      } else {
+        throw new Error(
+          '[agent] EstateSales.net rejected the sign-in and no manual sign-in completed within 3 minutes.\n' +
+          '  The stored ESTATESALES_PASSWORD likely does not match your real password.\n' +
+          '  Update it in estatesales-agent/.estatesales-test.env, or run SIGN-IN-ONCE.bat.'
+        );
+      }
+    } else {
+      throw new Error(
+        '[agent] EstateSales.net rejected the sign-in ("Email Address and/or Password was incorrect"). ' +
+        'If these credentials work in a normal browser, this is reCAPTCHA v3 scoring the automated ' +
+        'browser as a bot — not a wrong password.'
+      );
+    }
+  }
+
+  // Verify login succeeded via DOM — EstateSales.net is an Angular SPA that can
+  // render the sign-in wall without changing the URL, so URL checks are unreliable.
+  if (await onSignInWall(page)) {
+    await screenshot(page, 'es-login-failed');
+    throw new Error(
+      '[agent] EstateSales.net login failed — still on the sign-in form after submitting credentials. ' +
+      'Reconnect EstateSales in VZT Settings (check email + password).'
+    );
+  }
+  console.log('[agent] Logged into EstateSales.net successfully.');
   }
 
   // Navigate to the sale management page
   console.log('[agent] Navigating to EstateSales.net sale page...');
   await page.goto(ES_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  // The wizard is client-rendered: domcontentloaded lands on a "Loading..."
+  // shell where neither the wall nor the wizard exists yet — checking auth
+  // instantly would race the render and always pass. Let the SPA settle first.
+  await page.waitForLoadState('networkidle', { timeout: NAV_TIMEOUT }).catch(() => {});
+  await page.waitForTimeout(1000);
   await screenshot(page, 'es-sale-page');
 
-  // When using a storageState session, verify it is still valid after navigation.
-  // If the site bounced us to a sign-in page the session has expired.
-  if (ES_STORAGE_STATE) {
-    const salePageUrl = page.url();
-    if (/\/(sign-?in|log-?in)/i.test(salePageUrl)) {
-      await screenshot(page, 'es-session-expired');
-      throw new Error(
-        '[agent] EstateSales.net session expired or invalid — re-export your session from VZT Settings.'
-      );
-    }
+  // Verify we are authenticated on the sale page. EstateSales.net is an Angular
+  // SPA and can silently render the sign-in wall without changing the URL.
+  if (await onSignInWall(page)) {
+    await screenshot(page, 'es-session-expired');
+    throw new Error(
+      '[agent] EstateSales.net is showing the sign-in wall on the sale page — not authenticated. ' +
+      'Reconnect EstateSales in VZT Settings.'
+    );
+  }
+
+  // ES silently redirects a dead wizard URL (sale already published/closed) to
+  // the account dashboard. Without this check that surfaces later as a
+  // misleading per-lot '+ UPLOAD file input not found' error.
+  if (!page.url().includes('/sale-wizard/')) {
+    await screenshot(page, 'es-wizard-unavailable');
+    throw new Error(
+      `[agent] EstateSales.net redirected the sale wizard URL to ${page.url()} — ` +
+      'the sale is likely already published/closed. Update ESTATESALES_URL to a ' +
+      "current sale's wizard Pictures step."
+    );
   }
 
   // ── Prepare temp image dir ───────────────────────────────────────────────
@@ -791,7 +992,43 @@ async function uploadLots(page, lots) {
   const uploadedLotState = [];   // { lot, startIdx, count } — confirmed once captioned (not on save)
   let thumbCount = await countEsThumbnails(page);
 
-  for (let i = 0; i < pending.length; i++) {
+  // Resume instead of re-uploading.
+  //
+  // Local runs have the dedup ledger disabled, so a second pass over a sale
+  // whose photos are already up would upload every one of them AGAIN. Detect
+  // that case by counting the pictures EstateSales already shows: if the sale
+  // already holds at least as many as this scrape produced, the upload half is
+  // done and only the descriptions are outstanding. Skip Step 1 and pick up at
+  // the captions.
+  //
+  // Picture i maps to lot i because the grid scrape takes exactly one photo per
+  // lot and uploads in lot order.
+  const expectedPhotos = pending.reduce((n, l) => n + (l.imageUrls?.length || 0), 0);
+  const alreadyUploaded = expectedPhotos > 0 && thumbCount >= expectedPhotos;
+  const skipUpload = CAPTION_ONLY || alreadyUploaded;
+
+  if (skipUpload) {
+    for (const lot of pending) {
+      for (let k = 0; k < (lot.imageUrls?.length || 1); k++) imageTitles.push(lot.title);
+    }
+    if (CAPTION_ONLY) {
+      console.log(`[agent] CAPTION_ONLY — skipping upload. Captioning ${imageTitles.length} picture(s).`);
+    } else {
+      console.log(
+        `[agent] EstateSales already shows ${thumbCount} picture(s) for ${expectedPhotos} scraped photo(s).\n` +
+        `[agent]   Photos are already uploaded — skipping the upload and going straight to descriptions.\n` +
+        `[agent]   (Re-uploading would duplicate them: local runs have no dedup ledger.)`
+      );
+    }
+    if (thumbCount < imageTitles.length) {
+      console.warn(
+        `[agent] WARNING: ES shows ${thumbCount} picture(s) but ${imageTitles.length} lot photo(s) were scraped.\n` +
+        `[agent]   Descriptions are applied in order, so a mismatch will offset them.`
+      );
+    }
+  }
+
+  for (let i = 0; skipUpload ? false : i < pending.length; i++) {
     const lot = pending[i];
     console.log(`\n[agent] Lot ${i + 1}/${pending.length}: "${lot.title.slice(0, 60)}" — reserving + uploading images`);
 
@@ -903,14 +1140,23 @@ async function uploadLots(page, lots) {
 async function countEsThumbnails(page) {
   try {
     return await page.evaluate(() => {
+      // The wizard states the count itself — "You have uploaded 176 pictures."
+      // Trust that over counting DOM nodes: this number decides whether the
+      // agent skips the upload, and a false 0 on a sale that already has photos
+      // would upload every one of them a second time.
+      const stated = (document.body.innerText || '')
+        .match(/you\s+have\s+uploaded\s+([\d,]+)\s+pictures?/i);
+      if (stated) return parseInt(stated[1].replace(/,/g, ''), 10) || 0;
+
       const selectors = [
+        'img.sale-picture--tile',        // confirmed live 2026-07-06
+        '[class*="sale-picture"] img',
         '.image-grid img',
         '[class*="image-list"] img',
         '[class*="picture-list"] img',
         '[class*="thumbnail"] img',
         '[class*="thumbnail"]',
         '[class*="image-card"]',
-        'img[src*="estatesales"]',
       ];
       for (const sel of selectors) {
         const n = document.querySelectorAll(sel).length;
@@ -1055,27 +1301,70 @@ async function captionEsImages(page, imageTitles) {
 
   // Open the first image's editor. David's flow is click the image, then click
   // the orange pencil icon — lead with pencil-specific selectors, then fall back.
-  const openEditor = await findFirst(page, [
+  // EstateSales states the interaction on the page itself: "Click an image and
+  // select 'Description' from the menu". Selecting a tile reveals a toolbar;
+  // its Description button opens the per-picture dialog ("Picture N", a
+  // Description field, PREV/NEXT). Selectors confirmed live 2026-07-06 by
+  // probe-editor-dialog.mjs.
+  //
+  // The previous chain led with .fa-pencil and generic [class*="edit"], which
+  // never matched: this wizard is Angular Material and carries no FontAwesome
+  // icons. It failed at the first step, so every upload landed uncaptioned.
+  const tile = await findFirst(page, [
+    'img.sale-picture--tile',
+    '[class*="sale-picture"] img',
+    '[class*="picture-tile"] img',
+  ], 15_000);
+  if (!tile) {
+    await screenshot(page, 'es-no-image-editor');
+    throw new Error('[agent] Could not find an uploaded picture tile on the Pictures step. Check screenshot "es-no-image-editor".');
+  }
+  await tile.click().catch(() => {});
+  await page.waitForTimeout(1_000);
+
+  // The toolbar pencil IS the Description control — it carries
+  // title="Description", which is how probe-editor-dialog.mjs found it. Title
+  // first (most precise), then pencil/edit icon shapes as fallbacks in case the
+  // tooltip text changes.
+  const descBtn = await findFirst(page, [
+    'button[title="Description"]',
+    '.toolbar-item[title="Description"]',
+    '[title="Description"]',
+    'button[aria-label*="description" i]',
+    'button:has-text("Description")',
+    'button[title*="edit" i]',
+    'button[aria-label*="edit" i]',
+    'button:has(mat-icon:text-is("edit"))',
+    'mat-icon:text-is("edit")',
     '.fa-pencil',
     'i[class*="pencil"]',
-    '[aria-label*="edit" i]',
-    'button[title*="edit" i]',
-    '[class*="image"] [class*="edit"]',
-    '.fa-edit',
-    '[class*="image-card"]',
-    '[class*="thumbnail"]',
-    '.image-grid img',
-  ], 5_000);
-  if (!openEditor) {
-    await screenshot(page, 'es-no-image-editor');
-    throw new Error('[agent] Could not open the image editor on the Pictures step. Check screenshot "es-no-image-editor".');
+    '[class*="toolbar"] [class*="pencil"]',
+  ], 10_000);
+  if (!descBtn) {
+    await screenshot(page, 'es-no-description-button');
+    throw new Error(
+      '[agent] Selected a picture but could not find the toolbar "Description" button.\n' +
+      '  Check screenshot "es-no-description-button".'
+    );
   }
-  await openEditor.click().catch(() => {});
+  await descBtn.click().catch(() => {});
   await page.waitForTimeout(1_500);
-  await screenshot(page, 'es-image-editor-first'); // refine selectors from this
+  await screenshot(page, 'es-image-editor-first');
+
+  let preserved = 0;
 
   for (let i = 0; i < total; i++) {
-    const ok = await fillEsImageDescription(page, imageTitles[i]);
+    // Never overwrite a description that is already there. It may be one the
+    // operator wrote by hand, and a lot title is a poor trade for that. An
+    // existing description still counts as captioned for ledger purposes.
+    const existing = (await readEsImageDescription(page)) || '';
+    let ok;
+    if (existing.trim()) {
+      preserved++;
+      ok = true;
+    } else {
+      ok = await fillEsImageDescription(page, imageTitles[i]);
+    }
     results[i] = ok;
     if (!ok) console.warn(`[agent]   WARNING: could not set description for image ${i + 1}/${total}`);
 
@@ -1087,6 +1376,9 @@ async function captionEsImages(page, imageTitles) {
       }
       await page.waitForTimeout(800);
     }
+  }
+  if (preserved > 0) {
+    console.log(`[agent]   Left ${preserved} existing description(s) untouched.`);
   }
   return results;
 }
@@ -1100,10 +1392,17 @@ async function captionEsImages(page, imageTitles) {
  */
 async function fillEsImageDescription(page, text) {
   const descEl = await findFirst(page, [
+    // The picture dialog renders inside Angular Material's overlay container.
+    // Scope there first so a stray textarea on the page BEHIND the dialog
+    // cannot win the match and swallow the caption.
+    '.cdk-overlay-container textarea',
+    '.cdk-overlay-container input.mat-input-element',
+    '.cdk-overlay-container input[type="text"]',
     'textarea[name*="description" i]',
     'textarea[id*="description" i]',
     'textarea[placeholder*="description" i]',
     'textarea[placeholder*="caption" i]',
+    'input[aria-label*="description" i]',
     'input[name*="description" i]',
     'textarea',
   ], 3_000);
@@ -1119,13 +1418,15 @@ async function fillEsImageDescription(page, text) {
     const ce = document.querySelector('[contenteditable="true"]');
     if (ce) {
       ce.focus();
-      ce.innerHTML = t;
+      // textContent, not innerHTML — lot titles are data, not markup. innerHTML
+      // would let a crafted title persist as live HTML on EstateSales.
+      ce.textContent = t;
       ce.dispatchEvent(new Event('input', { bubbles: true }));
       ce.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
     if (window.tinymce && window.tinymce.editors && window.tinymce.editors.length > 0) {
-      window.tinymce.editors[0].setContent(t);
+      window.tinymce.editors[0].setContent(t, { format: 'text' });
       return true;
     }
     const ta = document.querySelector(
@@ -1150,9 +1451,16 @@ async function fillEsImageDescription(page, text) {
  */
 async function readEsImageDescription(page) {
   return await page.evaluate(() => {
+    // Must match the same selector family fillEsImageDescription uses, and in
+    // the same order — clickEsNext compares this reading before and after to
+    // confirm it advanced. Reading a different element than the one written
+    // makes every advance look like a failure.
     const el = document.querySelector(
+      '.cdk-overlay-container textarea, .cdk-overlay-container input.mat-input-element, ' +
+      '.cdk-overlay-container input[type="text"], ' +
       'textarea[name*="description" i], textarea[id*="description" i], ' +
       'textarea[placeholder*="description" i], textarea[placeholder*="caption" i], ' +
+      'input[aria-label*="description" i], ' +
       'input[name*="description" i], [contenteditable="true"], textarea'
     );
     if (!el) return null;
@@ -1214,34 +1522,38 @@ async function run() {
   if (!ES_URL) {
     throw new Error('ESTATESALES_URL is required');
   }
-  if (!ES_STORAGE_STATE && (!ES_EMAIL || !ES_PASSWORD)) {
+  if (!ES_EMAIL || !ES_PASSWORD) {
     throw new Error(
-      'EstateSales.net auth is missing. Provide either:\n' +
-      '  ES_STORAGE_STATE (exported Playwright session JSON — preferred for Google-SSO accounts), OR\n' +
-      '  ESTATESALES_EMAIL + ESTATESALES_PASSWORD (email/password login).\n' +
-      'Set credentials in VZT Settings.'
+      'EstateSales.net auth is missing. Requires ESTATESALES_EMAIL + ESTATESALES_PASSWORD ' +
+      'set in VZT Settings.'
     );
   }
 
   await updateJobStatus('running');
 
-  // Parse storageState JSON if provided (Google-SSO session import)
-  let parsedStorageState;
-  if (ES_STORAGE_STATE) {
-    try {
-      parsedStorageState = JSON.parse(ES_STORAGE_STATE);
-    } catch (e) {
-      throw new Error('[agent] ES_STORAGE_STATE is not valid session JSON — re-export it from VZT Settings.');
-    }
+  // CI: bundled headless Chromium + stealth + masked UA (strips "HeadlessChrome").
+  // Local: the machine's REAL Chrome (channel) with a persistent profile and no
+  // spoofing at all — a genuine fingerprint + cookie reputation is what passes
+  // reCAPTCHA v3 on the ES sign-in form; a hardcoded Chrome/120 UA contradicts
+  // the browser's own client hints and reads as a bot.
+  let browser = null;
+  let context;
+  if (IS_CI) {
+    browser = await chromium.launch({ headless: true });
+    context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
+  } else {
+    context = await chromium.launchPersistentContext(CHROME_PROFILE_DIR, {
+      headless: false,
+      channel: 'chrome',
+      viewport: { width: 1280, height: 900 },
+    });
   }
-
-  const browser = await chromium.launch({ headless: IS_CI });
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 900 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    storageState: parsedStorageState,
-  });
-  const page = await context.newPage();
+  // A persistent context pre-opens one blank page — reuse it rather than
+  // leaving an orphan tab open for the whole run.
+  const page = context.pages()[0] ?? await context.newPage();
 
   let lots = [];
 
@@ -1249,34 +1561,93 @@ async function run() {
     // ── Phase 1: DOA login + scrape ──────────────────────────────────────────
     console.log('\n[agent] ── Phase 1: DOA Scrape ──────────────────────────────');
 
-    console.log('[agent] Logging into DOA...');
+    // Phase 1 reads the PUBLIC auction grid (/auction/<slug>). DOA serves lot
+    // titles and full-size photos there with no account at all, so this agent
+    // no longer logs into DOA on the normal path. That deletes the failure mode
+    // which broke it twice: DOA renames its login controls periodically, and
+    // this file carried its own independently-drifting copy of that login.
+    // The block below now runs ONLY for a legacy admin (EditAuction) URL.
+    const DOA_NEEDS_LOGIN = /EditAuction/i.test(DOA_URL || '');
+
+    if (!DOA_NEEDS_LOGIN) {
+      console.log('[agent] Public auction grid — no DOA login required.');
+    } else {
+    console.log('[agent] Legacy admin URL — logging into DOA...');
     await page.goto('https://denveronlineauctions.com/Account/Login', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
 
-    // #MainContent_Email avoids the newsletter popup email input
-    await page.fill('#MainContent_Email', DOA_EMAIL);
-    await page.fill('#MainContent_Password', DOA_PASSWORD);
-    // ASP.NET WebForms login — submit is an <input>, not a <button>
-    const doaSubmit = await findFirst(page, [
-      '#MainContent_LoginButton',
-      'input[type="submit"]',
-      'button[type="submit"]',
-      'button:has-text("Log in")',
-      'input[value="Log in"]',
-    ]);
-    if (!doaSubmit) throw new Error('[agent] Could not find DOA login submit button.');
-    await doaSubmit.click();
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+    // The persistent local profile can still hold a live DOA session from a
+    // prior run, in which case /Account/Login redirects straight past the
+    // form — only fill it when it actually renders.
+    // DOA moved to the "Xpert Online Auctions" platform in July 2026 and renamed
+    // the login controls: #MainContent_Email → #username (type="text", labeled
+    // "Email or Username"), #MainContent_Password → #Password. Confirmed live
+    // 2026-07-17. This agent kept the pre-July selector and so never found the
+    // form — it reported "session already active", walked on, then failed the
+    // verification below with a contradictory "still on login page".
+    //
+    // Ordered chain via findFirst, NOT a comma-joined selector: comma-joined
+    // + .first() resolves in DOM order, and DOA's login page carries two
+    // newsletter signup boxes with name="email" / type="email" that sit earlier
+    // in the DOM. That is why no generic email selector appears here.
+    //
+    // These mirror SELECTORS.loginEmail / loginPassword in
+    // doa-listing-agent/doaAgent.js. Both agents log into DOA independently —
+    // if DOA's form drifts again, BOTH need updating.
+    const DOA_LOGIN_USERNAME = [
+      '#username',                                  // confirmed 2026-07-17 (Xpert platform)
+      'input[name="ctl00$MainContent$username"]',   // ASP.NET control name
+      'input[name$="$username"]',                   // scoped fallback (login form only)
+      '#MainContent_Email',                         // legacy pre-2026-07 DOA form
+      'input[name="Email"]',
+    ];
+    const DOA_LOGIN_PASSWORD = [
+      '#Password',                                  // confirmed 2026-07-17 (Xpert platform)
+      'input[name="ctl00$MainContent$Password"]',   // ASP.NET control name
+      'input[name$="$Password"]',                   // scoped fallback (login form only)
+      '#MainContent_Password',                      // legacy pre-2026-07 DOA form
+      'input[type="password"]',                     // safe: one password input on the login page
+    ];
+
+    const doaUserEl = await findFirst(page, DOA_LOGIN_USERNAME, 2_000);
+    if (doaUserEl) {
+      const doaPassEl = await findFirst(page, DOA_LOGIN_PASSWORD, 2_000);
+      if (!doaPassEl) throw new Error('[agent] Found the DOA username field but no password field — DOA login form changed.');
+      await doaUserEl.fill(DOA_EMAIL);
+      await doaPassEl.fill(DOA_PASSWORD);
+      // ASP.NET WebForms login — submit is an <input>, not a <button>
+      const doaSubmit = await findFirst(page, [
+        '#MainContent_LoginButton',
+        'input[type="submit"]',
+        'button[type="submit"]',
+        'button:has-text("Log in")',
+        'input[value="Log in"]',
+      ]);
+      if (!doaSubmit) throw new Error('[agent] Could not find DOA login submit button.');
+      await doaSubmit.click();
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+    } else {
+      // Genuinely ambiguous: either a live session, or DOA renamed the fields
+      // again. Say so, so the failure below is self-explaining rather than
+      // contradictory.
+      console.log('[agent] No DOA login form found — assuming an active session.');
+      console.log('[agent]   If login verification fails next, DOA likely changed its form again:');
+      console.log('[agent]   re-probe the live page for the username/password field IDs.');
+    }
     await screenshot(page, 'doa-after-login');
 
-    // Verify login
-    const afterLoginUrl = page.url();
-    if (afterLoginUrl.includes('/Account/Login')) {
+    // Verify login. DOA renders "You are now logged in as ..." ON the
+    // /Account/Login URL when a session is already active, so the URL alone
+    // can't distinguish success from failure.
+    const doaLoggedInMarker = await page.getByText(/logged in as/i).first()
+      .isVisible().catch(() => false);
+    if (page.url().includes('/Account/Login') && !doaLoggedInMarker) {
       throw new Error(
         '[agent] DOA login failed — still on login page.\n' +
         '  Check screenshot "doa-after-login". Verify DOA credentials in VZT Settings.'
       );
     }
     console.log('[agent] Logged into DOA successfully.');
+    }
 
     lots = await scrapeLots(page);
     console.log(`\n[agent] Phase 1 complete — scraped ${lots.length} lot(s).`);
@@ -1285,9 +1656,23 @@ async function run() {
     if (lots.length === 0) {
       throw new Error(
         '[agent] No lots were scraped from DOA.\n' +
-        '  Verify the DOA_URL is the auction admin page (EditAuction?id=...).\n' +
+        '  Verify DOA_URL is the PUBLIC auction page (/auction/<slug>).\n' +
         '  Check screenshots for the actual page structure.'
       );
+    }
+
+    // Diagnostic switch: stop after the scrape and upload nothing. Lets the
+    // DOA side be re-run and inspected without another EstateSales sign-in --
+    // repeated failed logins there risk locking the account, and ES rejects
+    // automated sign-ins via reCAPTCHA v3 rather than by password.
+    if (SCRAPE_ONLY) {
+      console.log(`\n[agent] SCRAPE_ONLY — stopping after Phase 1. Nothing uploaded.`);
+      console.log(`[agent] ${lots.length} lot(s) scraped:`);
+      for (const l of lots.slice(0, 15)) {
+        console.log(`[agent]   #${l.lot_number}  ${l.imageUrls.length} photo(s)  "${l.title.slice(0, 50)}"`);
+      }
+      if (lots.length > 15) console.log(`[agent]   ... and ${lots.length - 15} more`);
+      return;
     }
 
     // ── Phase 2: EstateSales upload ──────────────────────────────────────────
@@ -1309,6 +1694,21 @@ async function run() {
       lots_uploaded: confirmedUploaded,
       lots_skipped:  skipped,
     });
+
+    // Tell the operator where to resume. Local runs have no ledger, so the only
+    // thing standing between a top-up run and duplicate photos is starting above
+    // the highest lot already uploaded. Printing it removes the guesswork.
+    const highestLot = lots
+      .map(l => parseInt(l.lot_number, 10))
+      .filter(Number.isFinite)
+      .reduce((a, b) => Math.max(a, b), 0);
+    if (highestLot > 0 && confirmedUploaded > 0) {
+      console.log(
+        `\n[agent] Highest lot uploaded: #${highestLot}\n` +
+        `[agent]   When this auction gains more lots, run again and enter ${highestLot + 1}\n` +
+        `[agent]   at the "Start at lot #" prompt to add only the new ones.`
+      );
+    }
     const problems = failed + blocked;
     if (problems > 0) {
       const failSummary = failedLots.map(l => `Lot ${l.index ?? '?'}: ${l.error}`).join('; ');
@@ -1330,7 +1730,9 @@ async function run() {
     await screenshot(page, 'error-state');
     throw err;
   } finally {
-    await browser.close();
+    // Persistent context has no separate browser handle — close whichever exists.
+    await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
     // Remove the temp dir of downloaded customer photos even on crash —
     // per-file cleanup in uploadLotImages only covers the happy path, so an
     // error mid-run would otherwise leave private images on disk.

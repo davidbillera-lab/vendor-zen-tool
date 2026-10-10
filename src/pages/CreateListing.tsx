@@ -52,6 +52,9 @@ import { EbayBatchPanel } from "@/components/ebay/EbayBatchPanel";
 import { CrossPostPanel } from "@/components/crosspost/CrossPostPanel";
 import { EbayItemSpecificsEditor } from "@/components/ebay/EbayItemSpecificsEditor";
 import { EbayShippingSettings, type ShippingSettings } from "@/components/ebay/EbayShippingSettings";
+import { captureCorrection, diffCorrection } from "@/lib/hermes/captureCorrection";
+import { verifyDoaLot, changedFields, type DoaVerifyResult } from "@/lib/doa/verifyLot";
+import { DoaVerifyDialog } from "@/components/DoaVerifyDialog";
 import { 
   normalizeAndValidateBatch, 
   generateLiveAuctioneersCSV, 
@@ -159,6 +162,9 @@ export default function CreateListing() {
   const [denverLotNumber, setDenverLotNumber] = useState(1);
   const [denverLots, setDenverLots] = useState<any[]>([]);
   const [editingDenverLot, setEditingDenverLot] = useState<any | null>(null);
+  // AI Verify straight from the lot card — no save-then-reopen round trip.
+  const [denverVerifyingId, setDenverVerifyingId] = useState<string | null>(null);
+  const [denverVerify, setDenverVerify] = useState<{ lot: any; result: DoaVerifyResult } | null>(null);
   const [loadingDenver, setLoadingDenver] = useState(false);
   const [selectedDenverLot, setSelectedDenverLot] = useState<number | null>(null);
 
@@ -168,6 +174,11 @@ export default function CreateListing() {
   // Cross-post preselection (Mercari / Poshmark / Etsy paths auto-check the platform in CrossPostPanel)
   const [crossPostPreselect, setCrossPostPreselect] = useState<string | null>(null);
   const [ebayRows, setEbayRows] = useState<any[]>([]);
+  // The ebay_batch_rows id that belongs to the CURRENT on-screen generatedListing.
+  // Every DB write driven by generatedListing (debounced sync, verify, refine) MUST
+  // key on this id — targeting ebayRows[length-1] wrote item N+1's text onto row N
+  // whenever the insert round-trip outran the 600ms debounce (2026-07-05 purse batch).
+  const [activeEbayRowId, setActiveEbayRowId] = useState<string | null>(null);
   const [loadingEbay, setLoadingEbay] = useState(false);
   const [ebayShippingSettings, setEbayShippingSettings] = useState<ShippingSettings>({
     shippingType: "flat",
@@ -504,6 +515,7 @@ export default function CreateListing() {
     images.forEach(img => URL.revokeObjectURL(img.preview));
     setImages([]);
     setGeneratedListing(null);
+    setActiveEbayRowId(null);
     setActivePlatform(null);
     setAdditionalContext("");
   };
@@ -524,7 +536,9 @@ export default function CreateListing() {
         const original = prev[i];
         const filename = original?.file?.name ?? `photo-${i + 1}.jpg`;
         const newFile = dataURLtoFile(url, filename);
-        return { file: newFile, preview: url, url: original?.url };
+        // Drop any previously-uploaded URL: the upload step skips images that
+        // already have one, which would publish the stale un-edited photo.
+        return { file: newFile, preview: url, url: undefined };
       });
     });
     setImageEditorOpen(false);
@@ -552,6 +566,7 @@ export default function CreateListing() {
     setProcessing(platform);
     setActivePlatform(platform);
     setGeneratedListing(null);
+    setActiveEbayRowId(null); // new item — no row belongs to the upcoming listing yet
 
     // Mercari / Poshmark / Etsy use the cross-post pipeline (clean base listing, then CrossPostPanel handles dispatch)
     const isCrossPostOnly = platform === 'mercari' || platform === 'poshmark' || platform === 'etsy';
@@ -574,6 +589,10 @@ export default function CreateListing() {
       const generationPlatform: Platform = isCrossPostOnly ? 'facebook' : platform;
       const listing = await generateListing(generationPlatform, imageUrls, additionalContext, masterPrompt || undefined);
       setGeneratedListing(listing);
+
+      // Gate the success toast on the platform save actually succeeding — a
+      // failed insert must never end the flow on a success message.
+      let platformSaveOk = true;
 
       // Auto-save eBay to batch for bulk export
       if (platform === 'ebay') {
@@ -614,7 +633,7 @@ export default function CreateListing() {
               returns_accepted: ebayShippingSettings.returnsAccepted,
               return_period: ebayShippingSettings.returnPeriod,
               return_shipping: ebayShippingSettings.returnShipping,
-              promotion_rate: parseFloat(promotionRate),
+              promotion_rate: Number.isFinite(parseFloat(promotionRate)) ? parseFloat(promotionRate) : null,
               promotion_type: promotionType,
               custom_sku: customSku.trim() || null,
               injected_correction_ids: listing.injectedCorrectionIds?.length
@@ -627,6 +646,7 @@ export default function CreateListing() {
 
           if (!error && data) {
             setEbayRows(prev => [...prev, data]);
+            setActiveEbayRowId(data.id);
             setEbayLotNumber(prev => prev + 1);
             setCustomSku("");
             // v2.4: durably log which corrections shaped this row + bump times_injected.
@@ -644,6 +664,7 @@ export default function CreateListing() {
             // Never swallow a save failure silently — a rejected insert here
             // looks exactly like "nothing saves" to the operator (no row added,
             // lot number stuck, no eBay push button). Surface it loudly.
+            platformSaveOk = false;
             console.error('eBay batch row save failed:', error);
             toast({
               title: "Listing didn't save to eBay batch",
@@ -683,6 +704,8 @@ export default function CreateListing() {
           const saved = await saveToCloudBatch(listing, imageUrls, lotNumber);
           if (saved) {
             setLotNumber(prev => prev + 1);
+          } else {
+            platformSaveOk = false; // saveToCloudBatch already toasted the failure
           }
         }
       }
@@ -714,6 +737,14 @@ export default function CreateListing() {
           if (!error && data) {
             setDenverLots(prev => [...prev, data]);
             setDenverLotNumber(prev => prev + 1);
+          } else if (error) {
+            platformSaveOk = false;
+            console.error('Denver batch row save failed:', error);
+            toast({
+              title: "Lot didn't save to Denver batch",
+              description: error.message || "The lot was not added. Try again.",
+              variant: "destructive"
+            });
           }
         }
       }
@@ -738,7 +769,7 @@ export default function CreateListing() {
       };
 
       const msg = toastMessages[platform];
-      if (msg) toast(msg);
+      if (msg && platformSaveOk) toast(msg);
 
     } catch (error) {
       toast({
@@ -792,7 +823,8 @@ export default function CreateListing() {
   // eBay: Verify listing with second LLM
   const handleEbayVerify = async () => {
     if (!generatedListing || !activePlatform) return;
-    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    // Resolve the row by the id captured at insert — never by position.
+    const lastEbayRow = ebayRows.find(r => r.id === activeEbayRowId) ?? null;
 
     setEbayVerifying(true);
     setEbayVerifyResult(null);
@@ -853,6 +885,9 @@ export default function CreateListing() {
           condition: updates.condition || prev.condition,
           itemSpecifics: updates.item_specifics || prev.itemSpecifics,
         } : prev);
+        // Keep the specifics editor in step — the settings sync writes
+        // ebayItemSpecifics to the row and must not resurrect pre-verify values.
+        if (updates.item_specifics) setEbayItemSpecifics(updates.item_specifics);
 
         // Sync to DB row if one exists
         if (lastEbayRow) {
@@ -864,6 +899,27 @@ export default function CreateListing() {
             setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
           }
         }
+      }
+
+      // Hermes Stage 1 — capture the accepted verify correction so generation
+      // learns from it. Without this the loop never sees corrections made here.
+      const verifyDiff = diffCorrection(
+        { title: generatedListing.title, specifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics },
+        { title: refined.title, specifics: refined.itemSpecifics },
+      );
+      if (verifyDiff) {
+        captureCorrection({
+          source: "ai_verify",
+          category: lastEbayRow?.category ?? null,
+          wrongTitle: generatedListing.title,
+          correctedTitle: refined.title ? String(refined.title) : generatedListing.title,
+          wrongSpecifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics || null,
+          correctedSpecifics: refined.itemSpecifics || generatedListing.itemSpecifics || null,
+          imageUrls: lastEbayRow?.image_urls || images.map(i => i.url).filter(Boolean),
+          rowId: lastEbayRow?.id ?? null,
+          injectedCorrectionIds: (lastEbayRow as any)?.injected_correction_ids ?? null,
+          correctedField: verifyDiff.correctedField,
+        });
       }
 
       toast({
@@ -881,10 +937,100 @@ export default function CreateListing() {
     }
   };
 
+  /** DOA AI Verify from the lot card. Fetches the audit; nothing changes until accepted. */
+  const handleDenverVerify = async (lot: any) => {
+    setDenverVerifyingId(lot.id);
+    try {
+      const result = await verifyDoaLot(
+        {
+          title: lot.title || '',
+          description: lot.description || '',
+          starting_bid: lot.starting_bid ?? 5,
+          image_urls: lot.image_urls || [],
+        },
+        masterPrompt,
+      );
+      setDenverVerify({ lot, result });
+    } catch (error) {
+      toast({
+        title: "Verification Failed",
+        description: error instanceof Error ? error.message : "Something went wrong",
+        variant: "destructive",
+      });
+    } finally {
+      setDenverVerifyingId(null);
+    }
+  };
+
+  /** Persists accepted corrections to the lot and feeds the Hermes loop. */
+  const handleDenverVerifyAccept = async () => {
+    if (!denverVerify) return;
+    const { lot, result } = denverVerify;
+    const before = {
+      title: lot.title || '',
+      description: lot.description || '',
+      starting_bid: lot.starting_bid ?? 5,
+    };
+    const changed = changedFields(before, result.corrected);
+    setDenverVerify(null);
+
+    if (changed.length === 0) {
+      toast({ title: "No changes needed", description: "AI confirmed the lot looks correct." });
+      return;
+    }
+
+    const updates: Record<string, any> = {};
+    if (result.corrected.title !== undefined) updates.title = result.corrected.title;
+    if (result.corrected.description !== undefined) updates.description = result.corrected.description;
+    if (result.corrected.starting_bid !== undefined) updates.starting_bid = result.corrected.starting_bid;
+
+    const { data, error } = await supabase
+      .from('denver_batch_rows')
+      .update(updates)
+      .eq('id', lot.id)
+      .select()
+      .single();
+
+    if (error) {
+      toast({ title: "Could not save corrections", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    setDenverLots(prev => prev.map(r => r.id === lot.id ? { ...r, ...data } : r));
+
+    const titleChanged = changed.includes("title");
+    const otherChanged = changed.includes("description") || changed.includes("starting_bid");
+    // Hermes Stage 1 — only accepted corrections teach the loop. Description/bid
+    // changes ride in wrong/correctedSpecifics (DOA's equivalent of eBay's item
+    // specifics slot) so they aren't silently dropped when title didn't change.
+    captureCorrection({
+      source: "ai_verify",
+      platform: "denver",
+      wrongTitle: before.title,
+      correctedTitle: result.corrected.title ?? before.title,
+      wrongSpecifics: otherChanged
+        ? { description: before.description, starting_bid: String(before.starting_bid) }
+        : undefined,
+      correctedSpecifics: otherChanged
+        ? {
+            description: result.corrected.description ?? before.description,
+            starting_bid: String(result.corrected.starting_bid ?? before.starting_bid),
+          }
+        : undefined,
+      correctionNote: result.report || undefined,
+      imageUrls: lot.image_urls || [],
+      rowId: lot.id,
+      correctedField: titleChanged && otherChanged ? "both" : titleChanged ? "title" : "specifics",
+    });
+
+    toast({ title: "Corrections saved", description: `Updated: ${changed.join(", ")}` });
+  };
+
   // eBay: Refine listing with prompt
   const handleEbayRefine = async () => {
     if (!ebayRefinePrompt.trim() || !generatedListing) return;
-    const lastEbayRow = ebayRows[ebayRows.length - 1];
+    // Resolve the row by the id captured at insert — never by position.
+    const lastEbayRow = ebayRows.find(r => r.id === activeEbayRowId) ?? null;
 
     setEbayRefining(true);
     try {
@@ -937,6 +1083,9 @@ export default function CreateListing() {
           condition: updates.condition || prev.condition,
           itemSpecifics: updates.item_specifics || prev.itemSpecifics,
         } : prev);
+        // Keep the specifics editor in step — the settings sync writes
+        // ebayItemSpecifics to the row and must not resurrect pre-refine values.
+        if (updates.item_specifics) setEbayItemSpecifics(updates.item_specifics);
 
         // Sync to DB row if one exists
         if (lastEbayRow) {
@@ -948,6 +1097,29 @@ export default function CreateListing() {
             setEbayRows(prev => prev.map(r => r.id === lastEbayRow.id ? { ...r, ...updates } : r));
           }
         }
+      }
+
+      // Hermes Stage 1 — capture the human-driven correction. The typed prompt is
+      // the strongest signal we get (it states the intent), so it is stored as the
+      // correction note even when only one field ends up changing.
+      const refineDiff = diffCorrection(
+        { title: generatedListing.title, specifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics },
+        { title: refined.title, specifics: refined.itemSpecifics },
+      );
+      if (refineDiff) {
+        captureCorrection({
+          source: "refine",
+          category: lastEbayRow?.category ?? null,
+          wrongTitle: generatedListing.title,
+          correctedTitle: refined.title ? String(refined.title) : generatedListing.title,
+          wrongSpecifics: generatedListing.itemSpecifics || lastEbayRow?.item_specifics || null,
+          correctedSpecifics: refined.itemSpecifics || generatedListing.itemSpecifics || null,
+          correctionNote: ebayRefinePrompt.trim(),
+          imageUrls: lastEbayRow?.image_urls || images.map(i => i.url).filter(Boolean),
+          rowId: lastEbayRow?.id ?? null,
+          injectedCorrectionIds: (lastEbayRow as any)?.injected_correction_ids ?? null,
+          correctedField: refineDiff.correctedField,
+        });
       }
 
       setEbayRefinePrompt("");
@@ -1028,19 +1200,56 @@ export default function CreateListing() {
   const ebayDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!generatedListing) return;
-    const lastEbayRow = ebayRows[ebayRows.length - 1];
-    if (!lastEbayRow) return;
+    // Only ever sync to the row created FOR this listing. ebayRows[length-1] here
+    // raced the insert: the effect armed with item N+1's text while row N was
+    // still last, and a >600ms insert let the timer clobber row N.
+    if (!activeEbayRowId) return;
     if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current);
     ebayDebounceRef.current = setTimeout(async () => {
-      await supabase.from('ebay_batch_rows').update({
+      const updates = {
         title: generatedListing.title,
         description: generatedListing.description,
         price: generatedListing.price,
         custom_sku: customSku.trim() || null,
-      }).eq('id', lastEbayRow.id);
+      };
+      const { error } = await supabase.from('ebay_batch_rows').update(updates).eq('id', activeEbayRowId);
+      // Keep local batch state in step with the DB — the batch panel and CSV
+      // export read ebayRows, which otherwise holds the pre-edit values.
+      if (!error) {
+        setEbayRows(prev => prev.map(r => r.id === activeEbayRowId ? { ...r, ...updates } : r));
+      }
     }, 600);
     return () => { if (ebayDebounceRef.current) clearTimeout(ebayDebounceRef.current); };
-  }, [generatedListing, ebayRows, customSku]);
+  }, [generatedListing, activeEbayRowId, customSku]);
+
+  // Debounced sync of the post-generation eBay controls (item specifics,
+  // shipping & returns, promotion) to the CURRENT row. Operator decision
+  // 2026-07-12: these controls EDIT the on-screen listing — the state also
+  // carries forward as the defaults for the next item, as before.
+  const ebaySettingsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!activeEbayRowId) return;
+    if (ebaySettingsDebounceRef.current) clearTimeout(ebaySettingsDebounceRef.current);
+    ebaySettingsDebounceRef.current = setTimeout(async () => {
+      const rate = parseFloat(promotionRate);
+      const updates = {
+        item_specifics: ebayItemSpecifics,
+        shipping_type: ebayShippingSettings.shippingType,
+        shipping_cost: ebayShippingSettings.shippingCost,
+        handling_time: ebayShippingSettings.handlingTime,
+        returns_accepted: ebayShippingSettings.returnsAccepted,
+        return_period: ebayShippingSettings.returnPeriod,
+        return_shipping: ebayShippingSettings.returnShipping,
+        promotion_rate: Number.isFinite(rate) ? rate : null,
+        promotion_type: promotionType,
+      };
+      const { error } = await supabase.from('ebay_batch_rows').update(updates).eq('id', activeEbayRowId);
+      if (!error) {
+        setEbayRows(prev => prev.map(r => r.id === activeEbayRowId ? { ...r, ...updates } : r));
+      }
+    }, 600);
+    return () => { if (ebaySettingsDebounceRef.current) clearTimeout(ebaySettingsDebounceRef.current); };
+  }, [ebayItemSpecifics, ebayShippingSettings, promotionRate, promotionType, activeEbayRowId]);
 
   const [downloadingImages, setDownloadingImages] = useState(false);
   const [zipProgress, setZipProgress] = useState({ current: 0, total: 0, failed: 0, phase: '' });
@@ -1746,6 +1955,19 @@ export default function CreateListing() {
                               variant="outline"
                               size="sm"
                               className="h-6 text-xs gap-1"
+                              onClick={() => handleDenverVerify(lot)}
+                              disabled={denverVerifyingId === lot.id}
+                              title="Check the ID, damage disclosure, and opening bid"
+                            >
+                              {denverVerifyingId === lot.id
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <ShieldCheck className="h-3 w-3" />}
+                              Verify
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-xs gap-1"
                               onClick={() => setEditingDenverLot(lot)}
                             >
                               <Edit className="h-3 w-3" />
@@ -2157,6 +2379,13 @@ export default function CreateListing() {
           masterPrompt={masterPrompt}
         />
       )}
+
+      <DoaVerifyDialog
+        result={denverVerify?.result ?? null}
+        lotLabel={denverVerify ? `Lot #${denverVerify.lot.lot_number}` : ""}
+        onAccept={handleDenverVerifyAccept}
+        onReject={() => setDenverVerify(null)}
+      />
 
       {imageEditorOpen && (
         <ImageEditor

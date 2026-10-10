@@ -86,7 +86,16 @@ serve(async (req) => {
           console.warn('lesson fetch skipped:', lessonsErr.message);
         } else {
           lessons = data ?? [];
-          if (lessons.length > 0) console.log(`Injected ${lessons.length} distilled lesson(s)`);
+          if (lessons.length > 0) {
+            console.log(`Injected ${lessons.length} distilled lesson(s)`);
+            // Stage 3 audit trail — was missing here, so this (the busiest path:
+            // both DOA and eBay AI Verify) never showed up in correction_injections.
+            authedClient
+              .rpc('record_lesson_injections', { p_ids: lessons.map((l) => l.id) })
+              .then(({ error }) => {
+                if (error) console.warn('record_lesson_injections skipped (non-blocking):', error.message);
+              });
+          }
         }
       } catch (e) {
         console.warn('lesson fetch failed (non-blocking):', e);
@@ -100,7 +109,49 @@ serve(async (req) => {
         ? `\nBUSINESS CONTEXT (apply to all evaluations):\n${masterPrompt}\n`
         : '';
 
-      const verifySystemPrompt = `${lessonsSection}You are an expert eBay listing quality auditor with deep knowledge of current market prices.${masterPromptSection}
+      // Auction platforms (Denver Online Auctions, LiveAuctioneers) are a different
+      // product from a fixed-price eBay listing: the number is an OPENING BID meant
+      // to attract bidding, titles run to 100 chars, and there are no item specifics
+      // or categories to audit. Auditing a lot with the eBay ruleset produces bad
+      // advice (it flags healthy opening bids as underpriced and invents fields).
+      const isAuction = platform === 'denver' || platform === 'liveauctioneers';
+
+      // Global measurement guardrail (all platforms): the operator adds verified
+      // measurements manually — the auditor must neither add nor remove them.
+      const measurementRule = `
+MEASUREMENT RULE (HARD — overrides BUSINESS CONTEXT and LEARNED LESSONS above if either conflicts):
+- Do NOT add measurements (dimensions, weight, capacity) to the title or description, and do NOT flag missing measurements as a defect — the operator adds verified measurements manually. Neither a generic saved business-context preference nor a distilled lesson overrides this; only an explicit per-listing instruction can.
+- NEVER remove or "correct" measurements already present in the listing: they are operator-verified from real measuring, not photo estimates.
+`;
+
+      const verifySystemPrompt = isAuction
+        ? `${lessonsSection}You are an expert auction catalog quality auditor with deep knowledge of estate and collectible values.${masterPromptSection}
+
+Analyze the lot title, description, and starting bid for quality and accuracy.
+
+Check for:
+1. Title accuracy and searchability (limit: 100 characters). Identification first — maker, model/pattern, material, era — not marketing language.
+2. Description completeness and accuracy based ONLY on what the images show plus research-confirmed facts (a model number that resolves to known specs, a maker's mark that resolves to a maker).
+3. Condition and damage disclosure: chips, cracks, repairs, wear, missing pieces visible in the images MUST be stated.
+4. Misidentification — the most costly error. If the item is not what the title claims, say so plainly.
+
+STARTING BID VERIFICATION (CRITICAL — auction, not fixed price):
+- A starting bid is an OPENING price designed to attract bidding, NOT the expected sale price. It is normally well BELOW market value, and that is correct.
+- Only flag the bid if it is HIGH enough to suppress bidding (at or above realistic retail/sold value), or so high the lot will not open.
+- Do NOT flag a low starting bid as underpriced — that is the intended auction strategy.
+- Cite a realistic sold-value range for the item and explain how the opening bid relates to it.
+
+DO NOT invent or require eBay-only fields: no item specifics, no category IDs, no shipping details.
+${measurementRule}
+Return a JSON object with exactly these fields:
+{
+  "passed": true/false,
+  "report": "2-5 sentences summarizing quality, flagging misidentification or undisclosed damage, and citing a realistic value range",
+  "correctedListing": { ...the full listing JSON with any corrections applied, or original values if no changes needed. Use the SAME field names as the input (title, description, startingBid). }
+}
+
+No markdown fences. Return only the JSON object.`
+        : `${lessonsSection}You are an expert eBay listing quality auditor with deep knowledge of current market prices.${masterPromptSection}
 
 Analyze the listing title, description, price, condition, and item specifics for quality and accuracy.
 
@@ -116,7 +167,7 @@ PRICING VERIFICATION (CRITICAL):
 - If the listed price is more than 50% above median sold price, flag as OVERPRICED.
 - State the specific median sold comp price you found and your reasoning.
 - A price that would sell within minutes indicates underpricing — treat suspiciously low prices as a red flag.
-
+${measurementRule}
 Return a JSON object with exactly these fields:
 {
   "passed": true/false,
@@ -192,7 +243,7 @@ No markdown fences. Return only the JSON object.`;
     const titleLimit = platform === 'ebay' ? 80 : 100;
     const platformRules = platform === 'ebay'
       ? `5. eBay title limit is ${titleLimit} characters — never exceed it
-6. For description, use clear HTML-friendly formatting; include model, brand, dimensions, and condition details
+6. For description, use clear HTML-friendly formatting; include model, brand, and condition details
 7. For condition: use eBay standard values (New, Used, For Parts or Not Working, etc.)
 8. Keep itemSpecifics keys/values accurate for eBay catalog`
       : `5. If the user asks about the title, keep it under ${titleLimit} characters
@@ -208,6 +259,8 @@ IMPORTANT RULES:
 3. Maintain the same JSON structure
 4. If the user asks about pricing, adjust those fields appropriately
 ${platformRules}
+
+MEASUREMENT RULE (HARD): Never ADD measurements (dimensions, weight, capacity) to the title or description unless the user's correction request explicitly provides or asks for them — this overrides any conflicting standing preference. Never estimate measurements from photos. Preserve measurements already present — they are operator-verified — unless the user asks to change them.
 
 ALWAYS return valid JSON with the same structure as the input, no markdown, no explanation.`;
 

@@ -178,7 +178,7 @@ export async function dispatchPlatform(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function getNextLotNumber(table: string, batchId: string): Promise<number> {
+export async function getNextLotNumber(table: string, batchId: string): Promise<number> {
   const { data } = await (supabase as any)
     .from(table)
     .select('lot_number')

@@ -24,9 +24,16 @@ interface CorrectionRow {
   wrong_specifics: Record<string, string> | null;
   corrected_specifics: Record<string, string> | null;
   correction_note: string | null;
+  source: string | null;
 }
 
 function correctionLine(c: CorrectionRow): string {
+  // A guardrail has no before/after pair — it is a standing instruction the
+  // operator set by hand. Label it so the model treats it as a rule to keep,
+  // not as a one-off fix to generalise from.
+  if (c.source === 'guardrail') {
+    return `- STANDING INSTRUCTION from the seller${c.category ? ` [${c.category}]` : ''}: ${c.correction_note ?? ''}`.slice(0, 1000);
+  }
   const parts: string[] = [];
   if (c.category) parts.push(`[${c.category}]`);
   if (c.wrong_title || c.corrected_title) {
@@ -113,7 +120,7 @@ serve(async (req) => {
 
     const { data: corrections, error: corrErr } = await service
       .from('listing_corrections')
-      .select('id, category, wrong_title, corrected_title, wrong_specifics, corrected_specifics, correction_note')
+      .select('id, category, wrong_title, corrected_title, wrong_specifics, corrected_specifics, correction_note, source')
       .eq('user_id', user.id)
       .is('distilled_at', null)
       .eq('retired', false)
@@ -149,7 +156,11 @@ serve(async (req) => {
 CURRENT ACTIVE LESSONS:
 ${lessonBlock}
 
-NEW CORRECTIONS (each shows what the AI said -> what the human fixed it to):
+NEW CORRECTIONS (each shows what the AI said -> what the human fixed it to).
+Lines marked "STANDING INSTRUCTION from the seller" are not mistakes to generalise
+from — they are rules the seller set deliberately. Preserve their intent as a
+lesson, reworded into a general rule, and prefer them when they conflict with an
+inference drawn from ordinary corrections:
 ${correctionBlock}
 
 Merge the current lessons and the new corrections into a single fresh set of AT MOST ${MAX_LESSONS} lessons. Rules:

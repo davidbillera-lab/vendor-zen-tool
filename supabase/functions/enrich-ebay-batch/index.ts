@@ -54,10 +54,12 @@ FOR ELECTRONICS:
 
 FOR ART:
 - Subject, Medium, Artist (if identifiable), Signed/Unsigned
-- Size (dimensions)
+- Size: ONLY if dimensions are explicitly stated in the title/description — never estimate
 
 FOR HOME DECOR:
 - Room, Theme, Shape, Features
+
+MEASUREMENT RULE (HARD): Never guess measurement-type specifics (Item Length/Width/Height/Depth, Weight, dimensions, capacity). Only fill them from values explicitly present in the listing's title, description, or existing specifics — those are operator-verified. If not present, leave them out. Clothing/shoe/ring sizes read from a garment tag or marking are labels and are fine.
 
 ANALYZE the title and description to INFER specifics intelligently:
 - "Vintage 1960s Danish Teak Credenza" → Era: "1960s", Material: "Teak", Style: "Danish Modern", Country: "Denmark"
@@ -77,6 +79,32 @@ Format:
     "category_id": number_or_null
   }
 ]`;
+
+// Deterministic backstop for the MEASUREMENT RULE above: prompts can be ignored,
+// so a returned measurement-type field is only kept if it was already in the
+// row's existing specifics or its value literally appears in the title/description.
+// Otherwise it's a guess and gets dropped rather than trusted.
+const MEASUREMENT_KEY_PATTERN = /^(item\s*)?(length|width|height|depth|weight|capacity|dimensions?)$/i;
+
+function sanitizeMeasurementSpecifics(
+  specifics: Record<string, string>,
+  sourceRow: EnrichRow
+): Record<string, string> {
+  const haystack = `${sourceRow.title || ""} ${sourceRow.description || ""}`.toLowerCase();
+  const existing = sourceRow.item_specifics || {};
+  const cleaned: Record<string, string> = {};
+  for (const [key, value] of Object.entries(specifics)) {
+    if (MEASUREMENT_KEY_PATTERN.test(key.trim())) {
+      const existingValue = existing[key];
+      const valueInText = !!value && haystack.includes(String(value).toLowerCase());
+      if (!existingValue && !valueInText) {
+        continue; // unverified measurement guess — drop it
+      }
+    }
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -193,6 +221,14 @@ serve(async (req) => {
     if (!Array.isArray(enrichedRows)) {
       throw new Error("AI response is not an array");
     }
+
+    enrichedRows = enrichedRows.map((row: any) => {
+      const sourceRow = rows.find((r) => r.id === row.id);
+      if (sourceRow && row.item_specifics && typeof row.item_specifics === "object") {
+        return { ...row, item_specifics: sanitizeMeasurementSpecifics(row.item_specifics, sourceRow) };
+      }
+      return row;
+    });
 
     console.log(`[enrich-ebay-batch] AI returned enrichment for ${enrichedRows.length} rows`);
 

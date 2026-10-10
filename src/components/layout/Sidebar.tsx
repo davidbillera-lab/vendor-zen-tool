@@ -12,6 +12,7 @@ import {
   X,
   FolderOpen,
   Upload,
+  Layers,
   Bot
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,7 @@ const navItems = [
   { icon: Link2, label: "Platforms", path: "/platforms" },
   { icon: Gavel, label: "Denver Batches", path: "/denver-batches" },
   { icon: Upload, label: "EstateSales", path: "/estatesales-upload" },
+  { icon: Layers, label: "Bulk Intake", path: "/bulk-intake" },
   { icon: Settings, label: "Settings", path: "/settings" },
 ];
 

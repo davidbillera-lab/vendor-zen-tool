@@ -1,0 +1,105 @@
+===============================================================
+  EstateSales Upload Agent -- Colleague Setup Guide
+===============================================================
+
+WHAT THIS DOES
+--------------
+Takes a Denver Online Auctions (DOA) auction that is already live
+and copies it into an EstateSales.net sale you are building: it
+reads the public DOA auction page (one photo + title per lot),
+uploads the photos to your sale's Pictures step, and types each
+lot's title into that picture's Description. Then it STOPS. You
+click "Save and Continue" and finish the sale yourself.
+
+It runs on YOUR computer, in YOUR Chrome, with YOUR logins.
+Nothing is shared with anyone.
+
+
+YOU NEED
+--------
+  - A Windows PC and an internet connection
+  - Node.js (free) -- https://nodejs.org  (pick the LTS version)
+  - Google Chrome installed (the real one, not Edge)
+  - Your estatesales.net login and your DOA login
+  - The DOA auction already published (visible to the public)
+  - A NEW estatesales.net sale started, sitting on the Pictures
+    step of the wizard, with NO pictures in it yet
+
+
+ONE-TIME SETUP  (about 10 minutes)
+----------------------------------
+  1. Unzip the folder David sent you somewhere permanent,
+     e.g.  C:\estatesales-agent
+  2. Double-click  SETUP.bat  and let it finish.
+  3. When Notepad opens your login file, fill in:
+       ESTATESALES_EMAIL=  and  ESTATESALES_PASSWORD=
+       DOA_EMAIL=          and  DOA_PASSWORD=
+     Leave every other line alone. Save, close Notepad.
+  4. Double-click  SIGN-IN-ONCE.bat . A Chrome window opens on
+     the estatesales.net sign-in page. Sign in yourself, tick
+     "Remember Me" if it isn't ticked. The window closes on its
+     own once you're in. That's the only time you sign in by hand.
+
+If step 4 says your password was wrong and you're sure it isn't:
+that's estatesales.net's bot check being suspicious of a brand-new
+browser profile. Close it, wait a minute, run SIGN-IN-ONCE.bat again.
+
+
+EVERY SALE
+----------
+  1. On estatesales.net, create the sale and go to the wizard's
+     Pictures step. Copy the address bar. Leave the tab open.
+  2. On denveronlineauctions.com, open the auction AS A VISITOR --
+     the page showing the grid of all lots -- and copy the address
+     bar. It looks like:
+       https://denveronlineauctions.com/auction/<auction-name>
+     (NOT a sub-admin/EditAuction link -- that's one lot's edit
+     form, and the agent will refuse it.)
+  3. Double-click  RUN-ESTATESALES-AGENT.bat . It asks you to
+     paste the two links, then:
+       "Start at lot #"  -- press ENTER for a fresh sale
+       "Photos to upload" -- press ENTER for ALL
+  4. Chrome opens and works. Do not click inside that window.
+  5. When it finishes it prints the highest lot number it did.
+     Go to your estatesales.net tab, check the pictures and
+     descriptions, click "Save and Continue", finish the sale.
+
+
+THE RULES  (read these twice)
+-----------------------------
+  * ONE run per sale, into a sale with an EMPTY Pictures step.
+    Descriptions are matched to pictures in order. If the sale
+    already has pictures (added by hand, or from an earlier run),
+    the descriptions will land on the WRONG pictures.
+  * Do not run the same auction into the same sale twice -- there
+    is no duplicate check on your PC. You'd get every photo twice.
+    Exception: DOA added more lots later. Run again and at
+    "Start at lot #" enter the number after the last lot you did.
+  * Photos already up but descriptions missing? Use
+    RUN-CAPTIONS-ONLY.bat  -- it skips uploading entirely.
+  * Never send anyone your .estatesales-test.env or the
+    .chrome-profile folder. They hold your passwords and session.
+    (MAKE-DISTRIBUTION-ZIP.bat exists so David can't either.)
+  * Lots with no photo on DOA yet are skipped and listed in the
+    window ("No photo on DOA yet, skipped: #..."). Add the photos
+    on DOA, then run again with "Start at lot #".
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+  - The black window says what happened. Read it before closing.
+  - Screenshots of the moment it failed are in  screenshots\ .
+  - "Password was incorrect" during a run: your saved session
+    expired. Run SIGN-IN-ONCE.bat again, then re-run.
+  - "Could not find ..." errors usually mean estatesales.net or
+    DOA changed their page. Send David the window text and the
+    newest screenshot.
+  - It refused your DOA link: you pasted an admin/EditAuction
+    link. Use the public auction page (see EVERY SALE step 2).
+
+
+UPDATES
+-------
+When something changes, David sends a new zip. Unzip it over your
+folder (say yes to replace), then double-click SETUP.bat once.
+Your login file, Chrome profile and screenshots are kept.

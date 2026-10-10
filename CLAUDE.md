@@ -80,7 +80,9 @@ npx vitest       # run tests
 
 ```
 VITE_SUPABASE_URL=
-VITE_SUPABASE_ANON_KEY=
+VITE_SUPABASE_PUBLISHABLE_KEY=   # NOT ..._ANON_KEY — src/integrations/supabase/client.ts
+                                 # reads PUBLISHABLE_KEY; a missing/misnamed var renders a
+                                 # blank white screen with "supabaseUrl is required" in console
 MC_SUPABASE_URL=https://dmtctlpzlfpcogpjweuv.supabase.co
 MC_SUPABASE_ANON_KEY=<personal-os anon key>
 ```
