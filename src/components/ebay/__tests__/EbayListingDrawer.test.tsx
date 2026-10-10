@@ -9,6 +9,7 @@ vi.mock("@/components/ebay/ebayCategoryAspects", () => ({
   mergeAspectsWithSpecifics: vi.fn(),
 }));
 vi.mock("@/components/ImageEditor", () => ({ ImageEditor: () => null }));
+vi.mock("@/lib/api/listings", () => ({ persistLocalImageUrls: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 global.ResizeObserver = class {
