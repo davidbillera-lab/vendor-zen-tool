@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { normalizeClothingSize, deriveSizeFromText } from "../_shared/clothingSize.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -396,13 +397,19 @@ function buildEffectiveSpecifics(categoryId: string, row: EbayRow): Record<strin
     "95672",  // Women's Athletic Shoes
     "169291", // Women's Shoulder Bags & Totes
   ]);
-  if (MENS_CLOTHING_CATEGORIES.has(categoryId)) {
-    if (!specifics["Department"]) specifics["Department"] = "Men";
-    if (!specifics["Size"]) specifics["Size"] = "See Description";
-  }
-  if (WOMENS_CLOTHING_CATEGORIES.has(categoryId)) {
-    if (!specifics["Department"]) specifics["Department"] = "Women";
-    if (!specifics["Size"]) specifics["Size"] = "See Description";
+  const isMens = MENS_CLOTHING_CATEGORIES.has(categoryId);
+  const isWomens = WOMENS_CLOTHING_CATEGORIES.has(categoryId);
+  if (isMens && !specifics["Department"]) specifics["Department"] = "Men";
+  if (isWomens && !specifics["Department"]) specifics["Department"] = "Women";
+  if (isMens || isWomens || specifics["Size Type"]) {
+    // eBay rejects "Medium" / "See Description": Size must be S/M/L/XL/… or a number.
+    const size = normalizeClothingSize(specifics["Size"])
+      ?? deriveSizeFromText(row.title, row.description);
+    if (size) specifics["Size"] = size;
+    else {
+      delete specifics["Size"];
+      console.warn(`[ebay-publish] ${row.lot_number ?? ""}: no usable Size found (title/description) — eBay will reject until one is set`);
+    }
   }
 
   return specifics;

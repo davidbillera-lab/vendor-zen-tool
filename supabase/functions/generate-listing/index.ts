@@ -490,7 +490,7 @@ CATEGORY-SPECIFIC:
     "Type": "value",
     "Material": "value",
     "Color": "value",
-    "Size": "value (for clothing)",
+    "Size": "clothing: S, M, L, XL, XXL (or XS, 3XL) or the tag number like 10 or 32x30 — NEVER Small/Medium/Large and NEVER 'See Description'; read it from the tag in the photos",
     "Size Type": "Regular/Petite/Plus/Tall (REQUIRED for clothing!)",
     "Department": "Men/Women/Unisex (REQUIRED for clothing!)",
     "Style": "value"
