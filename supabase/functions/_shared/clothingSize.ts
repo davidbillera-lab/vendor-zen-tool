@@ -17,22 +17,14 @@ const WORD_SIZES: Record<string, string> = {
 
 const JUNK = /^(see\s*(desc\w*|title|photos?|pics?)|n\/?a|none|unknown|tbd|\?+|-+|one size fits all|os)$/i;
 
-function mapOne(part: string): string {
-  const k = part.trim().toLowerCase().replace(/\s+/g, " ");
-  return WORD_SIZES[k] ?? part.trim();
-}
-
 /** Returns a standard size, or null if the value is empty/junk. Numeric sizes pass through. */
 export function normalizeClothingSize(raw: string | null | undefined): string | null {
   const v = (raw ?? "").trim().replace(/^size[:\s]+/i, "");
   if (!v || JUNK.test(v)) return null;
   const whole = WORD_SIZES[v.toLowerCase().replace(/\s+/g, " ")];
   if (whole) return whole;
-  // Ranges like "Small/Medium" or "M-L"
-  const parts = v.split(/\s*\/\s*/);
-  if (parts.length === 2 && parts.every((p) => WORD_SIZES[p.trim().toLowerCase()])) {
-    return parts.map(mapOne).join("/");
-  }
+  // Ranges ("S/M", "6-8") are rejected by eBay: no single size, caller leaves Size unset.
+  if (/[/]|\d+\s*-\s*\d+/.test(v)) return null;
   return v;
 }
 

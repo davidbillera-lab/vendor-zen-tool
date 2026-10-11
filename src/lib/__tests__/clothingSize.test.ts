@@ -10,7 +10,8 @@ describe("normalizeClothingSize", () => {
     expect(normalizeClothingSize("Extra Small")).toBe("XS");
     expect(normalizeClothingSize("2XL")).toBe("XXL");
     expect(normalizeClothingSize("Size: Medium")).toBe("M");
-    expect(normalizeClothingSize("Small/Medium")).toBe("S/M");
+    expect(normalizeClothingSize("Small/Medium")).toBeNull();
+    expect(normalizeClothingSize("6-8")).toBeNull();
     expect(normalizeClothingSize("See Description")).toBeNull();
     expect(normalizeClothingSize("")).toBeNull();
   });
