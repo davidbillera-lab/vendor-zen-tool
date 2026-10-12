@@ -8,7 +8,9 @@ const corsHeaders = {
 
 // gemini-2.0-flash was shut down by Google on 2026-06-01. gemini-3.8-flash is the
 // current stable Flash (ai.google.dev/gemini-api/docs/models, checked 2026-10-12).
-const GEMINI_MODEL = 'gemini-3.8-flash';
+// Tried in order: when Google answers 503/429 ("high demand") the next model is
+// tried at once — separate capacity pools; same price (ai.google.dev/pricing).
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.6-flash'];
 // Stay under the 150s edge-function limit so a slow Gemini reply comes back as a
 // retryable error the client can act on, not a gateway 504 with no body.
 const GEMINI_TIMEOUT_MS = 140_000;
@@ -105,17 +107,27 @@ serve(async (req) => {
       },
     };
 
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(geminiBody),
-        // Gemini's latency swings from ~10s to past 150s on same-size batches
-        // (2026-09-29); without this the gateway kills the call silently.
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      }
-    );
+    let geminiRes!: Response;
+    let usedModel = GEMINI_MODELS[0];
+    for (let i = 0; i < GEMINI_MODELS.length; i++) {
+      usedModel = GEMINI_MODELS[i];
+      geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${usedModel}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(geminiBody),
+          // Gemini's latency swings from ~10s to past 150s on same-size batches
+          // (2026-09-29); without this the gateway kills the call silently. The
+          // budget is shared across fallback attempts.
+          signal: AbortSignal.timeout(Math.max(GEMINI_TIMEOUT_MS - (Date.now() - started), 5_000)),
+        }
+      );
+      const overloaded = geminiRes.status === 503 || geminiRes.status === 429;
+      if (geminiRes.ok || !overloaded || i === GEMINI_MODELS.length - 1) break;
+      console.warn(`[group-lots-vision] ${usedModel} returned ${geminiRes.status}, falling back to ${GEMINI_MODELS[i + 1]}`);
+      await geminiRes.body?.cancel();
+    }
 
     if (!geminiRes.ok) {
       const errText = await geminiRes.text();
@@ -142,11 +154,13 @@ serve(async (req) => {
       fallback = true;
     }
 
-    console.log(`[group-lots-vision] ${images.length} images -> ${lots.length} lots in ${Date.now() - started}ms${fallback ? ' (fallback)' : ''}`);
+    console.log(`[group-lots-vision] ${images.length} images -> ${lots.length} lots in ${Date.now() - started}ms via ${usedModel}${fallback ? ' (fallback)' : ''}`);
 
     // Fire-and-forget model_costs log (model column is NOT NULL — must be set)
     const inputTokens = geminiData?.usageMetadata?.promptTokenCount ?? images.length * 258;
-    const outputTokens = geminiData?.usageMetadata?.candidatesTokenCount ?? 200;
+    // Google bills thinking tokens as output; candidatesTokenCount excludes them.
+    const outputTokens = (geminiData?.usageMetadata?.candidatesTokenCount ?? 200)
+      + (geminiData?.usageMetadata?.thoughtsTokenCount ?? 0);
     const costUsd = (inputTokens * INPUT_COST_PER_TOKEN) + (outputTokens * OUTPUT_COST_PER_TOKEN);
 
     supabase
@@ -155,7 +169,7 @@ serve(async (req) => {
         user_id: user.id,
         source: 'group-lots-vision',
         operation: 'group-lots',
-        model: GEMINI_MODEL,
+        model: usedModel,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cost_usd: costUsd,

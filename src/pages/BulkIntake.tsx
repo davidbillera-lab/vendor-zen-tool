@@ -296,6 +296,8 @@ export default function BulkIntake() {
         title: `Photo grouping is slow, retrying (${attempt + 1} of ${GROUP_CHUNK_ATTEMPTS})`,
         description: chunks > 1 ? `Chunk ${chunk} of ${chunks}` : undefined,
       });
+      // Google overloads are spikes: back off (5s, 10s) instead of re-hitting at once.
+      await new Promise((r) => setTimeout(r, attempt * 5000));
     }
   };
 
