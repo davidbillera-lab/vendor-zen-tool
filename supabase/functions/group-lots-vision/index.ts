@@ -6,9 +6,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// gemini-2.0-flash was shut down by Google on 2026-06-01. gemini-3.5-flash is GA
-// with no announced shutdown (the 2.5 family has an October 2026 cutover).
-const GEMINI_MODEL = 'gemini-3.5-flash';
+// gemini-2.0-flash was shut down by Google on 2026-06-01. gemini-3.8-flash is the
+// current stable Flash (ai.google.dev/gemini-api/docs/models, checked 2026-10-12).
+const GEMINI_MODEL = 'gemini-3.8-flash';
 // Stay under the 150s edge-function limit so a slow Gemini reply comes back as a
 // retryable error the client can act on, not a gateway 504 with no body.
 const GEMINI_TIMEOUT_MS = 140_000;
@@ -98,8 +98,8 @@ serve(async (req) => {
         ],
       }],
       generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 8192,
+        // 3.8 docs: drop deprecated sampling params (temperature); cap raised since default thinking is "medium"
+        maxOutputTokens: 16384,
         responseMimeType: 'application/json',
       },
     };
