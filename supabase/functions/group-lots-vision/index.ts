@@ -12,9 +12,10 @@ const GEMINI_MODEL = 'gemini-3.8-flash';
 // Stay under the 150s edge-function limit so a slow Gemini reply comes back as a
 // retryable error the client can act on, not a gateway 504 with no body.
 const GEMINI_TIMEOUT_MS = 140_000;
-// Pricing per token (gemini-3.5-flash: $1.50/M input, $9.00/M output).
-const INPUT_COST_PER_TOKEN = 0.0000015;
-const OUTPUT_COST_PER_TOKEN = 0.000009;
+// Pricing per token (gemini-3.8-flash intro rate through 2026-12-31: $0.75/M input,
+// $3.75/M output). Standard rate from 2027-01-01 is $1.50/M and $7.50/M — update then.
+const INPUT_COST_PER_TOKEN = 0.00000075;
+const OUTPUT_COST_PER_TOKEN = 0.00000375;
 
 interface LotGroup {
   lot: number;
