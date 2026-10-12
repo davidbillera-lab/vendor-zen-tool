@@ -10,7 +10,11 @@ const corsHeaders = {
 // current stable Flash (ai.google.dev/gemini-api/docs/models, checked 2026-10-12).
 // Tried in order: when Google answers 503/429 ("high demand") the next model is
 // tried at once — separate capacity pools; same price (ai.google.dev/pricing).
-const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.6-flash'];
+// Third choice is the cheaper Flash-Lite ($0.30/M in, $2.50/M out) — lower quality, but
+// a grouped batch beats a failed one.
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'];
+const LITE_INPUT_COST_PER_TOKEN = 0.0000003;
+const LITE_OUTPUT_COST_PER_TOKEN = 0.0000025;
 // Stay under the 150s edge-function limit so a slow Gemini reply comes back as a
 // retryable error the client can act on, not a gateway 504 with no body.
 const GEMINI_TIMEOUT_MS = 140_000;
@@ -109,24 +113,33 @@ serve(async (req) => {
 
     let geminiRes!: Response;
     let usedModel = GEMINI_MODELS[0];
-    for (let i = 0; i < GEMINI_MODELS.length; i++) {
-      usedModel = GEMINI_MODELS[i];
-      geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${usedModel}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(geminiBody),
-          // Gemini's latency swings from ~10s to past 150s on same-size batches
-          // (2026-09-29); without this the gateway kills the call silently. The
-          // budget is shared across fallback attempts.
-          signal: AbortSignal.timeout(Math.max(GEMINI_TIMEOUT_MS - (Date.now() - started), 5_000)),
-        }
-      );
-      const overloaded = geminiRes.status === 503 || geminiRes.status === 429;
-      if (geminiRes.ok || !overloaded || i === GEMINI_MODELS.length - 1) break;
-      console.warn(`[group-lots-vision] ${usedModel} returned ${geminiRes.status}, falling back to ${GEMINI_MODELS[i + 1]}`);
-      await geminiRes.body?.cancel();
+    // 2026-10-12: Google rejected both 3.8 (429) and 3.6 (503) in the same minute, so
+    // after a full pass over the models, pause briefly and make one more pass.
+    const ROUNDS = 2;
+    attempts: for (let round = 0; round < ROUNDS; round++) {
+      for (let i = 0; i < GEMINI_MODELS.length; i++) {
+        usedModel = GEMINI_MODELS[i];
+        geminiRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${usedModel}:generateContent?key=${GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(geminiBody),
+            // Gemini's latency swings from ~10s to past 150s on same-size batches
+            // (2026-09-29); without this the gateway kills the call silently. The
+            // budget is shared across fallback attempts.
+            signal: AbortSignal.timeout(Math.max(GEMINI_TIMEOUT_MS - (Date.now() - started), 5_000)),
+          }
+        );
+        const overloaded = geminiRes.status === 503 || geminiRes.status === 429;
+        const lastAttempt = round === ROUNDS - 1 && i === GEMINI_MODELS.length - 1;
+        if (geminiRes.ok || !overloaded || lastAttempt) break attempts;
+        // Log Google's reason (a 429 can be a quota, not an overload) before moving on.
+        const reason = (await geminiRes.text()).replace(/\s+/g, ' ').slice(0, 300);
+        console.warn(`[group-lots-vision] ${usedModel} returned ${geminiRes.status}: ${reason}`);
+      }
+      // Skip the pause when little of the time budget is left.
+      if (Date.now() - started < GEMINI_TIMEOUT_MS - 45_000) await new Promise((r) => setTimeout(r, 4000));
     }
 
     if (!geminiRes.ok) {
@@ -161,7 +174,9 @@ serve(async (req) => {
     // Google bills thinking tokens as output; candidatesTokenCount excludes them.
     const outputTokens = (geminiData?.usageMetadata?.candidatesTokenCount ?? 200)
       + (geminiData?.usageMetadata?.thoughtsTokenCount ?? 0);
-    const costUsd = (inputTokens * INPUT_COST_PER_TOKEN) + (outputTokens * OUTPUT_COST_PER_TOKEN);
+    const isLite = usedModel.includes('lite');
+    const costUsd = (inputTokens * (isLite ? LITE_INPUT_COST_PER_TOKEN : INPUT_COST_PER_TOKEN))
+      + (outputTokens * (isLite ? LITE_OUTPUT_COST_PER_TOKEN : OUTPUT_COST_PER_TOKEN));
 
     supabase
       .from('model_costs')
