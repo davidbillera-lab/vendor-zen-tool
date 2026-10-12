@@ -192,7 +192,8 @@ No markdown fences. Return only the JSON object.`;
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
+          model: 'claude-sonnet-5-5',
+          thinking: { type: 'between_tools' },
           max_tokens: 1500,
           system: verifySystemPrompt,
           messages: [{ role: 'user', content: anthropicContent }],
@@ -280,7 +281,8 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-haiku-5-5',
+        thinking: { type: 'disabled' },
         max_tokens: 2500,
         system: systemPrompt,
         messages: [{ role: 'user', content }],

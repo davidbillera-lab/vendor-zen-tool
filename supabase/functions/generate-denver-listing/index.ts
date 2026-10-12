@@ -113,10 +113,10 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         max_tokens: 1000,
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5-5',
+        thinking: { type: 'between_tools' },
         system: DENVER_PROMPT,
         messages: [{ role: 'user', content }],
-        temperature: 0.3,
       }),
     });
 
