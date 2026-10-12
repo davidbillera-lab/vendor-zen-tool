@@ -434,3 +434,13 @@ Type-checked clean, deployed directly to Supabase production (same pattern as th
 **Repair is per-listing, not a revert:** the intended category is sometimes wrong too (a locomotive aimed at Freight Cars). VZT never stored ItemIDs and `GetMyeBaySelling` returns no category, so the repair needs the Seller Hub "All active listings" export → match on title tokens → reviewed Seller Hub bulk-revise upload, run by the operator.
 
 **Release `release/2026-10-04`:** the real trunk is `feat/measurement-guardrail` — it already contains `vercel-deploy`, everything on the GitHub default branch (only a stray test-marker file differs), the Aug-25 EstateSales fix, and main's only unique change (crosspost prompts). The release adds the three reviewed fix branches: `fix/ebay-item-specifics`, `fix/bulk-intake-timeout`, `fix/ebay-category-pick`. **`fix/ebay-promoted-ads` is held out on purpose** — deploying it starts 2.1% cost-per-sale ad spend, an operator decision. Vercel production builds from `vercel-deploy` (last production deploy 2026-08-10); recommendation: point Vercel production and the GitHub default branch at `main` so there is one trunk.
+
+---
+
+## 2026-10-12 — Anthropic models moved to Sonnet 5.5 / Haiku 5.5, thinking kept OFF
+
+**Decision:** All 9 Anthropic call sites (8 edge functions) moved from claude-sonnet-4-6 to claude-sonnet-5-5 and from claude-haiku-4-5 to claude-haiku-5-5. Every call sends the thinking-off setting (`between_tools` for Sonnet 5.5, `disabled` for Haiku 5.5) and no longer sends `temperature`.
+
+**Why:** Both new models think by default and reject non-default `temperature` (400). Code reads `content[0].text`, and thinking tokens count toward `max_tokens` — so a straight model swap would have broken parsing and truncated JSON. Thinking-off keeps today's latency, response shape and token limits; the gain is the newer model itself, at lower prices (Sonnet $2/$10 vs $3/$15; Haiku $0.10/$0.50 vs $1/$5 for prompts up to 100K). Cost constants in distill-lessons and generate-listing updated to match.
+
+**Not done / next:** adaptive thinking at low effort (needs block-type parsing and larger max_tokens) was not tried. Not run against the live API from this session — deploy one function at a time, lowest risk first. distill-lessons stays on Sonnet-class (do not downgrade to Haiku).

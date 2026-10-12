@@ -15,11 +15,11 @@ interface GenerateRequest {
 }
 
 // --- v2.2 semantic correction retrieval helpers ---
-const CAPTION_MODEL = 'claude-haiku-4-5';        // Tier-1 vision pass
+const CAPTION_MODEL = 'claude-haiku-5-5';        // Tier-1 vision pass
 const EMBED_MODEL = 'text-embedding-3-small';    // 1536 dims, Tier-1
 // USD per 1M tokens (approx; for the model_costs ledger only).
-const CAPTION_IN_PER_1M = 1.0;
-const CAPTION_OUT_PER_1M = 5.0;
+const CAPTION_IN_PER_1M = 0.10;
+const CAPTION_OUT_PER_1M = 0.50;
 const EMBED_IN_PER_1M = 0.02;
 
 // One short visual descriptor of the item, used as the embedding query so we
@@ -46,7 +46,7 @@ async function captionItem(
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ model: CAPTION_MODEL, max_tokens: 60, messages: [{ role: 'user', content }] }),
+      body: JSON.stringify({ model: CAPTION_MODEL, thinking: { type: 'disabled' }, max_tokens: 60, messages: [{ role: 'user', content }] }),
     });
     if (!res.ok) {
       console.warn(`caption pass failed (${res.status})`);
@@ -997,7 +997,7 @@ serve(async (req) => {
     }
     content.push({ type: "text", text: textPrompt });
 
-    console.log(`Calling Anthropic API (claude-sonnet-4-6)...`);
+    console.log(`Calling Anthropic API (claude-sonnet-5-5)...`);
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1007,13 +1007,13 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5-5',
+        thinking: { type: 'between_tools' },
         system: systemPrompt,
         messages: [
           { role: 'user', content }
         ],
         max_tokens: (platform === 'ebay' || platform === 'liveauctioneers' || platform === 'denver') ? 2500 : 1500,
-        temperature: 0.3,
       }),
     });
 

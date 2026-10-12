@@ -9,9 +9,9 @@ const corsHeaders = {
 // Tier-2 batch pass — never runs in the hot listing path. Self-gates on the
 // undistilled threshold so the fire-and-forget frontend trigger is nearly free
 // until there's real signal.
-const DISTILL_MODEL = 'claude-sonnet-4-6';
-const INPUT_COST_PER_1M = 3.0;   // USD per 1M input tokens
-const OUTPUT_COST_PER_1M = 15.0; // USD per 1M output tokens
+const DISTILL_MODEL = 'claude-sonnet-5-5';
+const INPUT_COST_PER_1M = 2.0;   // USD per 1M input tokens
+const OUTPUT_COST_PER_1M = 10.0; // USD per 1M output tokens
 const MIN_UNDISTILLED = 5;       // skip below this unless { force: true }
 const MAX_CORRECTIONS = 100;     // per pass
 const MAX_LESSONS = 15;          // hard cap on active lessons per user
@@ -182,6 +182,7 @@ Respond with ONLY a JSON array, no prose, no code fences:
       },
       body: JSON.stringify({
         model: DISTILL_MODEL,
+        thinking: { type: 'between_tools' },
         max_tokens: 2000,
         messages: [{ role: 'user', content: prompt }],
       }),
