@@ -578,13 +578,25 @@ async function scrapeLots(page) {
         continue;
       }
 
-      // Climb to the nearest ancestor that also carries the lot permalink.
-      let el = img, href = '';
-      for (let i = 0; i < 8 && el; i++) {
-        el = el.parentElement;
-        const a = el && el.querySelector('a[href*="/lot-"]');
-        if (a) { href = a.getAttribute('href') || ''; break; }
+      // Prefer the link that WRAPS this photo: it is this lot's own permalink. The old
+      // climb searched for '/lot-' anywhere in a parent, so a lot whose permalink does
+      // not start with '/lot-' (e.g. '/aig-lot-130-...') borrowed a NEIGHBOUR's link and
+      // the dedup below dropped it as a duplicate (185 lot cards -> 40 kept, 2026-10-18).
+      let href = img.closest('a[href]')?.getAttribute('href') || '';
+      if (!href) {
+        // Unwrapped photo: climb, but never into a container holding other photos.
+        let el = img;
+        for (let i = 0; i < 8 && el; i++) {
+          el = el.parentElement;
+          if (!el || el.querySelectorAll('img[src*="_thumbnail"]').length > 1) break;
+          const a = el.querySelector('a[href*="/lot-"]');
+          if (a) { href = a.getAttribute('href') || ''; break; }
+        }
       }
+      // The page also shows banner thumbnails for OTHER auctions (alt "Thumbnail Image
+      // for Auction", link a.ashx?agid=N). They are not lots; one used to slip through
+      // as a bogus lot.
+      if (/^thumbnail image for auction$/i.test(alt) || /a\.ashx/i.test(href)) continue;
       out.push({ alt, src, href });
     }
     return { cards: out, noPhoto };
