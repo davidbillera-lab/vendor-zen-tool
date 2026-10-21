@@ -1108,6 +1108,18 @@ async function uploadLots(page, lots) {
   // failed (fail-safe: never confirm a lot whose descriptions did not paste).
   let captionResults = [];
   try {
+    // Titles are matched to pictures BY POSITION from the first picture. If the sale
+    // already held pictures from an earlier (partial) run, our pictures sit AFTER
+    // them, so every title would land on the wrong picture and the last ones would
+    // run out of titles. Pad the front with placeholders (null = leave that picture
+    // alone) so position i is the picture it should be. Assumes new uploads append.
+    const esNow = await countEsThumbnails(page);
+    const offset = esNow - imageTitles.length;
+    if (offset > 0) {
+      console.log(`[agent]   Sale shows ${esNow} picture(s) but only ${imageTitles.length} are from this run — leaving the first ${offset} (earlier run) untouched.`);
+      imageTitles.unshift(...new Array(offset).fill(null));
+      for (const st of uploadedLotState) st.startIdx += offset;
+    }
     captionResults = await captionEsImages(page, imageTitles);
     const captioned = captionResults.filter(Boolean).length;
     console.log(`[agent]   Captioned ${captioned}/${imageTitles.length} image(s).`);
@@ -1371,7 +1383,9 @@ async function captionEsImages(page, imageTitles) {
     // existing description still counts as captioned for ledger purposes.
     const existing = (await readEsImageDescription(page)) || '';
     let ok;
-    if (existing.trim()) {
+    if (imageTitles[i] == null) {
+      ok = true;                                  // picture from an earlier run: not ours
+    } else if (existing.trim()) {
       preserved++;
       ok = true;
     } else {
@@ -1509,6 +1523,7 @@ async function clickEsNext(page) {
   // different picture (the just-pasted title vs. the next picture's caption,
   // typically empty on a fresh upload).
   const before = await readEsImageDescription(page);
+  const labelBefore = await readEsPictureLabel(page);
 
   try {
     await nextEl.click();
@@ -1520,9 +1535,22 @@ async function clickEsNext(page) {
   const deadline = Date.now() + 4_000;
   while (Date.now() < deadline) {
     if ((await readEsImageDescription(page)) !== before) return true;
+    // Two neighbouring pictures can hold identical text (both blank, or the same
+    // caption); the dialog's "Picture N" heading still tells us we moved.
+    const labelNow = await readEsPictureLabel(page);
+    if (labelBefore && labelNow && labelNow !== labelBefore) return true;
     await page.waitForTimeout(250);
   }
   return false;
+}
+
+/** The picture dialog's "Picture N" heading, or null if it can't be found. */
+async function readEsPictureLabel(page) {
+  return await page.evaluate(() => {
+    const root = document.querySelector('.cdk-overlay-container') || document.body;
+    const m = (root.innerText || '').match(/Picture\s*#?\s*\d+(\s*(of|\/)\s*\d+)?/i);
+    return m ? m[0].replace(/\s+/g, ' ') : null;
+  }).catch(() => null);
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
