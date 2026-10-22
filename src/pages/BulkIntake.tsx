@@ -17,7 +17,10 @@ import { Loader2, Upload } from "lucide-react";
 
 // ── Helpers (outside component) ───────────────────────────────────────────────
 
-// One decode per file: produces the 256px thumbnail AND the divider verdict.
+// One decode per file: produces the 384px thumbnail AND the divider verdict.
+// 384px / q0.7 (was 256px / q0.5): grouping decides "same item or not" from these,
+// and 256px q0.5 smeared labels, marks and small detail shots. ~20KB each, so a
+// 60-photo grouping request stays near 1.6MB.
 // (Previously each file was decoded twice — thumbnail + divider check — which
 // doubled memory pressure on large drops.)
 async function processImageFile(file: File): Promise<{ thumb: string; isDivider: boolean }> {
@@ -25,13 +28,13 @@ async function processImageFile(file: File): Promise<{ thumb: string; isDivider:
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(img.src);
-      const size = 256;
+      const size = 384;
       const ratio = Math.min(size / img.width, size / img.height);
       const thumbCanvas = document.createElement('canvas');
       thumbCanvas.width = img.width * ratio;
       thumbCanvas.height = img.height * ratio;
       thumbCanvas.getContext('2d')?.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
-      const thumb = thumbCanvas.toDataURL('image/jpeg', 0.5);
+      const thumb = thumbCanvas.toDataURL('image/jpeg', 0.7);
 
       const divCanvas = document.createElement('canvas');
       divCanvas.width = 256;
