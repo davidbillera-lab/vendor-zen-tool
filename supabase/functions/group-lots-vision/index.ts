@@ -90,16 +90,21 @@ serve(async (req) => {
       });
     }
 
-    const inlineDataParts = images.map((b64) => ({
-      inlineData: { mimeType: 'image/jpeg', data: b64 },
-    }));
+    // Every photo is preceded by a text label ("Image 7:"). Bare images force the model
+    // to count positions in its head while it answers, and it loses count in long runs:
+    // it recognises which photos go together but writes down the wrong index numbers,
+    // so unrelated photos end up in the wrong lot (reported 2026-10-23).
+    const inlineDataParts = images.flatMap((b64, i) => [
+      { text: `Image ${i}:` },
+      { inlineData: { mimeType: 'image/jpeg', data: b64 } },
+    ]);
 
     const started = Date.now();
     const geminiBody = {
       contents: [{
         parts: [
           {
-            text: 'You are an estate sale lot grouper. Group these images into coherent lots where images of the same item or related set belong together. A lot is a group of images that should be listed together as one item for sale. The images are provided in the order they were photographed, and photos of the same item are almost always consecutive — use that ordering as a strong signal, and only group non-adjacent images together when they are clearly the same item. Return ONLY valid JSON with this exact structure: {"lots": [{"lot": 1, "imageIndices": [0, 2, 5]}, ...]}. Image indices are 0-based. Every image must appear in exactly one lot. Do not include any text outside the JSON.',
+            text: 'You are an estate sale lot grouper. Group these images into coherent lots where images of the same item or related set belong together. A lot is a group of images that should be listed together as one item for sale. The images are provided in the order they were photographed, and photos of the same item are almost always consecutive — use that ordering as a strong signal, and only group non-adjacent images together when they are clearly the same item. Return ONLY valid JSON with this exact structure: {"lots": [{"lot": 1, "imageIndices": [0, 2, 5]}, ...]}. Each image is preceded by a text label "Image N:" — use exactly those numbers in imageIndices (they are 0-based). Every image must appear in exactly one lot, and no image number may appear twice. Do not include any text outside the JSON.',
           },
           ...inlineDataParts,
         ],
