@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { normalizeClothingSize, deriveSizeFromText } from "../_shared/clothingSize.ts";
+import { normalizeClothingSize, deriveSizeFromText, reconcileSizeWithLiveValues } from "../_shared/clothingSize.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -585,6 +585,8 @@ async function getRequiredAspectsForCategory(categoryId: string, userCreds?: { c
 
 const ASPECT_VALUE_FALLBACK_MAX = 65;
 const aspectLimitCache = new Map<string, Record<string, number>>();
+// Live Size / Size Type value lists per category (filled by getAspectMaxLengths).
+const sizeValueCache = new Map<string, { size?: string[]; sizeType?: string[] }>();
 
 async function getAspectMaxLengths(
   categoryId: string,
@@ -615,12 +617,17 @@ async function getAspectMaxLengths(
     const data = await res.json();
 
     const limits: Record<string, number> = {};
+    const live: { size?: string[]; sizeType?: string[] } = {};
     for (const a of data.aspects ?? []) {
       const name = String(a.localizedAspectName ?? "");
+      const vals = (a.aspectValues ?? []).map((v: any) => String(v.localizedValue ?? "")).filter(Boolean);
+      if (name === "Size" && vals.length) live.size = vals;
+      if (name === "Size Type" && vals.length) live.sizeType = vals;
       const max = Number(a.aspectConstraint?.aspectMaxLength);
       if (name && Number.isFinite(max) && max > 0) limits[name] = max;
     }
     aspectLimitCache.set(categoryId, limits);
+    sizeValueCache.set(categoryId, live);
     return limits;
   } catch {
     return {};
@@ -639,6 +646,7 @@ function clampAspectValue(value: string, limit: number): string {
 function clampSpecifics(
   specifics: Record<string, string>,
   maxLengths: Record<string, number>,
+  categoryId?: string,
 ): { specifics: Record<string, string>; clamped: string[] } {
   const out: Record<string, string> = {};
   const clamped: string[] = [];
@@ -651,6 +659,11 @@ function clampSpecifics(
     } else {
       out[name] = value;
     }
+  }
+  const live = categoryId ? sizeValueCache.get(categoryId) : undefined;
+  if (live) {
+    const notes = reconcileSizeWithLiveValues(out, live);
+    if (notes.length) console.log(`[ebay-publish] size fix (cat ${categoryId}): ${notes.join("; ")}`);
   }
   return { specifics: out, clamped };
 }
@@ -827,7 +840,7 @@ async function publishRow(
     // instead of rediscovering them one eBay rejection at a time.
     const rawSpecifics = buildEffectiveSpecifics(categoryId, { ...qaRow, category: categoryId });
     const aspectMaxLengths = await getAspectMaxLengths(categoryId, userCreds);
-    const { specifics: effectiveSpecifics, clamped } = clampSpecifics(rawSpecifics, aspectMaxLengths);
+    const { specifics: effectiveSpecifics, clamped } = clampSpecifics(rawSpecifics, aspectMaxLengths, categoryId);
     if (clamped.length > 0) {
       console.log(`[ebay-publish] LOT-${row.lot_number}: trimmed over-long item specifics — ${clamped.join(", ")}`);
     }
@@ -910,6 +923,7 @@ async function publishRow(
         const retrySpecifics = clampSpecifics(
           buildEffectiveSpecifics(corrected.id, { ...qaRow, category: corrected.id }),
           await getAspectMaxLengths(corrected.id, userCreds),
+          corrected.id,
         ).specifics;
         const retryXml = buildAddFixedPriceItemXml({ ...row, category: corrected.id }, retryCondition.id, retrySpecifics);
         const retryRes = await fetch(tradingApiUrl, {
@@ -1298,6 +1312,7 @@ async function publishRowAsDraft(
     const { specifics: effectiveSpecifics, clamped } = clampSpecifics(
       buildEffectiveSpecifics(categoryId, { ...qaRow, category: categoryId }),
       await getAspectMaxLengths(categoryId, userCreds),
+      categoryId,
     );
     if (clamped.length > 0) {
       console.log(`[ebay-publish/draft] LOT-${row.lot_number}: trimmed over-long item specifics — ${clamped.join(", ")}`);

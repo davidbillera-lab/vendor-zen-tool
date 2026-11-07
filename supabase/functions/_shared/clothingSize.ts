@@ -46,3 +46,53 @@ export function deriveSizeFromText(...texts: Array<string | null | undefined>): 
   }
   return null;
 }
+
+const BIG_TALL_SIZE = /^(?:[2-6]\s?XL|[2-6]X|(?:X{0,3}[SML]|\d?XL)T|\dXLT|XLT|LT|MT|ST)$/i;
+const BIG_TALL_TYPE = /big|tall/i;
+const squash = (s: string) => s.toLowerCase().replace(/[\s\-_.]/g, "");
+const firstNum = (s: string | undefined) => (s ?? "").match(/\d+(?:\.\d+)?/)?.[0];
+
+/**
+ * Makes Size / Size Type agree with the category's live eBay value lists
+ * (undefined list = unknown, leave that aspect alone). Fixes eBay 21920468:
+ * "Size Type not compatible with Size" and "Enter a valid value for Size".
+ * Returns a note per change for logging.
+ */
+export function reconcileSizeWithLiveValues(
+  specifics: Record<string, string>,
+  live: { size?: string[]; sizeType?: string[] },
+): string[] {
+  const notes: string[] = [];
+  const pick = (list: string[] | undefined, want: string) =>
+    list?.find((v) => squash(v) === squash(want));
+
+  if (live.size?.length && (!specifics["Size"] || !pick(live.size, specifics["Size"]))) {
+    const cur = specifics["Size"] ?? "";
+    // Dress shirts: eBay lists "17 36/37"-style sizes — match on neck + sleeve numbers.
+    const neck = firstNum(specifics["Neck Size"]) ?? firstNum(cur);
+    const sleeve = firstNum(specifics["Sleeve Length (Inches)"]) ?? firstNum(specifics["Sleeve Size"])
+      ?? firstNum(specifics["Sleeve Length"]) ?? (cur.match(/\d+(?:\.\d+)?\D+(\d+)/)?.[1]);
+    const hit = neck && sleeve
+      ? live.size.find((v) => {
+          const nums = v.match(/\d+(?:\.\d+)?/g) ?? [];
+          return nums[0] === neck && nums.slice(1).includes(sleeve);
+        })
+      : undefined;
+    if (hit) { notes.push(`Size "${cur}" → "${hit}"`); specifics["Size"] = hit; }
+    else if (cur) { notes.push(`Size "${cur}" not in eBay list — removed`); delete specifics["Size"]; }
+  }
+
+  const type = specifics["Size Type"];
+  if (type) {
+    const size = specifics["Size"] ?? "";
+    const neckSleeve = /^\d+(?:\.\d+)?\D+\d/.test(size);
+    const bad = Boolean(live.sizeType?.length && !pick(live.sizeType, type))
+      || (BIG_TALL_TYPE.test(type) && size !== "" && !BIG_TALL_SIZE.test(size) && !neckSleeve);
+    if (bad) {
+      const regular = pick(live.sizeType, "Regular");
+      if (regular || !live.sizeType) { specifics["Size Type"] = "Regular"; notes.push(`Size Type "${type}" → "Regular"`); }
+      else { delete specifics["Size Type"]; notes.push(`Size Type "${type}" removed`); }
+    }
+  }
+  return notes;
+}

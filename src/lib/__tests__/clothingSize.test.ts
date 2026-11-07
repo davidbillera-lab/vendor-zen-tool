@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeClothingSize, deriveSizeFromText } from "../../../supabase/functions/_shared/clothingSize";
+import { normalizeClothingSize, deriveSizeFromText, reconcileSizeWithLiveValues } from "../../../supabase/functions/_shared/clothingSize";
 
 describe("normalizeClothingSize", () => {
   it("maps words to codes and drops junk", () => {
@@ -28,4 +28,22 @@ describe("deriveSizeFromText", () => {
     expect(deriveSizeFromText("Boho Top (S) Floral")).toBe("S");
     expect(deriveSizeFromText("Lot L Vintage Blouse")).toBeNull();
   });
+});
+
+describe("reconcileSizeWithLiveValues", () => {
+  it("fixes the 10/30 shirt rejections", () => {
+    const a: Record<string, string> = { Size: "XL", "Size Type": "Big & Tall" };
+    reconcileSizeWithLiveValues(a, { size: ["S", "M", "L", "XL"], sizeType: ["Regular", "Big & Tall", "Tall"] });
+    expect(a["Size Type"]).toBe("Regular");
+    const b: Record<string, string> = { Size: "17 36/37", "Neck Size": "17", "Sleeve Length": "36/37", "Size Type": "Big & Tall" };
+    reconcileSizeWithLiveValues(b, { size: ["16 34/35", "17 36/37"], sizeType: ["Regular", "Big & Tall"] });
+    expect(b["Size"]).toBe("17 36/37");
+    expect(b["Size Type"]).toBe("Big & Tall");
+  });
+});
+
+it("rebuilds a deleted dress-shirt Size from neck + sleeve", () => {
+  const c: Record<string, string> = { "Neck Size": "17", "Sleeve Length (Inches)": "36" };
+  reconcileSizeWithLiveValues(c, { size: ["17 36/37"] });
+  expect(c["Size"]).toBe("17 36/37");
 });
