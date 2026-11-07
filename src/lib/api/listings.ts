@@ -147,11 +147,19 @@ export async function uploadImage(file: File): Promise<string> {
   const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
   const filePath = `listings/${fileName}`;
 
-  const { error: uploadError } = await supabase.storage
+  // iOS Safari PWAs randomly fail fetch with "The string did not match the expected
+  // pattern" / "Load failed" (backgrounded app, stale session). It never reached our
+  // server, so refresh the session and retry before surfacing an error.
+  const doUpload = () => supabase.storage
     .from('listing-images')
-    .upload(filePath, uploadFile, {
-      contentType: 'image/jpeg',
-    });
+    .upload(filePath, uploadFile, { contentType: 'image/jpeg' });
+  let { error: uploadError } = await doUpload();
+  for (let attempt = 1; attempt <= 2 && uploadError
+    && /did not match the expected pattern|load failed|failed to fetch|network/i.test(uploadError.message ?? ''); attempt++) {
+    await supabase.auth.refreshSession().catch(() => undefined);
+    await new Promise((r) => setTimeout(r, attempt * 800));
+    ({ error: uploadError } = await doUpload());
+  }
 
   if (uploadError) {
     // Check for authentication errors
