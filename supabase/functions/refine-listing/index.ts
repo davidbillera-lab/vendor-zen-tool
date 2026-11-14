@@ -13,7 +13,23 @@ interface RefineRequest {
   platform?: 'ebay' | 'liveauctioneers' | 'denver';
   mode?: 'refine' | 'verify';
   masterPrompt?: string;
+  publishError?: string;
 }
+
+// Appended to the refine prompt only when fixing an eBay publish error.
+const EBAY_ERROR_PLAYBOOK = `
+
+FIXING AN EBAY PUBLISH ERROR — you may change ANY field needed to make the listing publish (title, description, condition, category, brand, subtitle, upc, mpn, itemSpecifics), and must fix every problem the error names. Never just restate the error.
+Known eBay rules:
+- Clothing Size must be a standard code (XS, S, M, L, XL, XXL, 3XL…) or a number (32, 10, 17 34/35). Never "See Description", never a range like "S/M". "Size Type" must match the size: plain XS–XL sizes are "Regular"; "Big & Tall"/"Tall" only for big/tall sizes (2XL, XLT, LT…). If unsure, use "Regular".
+- "Brand has an invalid value" (e.g. "Mixed", "Various", "Assorted"): use the real brand if the photos or title show one, otherwise "Unbranded".
+- "X is a required field" / "Enter a valid value for X": fill X from the photos, title or description; if it truly can't be known, use the most neutral standard value eBay accepts for that aspect.
+- Remove item specifics that don't belong to the category (e.g. clothing "Size Type" on trading cards).
+- Trading cards (183454 Pokémon/CCG, 261328 sports, 183050 non-sport): ungraded cards need itemSpecifics "Card Condition" — for 183454 one of "Near Mint or Better", "Lightly Played (Excellent)", "Moderately Played (Very Good)", "Heavily Played (Poor)"; for the others "Near Mint or Better", "Excellent", "Very Good", "Poor". Graded cards need "Professional Grader" and "Grade".
+- Several items sold together (a lot, a binder or box of cards) must not sit in a single-item category: CCG card lots → 183455 (CCG Mixed Card Lots).
+- "Condition … is not valid for category": pick the closest condition eBay allows (New, New other, Used, For parts or not working).
+- Error 240 "cannot be listed … improper words or policy": usually a lot in a single-item category, or another company's brand/trademark in the title of an item that isn't theirs — fix the category or remove the word.
+- Warnings to ignore: "business policies" (21919456), "item specifics were renamed" (21920277), promoted-ad "bidPercentage" errors.`;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -56,7 +72,7 @@ serve(async (req) => {
       { global: { headers: { Authorization: authHeader } } }
     );
 
-    const { currentListing, correctionPrompt, imageUrls = [], platform = 'liveauctioneers', mode = 'refine', masterPrompt } = await req.json() as RefineRequest;
+    const { currentListing, correctionPrompt, imageUrls = [], platform = 'liveauctioneers', mode = 'refine', masterPrompt, publishError } = await req.json() as RefineRequest;
 
     console.log(`Mode: ${mode}, Platform: ${platform}`);
 
@@ -240,13 +256,21 @@ No markdown fences. Return only the JSON object.`;
 
     // Refine mode
     console.log(`Refining listing with prompt: ${correctionPrompt}`);
+    // eBay errors (pasted, or sent by the "Fix with AI" button) need reasoning about
+    // category and aspect rules, so they go to Sonnet; plain edits stay on Haiku.
+    const fixingPublishError = platform === 'ebay'
+      && (!!publishError?.trim() || /\[\d{3,}\]|error\s*\d{3,}|ebay (rejected|error)|push failed/i.test(correctionPrompt));
+    const refineModel = fixingPublishError ? 'claude-sonnet-5-5' : 'claude-haiku-5-5';
 
     const titleLimit = platform === 'ebay' ? 80 : 100;
     const platformRules = platform === 'ebay'
       ? `5. eBay title limit is ${titleLimit} characters — never exceed it
 6. For description, use clear HTML-friendly formatting; include model, brand, and condition details
 7. For condition: use eBay standard values (New, Used, For Parts or Not Working, etc.)
-8. Keep itemSpecifics keys/values accurate for eBay catalog`
+8. Keep itemSpecifics keys/values accurate for eBay catalog
+9. "category" is the numeric eBay leaf category ID. Change it only when the request or an eBay error calls for it, and only to an ID you are confident is a current eBay US leaf category — never invent one
+10. Optional top-level fields you may also change: subtitle, brand, upc, mpn
+11. Add a top-level "_summary" string: one short plain-English sentence saying what you changed and why`
       : `5. If the user asks about the title, keep it under ${titleLimit} characters
 6. If the user asks about description, make it detailed and compelling
 7. For condition updates, be specific about flaws and wear`;
@@ -263,12 +287,12 @@ ${platformRules}
 
 MEASUREMENT RULE (HARD): Never ADD measurements (dimensions, weight, capacity) to the title or description unless the user's correction request explicitly provides or asks for them — this overrides any conflicting standing preference. Never estimate measurements from photos. Preserve measurements already present — they are operator-verified — unless the user asks to change them.
 
-ALWAYS return valid JSON with the same structure as the input, no markdown, no explanation.`;
+ALWAYS return valid JSON with the same structure as the input, no markdown, no explanation.${fixingPublishError ? EBAY_ERROR_PLAYBOOK : ''}`;
 
     const content = [...imageContent];
     content.push({
       type: "text",
-      text: `Current listing JSON:\n${JSON.stringify(currentListing, null, 2)}\n\nUser's correction request: "${correctionPrompt}"\n\nPlease update the listing based on the user's request and return the complete updated JSON. Remember to keep fields the user didn't mention unchanged.`
+      text: `Current listing JSON:\n${JSON.stringify(currentListing, null, 2)}\n\nUser's correction request: "${correctionPrompt}"${publishError ? `\n\neBay rejected the last publish with:\n${publishError}` : ''}\n\nPlease update the listing based on the user's request${fixingPublishError ? ' and fix every problem in the eBay error' : ''} and return the complete updated JSON. Remember to keep fields the user didn't mention unchanged.`
     });
 
     console.log('Calling Anthropic API for refinement...');
@@ -281,9 +305,9 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-5-5',
-        thinking: { type: 'disabled' },
-        max_tokens: 2500,
+        model: refineModel,
+        thinking: fixingPublishError ? { type: 'between_tools' } : { type: 'disabled' },
+        max_tokens: fixingPublishError ? 4000 : 2500,
         system: systemPrompt,
         messages: [{ role: 'user', content }],
       }),
@@ -303,9 +327,22 @@ ALWAYS return valid JSON with the same structure as the input, no markdown, no e
     }
 
     const data = await response.json();
-    const aiResponse = data.content?.[0]?.text ?? '';
+    const aiResponse = data.content?.find((b: any) => b.type === 'text')?.text ?? '';
 
-    console.log('AI Response received for refinement');
+    console.log(`AI Response received for refinement (${refineModel})`);
+    const inTok = data.usage?.input_tokens ?? 0;
+    const outTok = data.usage?.output_tokens ?? 0;
+    // $/MTok — same rates as generate-listing (Haiku 5.5) and distill-lessons (Sonnet 5.5).
+    const [inRate, outRate] = fixingPublishError ? [2.0, 10.0] : [0.10, 0.50];
+    authedClient.from('model_costs').insert({
+      user_id: user.id,
+      source: 'refine-listing',
+      operation: fixingPublishError ? 'fix-publish-error' : 'refine',
+      model: refineModel,
+      input_tokens: inTok,
+      output_tokens: outTok,
+      cost_usd: (inTok * inRate + outTok * outRate) / 1_000_000,
+    }).then(({ error }) => { if (error) console.warn('model_costs log skipped:', error.message); });
 
     // Parse the JSON from the response
     let refinedListing;

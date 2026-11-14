@@ -4,6 +4,26 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 
 ---
 
+## 2026-11-14 — VZT stays an internal JSG tool; multi-tenant cancelled
+
+**Decision:** VZT will not become a multi-tenant SaaS and is not being built for sale. It is JSG's internal operations tool. FlipRadar is the portfolio's sellable product in this space.
+
+**Why:** The AI-listing / crosslisting market is crowded with funded incumbents (Vendoo, List Perfectly, Crosslist, ListingMirror, Sellbrite). VZT works well because it is shaped to JSG's workflow, which is not a selling point to other sellers. FlipRadar has few direct competitors.
+
+**Consequence:** Drop tenant-readiness work: no tenant isolation build, no feature flags or tenant-onboarding prep, and JSG-specific logic in shared paths is acceptable. Production protection stays — the tool runs daily operations. Supersedes the 2026-06-26 "stay tenant-ready" directive.
+
+---
+
+## 2026-11-14 — Ask AI fixes eBay publish errors itself (Sonnet for error fixes only)
+
+**Decision:** `refine-listing` (refine mode) now receives the row's last eBay rejection (`publishError`) and may change category, brand, subtitle, UPC and MPN in addition to title/description/price/condition/specifics. When an eBay error is present (the "Fix with AI" button, or an error pasted into Ask AI) it routes to Sonnet 5.5 with an eBay-rules playbook; ordinary edits stay on Haiku 5.5. Calls are now cost-logged to `model_costs`.
+
+**Why:** Every new eBay rule (clothing sizes, trading-card conditions, lots in single-item categories, invalid brands) needed a hard-coded fix and a deploy before stuck listings could go live. The operator wants the listing editor to read the error and fix it. Error fixes are rare, so Sonnet's cost there is small; Haiku can't reliably reason about categories.
+
+**Consequence:** The AI may set a wrong category ID — `ebay-publish`'s Taxonomy retry still catches invalid/non-leaf IDs, and the app only accepts numeric IDs. Refine mode still does NOT read learned lessons (directive mode, see Hermes loop). The publish-side hard-coded rules stay; this is a second line of defence, not a replacement.
+
+---
+
 ## 2026-06-20 — EstateSales dedup ledger is owner-scoped in code (service-role bypasses RLS)
 
 **Decision:** Every read/write against `estatesales_uploaded_lots` in `agent.js` now filters by `.eq('user_id', jobUserId)`, and `jobUserId` is resolved from `estatesales_jobs` (by `JOB_ID`) *before* the first ledger read. `reserveLot` also writes `user_id: jobUserId` on insert. The owner is resolved once; if the job row is missing, the agent throws a `LedgerError` (hard stop) rather than running unscoped.
