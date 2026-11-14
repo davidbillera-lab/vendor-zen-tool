@@ -2609,7 +2609,7 @@ export function EbayBatchPanel({
               ) : (
                 <Eye className="h-5 w-5 text-yellow-400" />
               )}
-              AI Verification — {verifyPanel?.row.title?.substring(0, 40)}
+              <span className="truncate">AI Verification — {verifyPanel?.row.title?.substring(0, 40)}</span>
             </DialogTitle>
           </DialogHeader>
           <div className={cn(
@@ -2620,11 +2620,12 @@ export function EbayBatchPanel({
           )}>
             <p className="leading-snug whitespace-pre-wrap">{verifyPanel?.report}</p>
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setVerifyPanel(null)}>
+          {/* Stacked on phones so neither button is ever off-screen. */}
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setVerifyPanel(null)} className="w-full sm:w-auto">
               Reject
             </Button>
-            <Button variant="gold" onClick={handleAcceptVerify}>
+            <Button variant="gold" onClick={handleAcceptVerify} className="w-full sm:w-auto">
               <Check className="h-4 w-4 mr-1" />
               Accept Changes
             </Button>
