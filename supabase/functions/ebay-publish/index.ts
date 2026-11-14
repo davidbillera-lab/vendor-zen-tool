@@ -270,10 +270,13 @@ function ungradedCardDescriptor(
     || /^\d/.test((specifics["Grade"] ?? "").trim());
   if (graded) return null;
   const text = `${specifics["Card Condition"] ?? ""} ${condition ?? ""}`.toLowerCase();
-  if (/poor|damaged|heavily played/.test(text)) return "400013";
-  if (/very good|played/.test(text)) return "400012";
-  if (/excellent/.test(text)) return "400011";
-  return "400010"; // Near Mint or Better (also "New")
+  // 183454 (non-sport CCG, e.g. Pokémon) uses the "Played" scale; 183050/261328
+  // use Excellent / Very Good / Poor. Sending the other scale's id → 21920352.
+  const ccg = categoryId === "183454";
+  if (/poor|damaged|heavily played/.test(text)) return ccg ? "400017" : "400013";
+  if (/very good|moderately played|played/.test(text)) return ccg ? "400016" : "400012";
+  if (/excellent|lightly played/.test(text)) return ccg ? "400015" : "400011";
+  return "400010"; // Near Mint or Better (also "New") — valid in all three
 }
 
 /* ──────────── Condition enum mapping (Inventory API) ──────────── */
@@ -929,7 +932,12 @@ async function publishRow(
     const extract = (block: string, tag: string) =>
       block.match(new RegExp(`<${tag}>(.*?)<\/${tag}>`, "s"))?.[1]?.replace(/<[^>]+>/g, "").trim() || "";
 
-    const logLines = allForLog.map(b => `[${extract(b,"ErrorCode")}] ${extract(b,"ShortMessage")}`);
+    // LongMessage carries the actual cause for generic codes like 240.
+    const logLines = allForLog.map(b => {
+      const short = extract(b, "ShortMessage");
+      const long = extract(b, "LongMessage");
+      return `[${extract(b,"ErrorCode")}] ${short}${long && long !== short ? ` — ${long}` : ""}`;
+    });
     console.error(`[ebay-publish] LOT-${row.lot_number} (category="${row.category}") FAILED — ${logLines.join(" | ")}`);
 
     // Auto-retry: if eBay says the category is invalid/non-leaf (87 or 107), ask Taxonomy API for the right one
