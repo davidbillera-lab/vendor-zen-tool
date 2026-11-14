@@ -4,6 +4,16 @@ This file captures non-obvious architectural choices. It is agent-agnostic: any 
 
 ---
 
+## 2026-11-14 — VZT stays an internal JSG tool; multi-tenant cancelled
+
+**Decision:** VZT will not become a multi-tenant SaaS and is not being built for sale. It is JSG's internal operations tool. FlipRadar is the portfolio's sellable product in this space.
+
+**Why:** The AI-listing / crosslisting market is crowded with funded incumbents (Vendoo, List Perfectly, Crosslist, ListingMirror, Sellbrite). VZT works well because it is shaped to JSG's workflow, which is not a selling point to other sellers. FlipRadar has few direct competitors.
+
+**Consequence:** Drop tenant-readiness work: no tenant isolation build, no feature flags or tenant-onboarding prep, and JSG-specific logic in shared paths is acceptable. Production protection stays — the tool runs daily operations. Supersedes the 2026-06-26 "stay tenant-ready" directive.
+
+---
+
 ## 2026-11-14 — Ask AI fixes eBay publish errors itself (Sonnet for error fixes only)
 
 **Decision:** `refine-listing` (refine mode) now receives the row's last eBay rejection (`publishError`) and may change category, brand, subtitle, UPC and MPN in addition to title/description/price/condition/specifics. When an eBay error is present (the "Fix with AI" button, or an error pasted into Ask AI) it routes to Sonnet 5.5 with an eBay-rules playbook; ordinary edits stay on Haiku 5.5. Calls are now cost-logged to `model_costs`.

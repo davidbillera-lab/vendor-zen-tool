@@ -2,13 +2,13 @@
 mission_control_id: f254f906-3942-4b8a-815d-11a6112599d9
 
 **Read first:** `~/.claude/CLAUDE.md` (operator profile) before this file.
-**Status:** Multi-tenant transition in progress. Tier 1 — protected.
+**Status:** Internal JSG tool — NOT going multi-tenant, not for sale (decided 2026-11-14). Tier 1 — protected (it runs daily operations).
 
 ---
 
 ## What This Is
 
-VZT is the internal operations tool for JSG Estate Liquidators. It manages the full listing pipeline: intake, photo processing, listing creation, and multi-platform publishing (DOA, LiveAuctioneers, eBay, EstateSales.net). Currently single-tenant (JSG internal). Multi-tenant transition underway — the goal is a SaaS platform for other auction houses and estate liquidators.
+VZT is the internal operations tool for JSG Estate Liquidators. It manages the full listing pipeline: intake, photo processing, listing creation, and multi-platform publishing (DOA, LiveAuctioneers, eBay, EstateSales.net). Single-tenant (JSG internal) and staying that way: the AI-listing / crosslisting market is too crowded to sell into (see `decisions.md` 2026-11-14). Optimise for JSG's own workflow, not for other tenants.
 
 This is a cash-flow-generating production tool. Do not break it.
 
@@ -67,11 +67,10 @@ npx vitest       # run tests
 
 ---
 
-## Multi-Tenant Transition Notes
+## Tenancy
 
-- Single-tenant today: all data scoped to JSG
-- Target: per-tenant data isolation via RLS, tenant-scoped Supabase rows
-- Before first paying tenant: feature flags, manual deploy approval gate, health monitoring in MC dashboard, tenant data isolation testing, incident response playbook
+- Internal-only: all data scoped to JSG. Multi-tenant work (tenant isolation, feature flags, tenant onboarding) is CANCELLED — don't build toward it.
+- Colleague desk agents (DOA / EstateSales zips) are still distributed; that is internal use, not tenancy.
 - Bus factor: JJ (tier 1 secondary), Vinnie (tier 2 runbook execution only)
 
 ---
