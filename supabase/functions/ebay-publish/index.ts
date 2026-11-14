@@ -251,6 +251,31 @@ function resolveConditionId(desiredId: number, allowed: number[] | null): { id: 
   return { id: usedFirst[0], remapped: true };
 }
 
+/* ──────────── Ungraded trading cards ────────────
+ * In card categories eBay only accepts Ungraded (4000) + a "Card Condition"
+ * descriptor (40001) for raw cards. "Used" is rejected (21920350) and "New"
+ * falls back to Graded (2750), which then demands Professional Grader + Grade
+ * (21920355). IDs: developer.ebay.com mip-enum-condition-descriptor-ids-for-trading-cards.
+ */
+const TRADING_CARD_CATEGORIES = new Set(["183050", "183454", "261328"]);
+
+function ungradedCardDescriptor(
+  categoryId: string,
+  condition: string | null,
+  specifics: Record<string, string>,
+): string | null {
+  if (!TRADING_CARD_CATEGORIES.has(categoryId)) return null;
+  const graded = !!specifics["Professional Grader"]
+    || /^(yes|true)$/i.test(specifics["Graded"] ?? "")
+    || /^\d/.test((specifics["Grade"] ?? "").trim());
+  if (graded) return null;
+  const text = `${specifics["Card Condition"] ?? ""} ${condition ?? ""}`.toLowerCase();
+  if (/poor|damaged|heavily played/.test(text)) return "400013";
+  if (/very good|played/.test(text)) return "400012";
+  if (/excellent/.test(text)) return "400011";
+  return "400010"; // Near Mint or Better (also "New")
+}
+
 /* ──────────── Condition enum mapping (Inventory API) ──────────── */
 
 function mapConditionEnum(condition: string | null): string {
@@ -439,6 +464,7 @@ function buildAddFixedPriceItemXml(
   // publishRow passes an override that has been length-clamped to eBay's per-aspect
   // limits; without it we would send the unclamped values and fail the push.
   const specifics = specificsOverride ?? buildEffectiveSpecifics(categoryId, row);
+  const cardDescriptor = ungradedCardDescriptor(categoryId, row.condition, specifics);
 
   const specificsXml = Object.entries(specifics).length > 0
     ? `<ItemSpecifics>${Object.entries(specifics).map(([k, v]) =>
@@ -466,7 +492,8 @@ function buildAddFixedPriceItemXml(
     <PrimaryCategory><CategoryID>${categoryId}</CategoryID></PrimaryCategory>
     <StartPrice>${price}</StartPrice>
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
-    <ConditionID>${conditionId}</ConditionID>
+    <ConditionID>${cardDescriptor ? 4000 : conditionId}</ConditionID>
+    ${cardDescriptor ? `<ConditionDescriptors><ConditionDescriptor><Name>40001</Name><Value>${cardDescriptor}</Value></ConditionDescriptor></ConditionDescriptors>` : ""}
     <Country>US</Country>
     <Currency>USD</Currency>
     <DispatchTimeMax>1</DispatchTimeMax>
