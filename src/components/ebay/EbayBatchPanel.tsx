@@ -413,9 +413,16 @@ export function EbayBatchPanel({
             description: row.description,
             price: row.price,
             condition: row.condition,
+            category: row.category,
+            subtitle: row.subtitle,
+            brand: row.brand,
+            upc: row.upc,
+            mpn: row.mpn,
             itemSpecifics: row.item_specifics,
           },
           correctionPrompt: promptText.trim(),
+          // The last eBay rejection, so the AI can fix it without it being pasted in.
+          publishError: rowErrors[row.id] || undefined,
           imageUrls: row.image_urls || [],
           platform: 'ebay',
           mode: 'refine',
@@ -426,25 +433,27 @@ export function EbayBatchPanel({
       if (!response.ok) throw new Error(data.error || 'Refinement failed');
 
       const refined = data.listing ?? {};
+      // A category must be a numeric eBay id; anything else keeps the current one.
+      const refinedCategory = /^\d{3,}$/.test(String(refined.category ?? "").trim())
+        ? String(refined.category).trim() : null;
+      const applyRefined = (r: EbayRow): EbayRow => ({
+        ...r,
+        title: (refined.title || r.title).substring(0, 80),
+        description: refined.description || r.description,
+        price: refined.price ?? r.price,
+        condition: refined.condition || r.condition,
+        category: refinedCategory ?? r.category,
+        subtitle: refined.subtitle !== undefined ? refined.subtitle : r.subtitle,
+        brand: refined.brand !== undefined ? refined.brand : r.brand,
+        upc: refined.upc !== undefined ? refined.upc : r.upc,
+        mpn: refined.mpn !== undefined ? refined.mpn : r.mpn,
+        item_specifics: refined.itemSpecifics || r.item_specifics,
+      });
       if (targetRow) {
-        onRowsChange(rows.map(r => r.id === row.id ? {
-          ...r,
-          title: (refined.title || r.title).substring(0, 80),
-          description: refined.description || r.description,
-          price: refined.price ?? r.price,
-          condition: refined.condition || r.condition,
-          item_specifics: refined.itemSpecifics || r.item_specifics,
-        } : r));
+        onRowsChange(rows.map(r => r.id === row.id ? applyRefined(r) : r));
         setToolbarPrompt("");
       } else {
-        setEditingRow(prev => prev ? {
-          ...prev,
-          title: (refined.title || prev.title).substring(0, 80),
-          description: refined.description || prev.description,
-          price: refined.price ?? prev.price,
-          condition: refined.condition || prev.condition,
-          item_specifics: refined.itemSpecifics || prev.item_specifics,
-        } : prev);
+        setEditingRow(prev => prev ? applyRefined(prev) : prev);
         setCorrectionPrompt("");
       }
       // Capture the human-driven correction so generation can learn from it.
@@ -466,7 +475,12 @@ export function EbayBatchPanel({
         correctedField: refTitleChanged && refSpecsChanged
           ? "both" : refTitleChanged ? "title" : "specifics",
       });
-      toast({ title: "Listing Updated", description: "AI refined your listing" });
+      toast({
+        title: "Listing Updated",
+        description: typeof refined._summary === "string" && refined._summary
+          ? `${refined._summary}${targetRow ? "" : " — review, then Save Changes."}`
+          : "AI refined your listing",
+      });
     } catch (error) {
       toast({
         title: "Refinement Failed",
@@ -2573,15 +2587,27 @@ export function EbayBatchPanel({
                   {Object.entries(editingRow.item_specifics || {}).some(([, v]) => v === "") && (
                     <p className="text-xs mb-2 text-yellow-400">Fill in the highlighted fields below, then retry.</p>
                   )}
-                  <Button
-                    size="sm"
-                    className="gap-2 bg-red-600 hover:bg-red-700 text-white"
-                    disabled={publishing}
-                    onClick={() => handleRetrySingleRow(editingRow)}
-                  >
-                    {publishing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-                    Retry This Listing
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-2"
+                      disabled={isRefining || publishing}
+                      onClick={() => refineListing(undefined, "Fix this listing so eBay accepts it, based on the publish error.")}
+                    >
+                      {isRefining ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                      Fix with AI
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="gap-2 bg-red-600 hover:bg-red-700 text-white"
+                      disabled={publishing}
+                      onClick={() => handleRetrySingleRow(editingRow)}
+                    >
+                      {publishing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                      Retry This Listing
+                    </Button>
+                  </div>
                 </div>
               )}
 
