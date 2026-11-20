@@ -310,32 +310,60 @@ async function uploadImages(page, imagePaths, lotNumber) {
     return false;
   }
 
+  // Count upload requests ourselves. waitForLoadState('networkidle') returns at
+  // once on an already-loaded page and a thumbnail appears the moment a file is
+  // picked, so the old checks let Save fire while photos were still uploading —
+  // lots kept only the few that finished in time (2026-11-19).
+  let inFlight = 0, uploadReqs = 0, lastActivity = Date.now();
+  const isUpload = (r) => r.method() !== 'GET';
+  const onReq = (r) => { if (isUpload(r)) { inFlight++; uploadReqs++; lastActivity = Date.now(); } };
+  const onDone = (r) => { if (isUpload(r)) { inFlight = Math.max(0, inFlight - 1); lastActivity = Date.now(); } };
+  page.on('request', onReq);
+  page.on('requestfinished', onDone);
+  page.on('requestfailed', onDone);
+
   log.info(`  Uploading ${imagePaths.length} image(s) for lot #${lotNumber}…`);
   await fileInputLocator.setInputFiles(imagePaths);
 
-  // Wait for network to go quiet (upload requests complete)
-  log.info('  Waiting for upload to complete (watching network)…');
+  // Uppy without autoProceed shows an "Upload N files" button — press it.
+  const uploadBtn = page.locator('.uppy-StatusBar-actionBtn--upload');
+  if (await uploadBtn.isVisible().catch(() => false)) await uploadBtn.click().catch(() => {});
+
+  const deadline = Date.now() + Math.min(UPLOAD_NETWORK_IDLE_MS + imagePaths.length * 6_000, 300_000);
+  let state = { items: 0, done: 0, errors: 0 };
+  log.info('  Waiting for every image to finish uploading…');
   try {
-    await page.waitForLoadState('networkidle', { timeout: UPLOAD_NETWORK_IDLE_MS });
-    log.success('  Network idle — upload likely complete');
-  } catch {
-    log.warn('  Network did not go idle within timeout — checking for thumbnails anyway');
+    while (Date.now() < deadline) {
+      state = await page.evaluate(() => {
+        const items = [...document.querySelectorAll('.uppy-Dashboard-Item')];
+        return {
+          items: items.length,
+          done: items.filter((i) => i.classList.contains('is-complete')).length,
+          errors: items.filter((i) => i.classList.contains('is-error')).length,
+        };
+      });
+      const uppyDone = state.items >= imagePaths.length && state.done + state.errors >= state.items;
+      // Fallback when Uppy's item markup isn't there: upload requests seen and all quiet for 3s.
+      const netDone = state.items === 0 && uploadReqs > 0 && inFlight === 0 && Date.now() - lastActivity > 3_000;
+      // Uppy may reject files over a per-lot cap; stop once what it accepted has settled.
+      const settled = state.items > 0 && state.done + state.errors >= state.items
+        && inFlight === 0 && Date.now() - lastActivity > 5_000;
+      if (uppyDone || netDone || settled) break;
+      await page.waitForTimeout(500);
+    }
+  } finally {
+    page.off('request', onReq);
+    page.off('requestfinished', onDone);
+    page.off('requestfailed', onDone);
   }
 
-  // Double-check: wait for at least one thumbnail to appear
-  const thumbEl = await findFirst(page, SELECTORS.uploadThumbnail);
-  if (thumbEl) {
-    try {
-      await thumbEl.locator.waitFor({ state: 'visible', timeout: 15_000 });
-      log.success(`  Upload confirmed — thumbnail visible (${thumbEl.selector})`);
-      return true;
-    } catch {
-      log.warn('  Thumbnail selector found but did not become visible — proceeding anyway');
-    }
+  if (state.items > 0) {
+    const msg = `  Uploaded ${state.done}/${imagePaths.length} image(s)${state.errors ? `, ${state.errors} failed` : ''}`;
+    if (state.done >= imagePaths.length) log.success(msg); else log.warn(`${msg} — lot #${lotNumber} is missing photos`);
+  } else if (uploadReqs > 0 && inFlight === 0) {
+    log.success(`  Upload finished (${uploadReqs} upload request(s), network quiet)`);
   } else {
-    log.warn('  No thumbnail selector matched — upload may still be processing');
-    // Give it a few extra seconds as a safety buffer
-    await page.waitForTimeout(4_000);
+    log.warn(`  Could not confirm upload for lot #${lotNumber} (${inFlight} still in flight) — check its photos`);
   }
 
   return true;
