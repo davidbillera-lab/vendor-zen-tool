@@ -110,7 +110,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSession(null);
     setIsAdmin(false);
     setUserPlatforms([]);
-    await supabase.auth.signOut({ scope: 'global' });
+    await supabase.auth.signOut({ scope: 'local' });
   };
 
   return (
